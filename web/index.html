@@ -90,7 +90,22 @@
   var Module = {
     canvas: document.getElementById('canvas'),
     // Bitmap-font fallback cannot render CJK glyphs yet; default to English UI.
-    arguments: ['-language', 'en'],
+    // ?freeflight=AIRPLANE,FIELD[,POSITION] jumps straight into a flight.
+    arguments: (function () {
+      var a = ['-language', 'en'];
+      var ff = new URLSearchParams(location.search).get('freeflight');
+      if (ff) {
+        var p = ff.split(',');
+        a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH3000');
+      }
+      return a;
+    })(),
+    // Multiplayer (Phase 1): TCP sockets are emulated over WebSocket.
+    // Point at a ws-tcp relay (server/relay.mjs) with ?server=ws://host:7916
+    websocket: {
+      url: new URLSearchParams(location.search).get('server') || undefined,
+      subprotocol: 'binary'
+    },
     preRun: [function () {
       // Persist user config (/home/web_user/Documents) in IndexedDB.
       var FS = Module.FS, IDBFS = Module.IDBFS;
