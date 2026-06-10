@@ -1,0 +1,472 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 0b3ece0..841eceb 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -4,7 +4,7 @@ project(YSFLIGHT)
+ set(CMAKE_CXX_STANDARD 11)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+ 
+-if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "WindowsStore" AND NOT ANDROID)
++if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "WindowsStore" AND NOT ANDROID AND NOT EMSCRIPTEN)
+ 	set(BUILD_YSFLIGHT_CONSOLE_SERVER 1)
+ endif()
+ 
+@@ -59,6 +59,8 @@ elseif(APPLE)
+ 	add_subdirectory(platform/macosx)
+ 	add_subdirectory(sounddll/macosx)
+ 	add_subdirectory(voicedll/generic)
++elseif(EMSCRIPTEN)
++	add_subdirectory(platform/android)
+ elseif(UNIX)
+ 	add_subdirectory(platform/linux)
+ 	add_subdirectory(sounddll/linux-alsa)
+@@ -79,5 +81,7 @@ add_subdirectory(ui)
+ add_subdirectory(gui)
+ 
+ add_subdirectory(main)
+-add_subdirectory(main_consvr)
+-add_subdirectory(main_demoOnly)
++if(NOT EMSCRIPTEN)
++	add_subdirectory(main_consvr)
++	add_subdirectory(main_demoOnly)
++endif()
+diff --git a/src/main/CMakeLists.txt b/src/main/CMakeLists.txt
+index 679a436..9b6fe2b 100644
+--- a/src/main/CMakeLists.txt
++++ b/src/main/CMakeLists.txt
+@@ -22,6 +22,8 @@ elseif(APPLE)
+ 	set(TARGET_NAME ysflight${BITNESS}_gl1 ysflight${BITNESS}_gl2)
+ elseif(ANDROID)
+ 	set(TARGET_NAME ysflight${BITNESS}_gl2)
++elseif(EMSCRIPTEN)
++	set(TARGET_NAME ysflight${BITNESS}_gl2)
+ elseif(UNIX)
+ 	set(TARGET_NAME ysflight${BITNESS}_gl1 ysflight${BITNESS}_gl2)
+ else()
+@@ -206,8 +208,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -293,7 +295,9 @@ if(ysd3d9_EXIST)
+ endif()
+ 
+ 
+-if(NOT ANDROID)
++if(EMSCRIPTEN)
++	add_executable(ysflight${BITNESS}_gl2 fsmain.cpp ${SRCS})
++elseif(NOT ANDROID)
+ 	add_executable(ysflight${BITNESS}_gl2 ${EXE_TYPE} fsmain.cpp ${SRCS})
+ 	add_executable(ysflight${BITNESS}_gl1 ${EXE_TYPE} fsmain.cpp ${SRCS})
+ else()
+@@ -385,7 +389,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+@@ -574,6 +578,32 @@ elseif(ANDROID)
+ 		ysflight_graphics_gl2
+ 		fslazywindow
+ 	)
++elseif(EMSCRIPTEN)
++	target_link_libraries(ysflight${BITNESS}_gl2 
++		ysgl
++		yssystemfont
++		fsguilib_gl2 
++		ysflight_platform_android 
++		ysscenery_dnm_gl2
++		ystexturemanager_gl
++		ysjoystick
++		ysjoycalibdlg_gl2
++		ysflight_graphics_gl2
++		fslazywindow
++	)
++	set_target_properties(ysflight${BITNESS}_gl2 PROPERTIES SUFFIX ".js")
++	target_link_options(ysflight${BITNESS}_gl2 PRIVATE
++		-sFULL_ES2=1
++		-sASSERTIONS=1
++		-sALLOW_MEMORY_GROWTH=1
++		-sSTACK_SIZE=8388608
++		-sFORCE_FILESYSTEM=1
++		-sEXIT_RUNTIME=0
++		-sENVIRONMENT=web
++		-sEXPORTED_RUNTIME_METHODS=FS,IDBFS
++		-lidbfs.js
++		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime@/ysflight"
++	)
+ elseif(UNIX)
+ 	target_link_libraries(ysflight${BITNESS}_gl1 
+ 		ysgl
+@@ -622,7 +652,9 @@ endforeach(ONE_TARGET)
+ 
+ 
+ 
+-foreach(ONE_TARGET ${TARGET_NAME})
+-	add_custom_command(TARGET ${ONE_TARGET} PRE_BUILD 
+-		COMMAND "python" "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/runtime_timestamp.py" "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime")
+-endforeach(ONE_TARGET)
++if(NOT EMSCRIPTEN)
++	foreach(ONE_TARGET ${TARGET_NAME})
++		add_custom_command(TARGET ${ONE_TARGET} PRE_BUILD 
++			COMMAND "python" "${CMAKE_CURRENT_SOURCE_DIR}/../../scripts/runtime_timestamp.py" "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime")
++	endforeach(ONE_TARGET)
++endif()
+diff --git a/src/main_consvr/CMakeLists.txt b/src/main_consvr/CMakeLists.txt
+index 5d10715..36daa77 100644
+--- a/src/main_consvr/CMakeLists.txt
++++ b/src/main_consvr/CMakeLists.txt
+@@ -179,8 +179,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -312,7 +312,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/main_demoOnly/CMakeLists.txt b/src/main_demoOnly/CMakeLists.txt
+index f5a7cfa..f0bd3ec 100644
+--- a/src/main_demoOnly/CMakeLists.txt
++++ b/src/main_demoOnly/CMakeLists.txt
+@@ -203,8 +203,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -382,7 +382,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/platform/android/CMakeLists.txt b/src/platform/android/CMakeLists.txt
+index 28cc015..2075de5 100644
+--- a/src/platform/android/CMakeLists.txt
++++ b/src/platform/android/CMakeLists.txt
+@@ -125,8 +125,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -254,7 +254,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/platform/common/CMakeLists.txt b/src/platform/common/CMakeLists.txt
+index 35093b1..67bf7cf 100644
+--- a/src/platform/common/CMakeLists.txt
++++ b/src/platform/common/CMakeLists.txt
+@@ -136,8 +136,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -263,7 +263,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/platform/linux/CMakeLists.txt b/src/platform/linux/CMakeLists.txt
+index 78407b3..a42fe1e 100644
+--- a/src/platform/linux/CMakeLists.txt
++++ b/src/platform/linux/CMakeLists.txt
+@@ -132,8 +132,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -266,7 +266,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/platform/macosx/CMakeLists.txt b/src/platform/macosx/CMakeLists.txt
+index 65ffaba..b262f76 100644
+--- a/src/platform/macosx/CMakeLists.txt
++++ b/src/platform/macosx/CMakeLists.txt
+@@ -134,8 +134,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -272,7 +272,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/platform/nownd/CMakeLists.txt b/src/platform/nownd/CMakeLists.txt
+index d724a9b..4092a4d 100644
+--- a/src/platform/nownd/CMakeLists.txt
++++ b/src/platform/nownd/CMakeLists.txt
+@@ -125,8 +125,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -255,7 +255,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/platform/win32/CMakeLists.txt b/src/platform/win32/CMakeLists.txt
+index 60cb3f3..dfbf51a 100644
+--- a/src/platform/win32/CMakeLists.txt
++++ b/src/platform/win32/CMakeLists.txt
+@@ -133,8 +133,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -270,7 +270,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/sounddll/linux-alsa/CMakeLists.txt b/src/sounddll/linux-alsa/CMakeLists.txt
+index 1d63bf1..de33490 100644
+--- a/src/sounddll/linux-alsa/CMakeLists.txt
++++ b/src/sounddll/linux-alsa/CMakeLists.txt
+@@ -133,8 +133,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -261,7 +261,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/sounddll/linux-pulseaudio/CMakeLists.txt b/src/sounddll/linux-pulseaudio/CMakeLists.txt
+index a648c42..be1a93e 100644
+--- a/src/sounddll/linux-pulseaudio/CMakeLists.txt
++++ b/src/sounddll/linux-pulseaudio/CMakeLists.txt
+@@ -133,8 +133,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -261,7 +261,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/sounddll/macosx/CMakeLists.txt b/src/sounddll/macosx/CMakeLists.txt
+index c1e55fa..48639c2 100644
+--- a/src/sounddll/macosx/CMakeLists.txt
++++ b/src/sounddll/macosx/CMakeLists.txt
+@@ -138,8 +138,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -264,7 +264,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/sounddll/win32/CMakeLists.txt b/src/sounddll/win32/CMakeLists.txt
+index 7ef66e2..a8db72c 100644
+--- a/src/sounddll/win32/CMakeLists.txt
++++ b/src/sounddll/win32/CMakeLists.txt
+@@ -131,8 +131,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -257,7 +257,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/voicedll/generic/CMakeLists.txt b/src/voicedll/generic/CMakeLists.txt
+index 6230111..a1b1675 100644
+--- a/src/voicedll/generic/CMakeLists.txt
++++ b/src/voicedll/generic/CMakeLists.txt
+@@ -130,8 +130,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -256,7 +256,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/ysjoystick/calibrator/CMakeLists.txt b/src/ysjoystick/calibrator/CMakeLists.txt
+index abaf36f..948189f 100644
+--- a/src/ysjoystick/calibrator/CMakeLists.txt
++++ b/src/ysjoystick/calibrator/CMakeLists.txt
+@@ -145,8 +145,8 @@ elseif(APPLE)
+ elseif(UNIX)
+ 	# -Wl,--no-as-needed required for g++ 4.8.4 Confirmed unnecessary with 5.4.0
+ 	#  http://stackoverflow.com/questions/19463602/compiling-multithread-code-with-g
+-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-as-needed")
+-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-as-needed")
++	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
++	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+ else()
+ endif()
+ 
+@@ -271,7 +271,7 @@ foreach(ONE_TARGET ${TARGET_NAME})
+ 	target_link_libraries(${ONE_TARGET} ${LIB_DEPENDENCY})
+ 
+ 	# We suffered enough from the shared stdc++
+-	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
++	if(UNIX AND NOT APPLE AND NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android" AND NOT EMSCRIPTEN)
+ 		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
+ 	endif()
+ 
+diff --git a/src/ysjoystick/src/CMakeLists.txt b/src/ysjoystick/src/CMakeLists.txt
+index 3219853..be8bbe9 100644
+--- a/src/ysjoystick/src/CMakeLists.txt
++++ b/src/ysjoystick/src/CMakeLists.txt
+@@ -23,6 +23,8 @@ elseif(APPLE)
+ 	set(platform_SRCS macosx/ysjoyreader-objc.m macosx/ysjoyreader.cpp)
+ 	include_directories(macosx)
+ 	set(platform_HEADERS )
++elseif(EMSCRIPTEN)
++	set(platform_SRCS null/ysjoyreader.cpp)
+ elseif(UNIX)
+ 	set(platform_SRCS linux/ysjoyreader.cpp)
+ 	include_directories(linux)

@@ -1,0 +1,6 @@
+[submodule "upstream/YSFLIGHT"]
+	path = upstream/YSFLIGHT
+	url = https://github.com/captainys/YSFLIGHT.git
+[submodule "upstream/public"]
+	path = upstream/public
+	url = https://github.com/captainys/public.git
