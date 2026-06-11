@@ -55,12 +55,13 @@ Z/X: ラダー, G: ギア, Space: 機銃, etc.)。メニューから Simulation 
 
 ## マルチプレイ / Multiplayer (roadmap)
 
-YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッジする設計です。
-詳細は [docs/multiplayer.md](docs/multiplayer.md) を参照。
+YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッジします。
+詳細・実行手順は [docs/multiplayer.md](docs/multiplayer.md) を参照。
 
-- **Phase 1**: Emscripten のソケットエミュレーション + `server/relay.mjs`
-  (WS→TCP リレー) でネイティブ YSFLIGHT サーバに接続
-- **Phase 2**: WebRTC DataChannel による P2P / 低遅延転送
+- **Phase 1 (動作確認済み)**: Emscripten のソケットエミュレーション +
+  `server/relay.mjs` (WS→TCP リレー) でネイティブ YSFLIGHT サーバに接続。
+  `?client=名前&server=ws://ホスト:7916` で起動するとロビーに自動ログイン
+- **Phase 2 (構想)**: WebRTC DataChannel による P2P / 低遅延転送
 
 ## 既知の制限 / Known limitations
 

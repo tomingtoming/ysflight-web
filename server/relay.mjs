@@ -6,12 +6,19 @@
 // a native YSFLIGHT server (default port 7915) running on this host.
 //
 // Usage:
-//   npm install ws
+//   npm install
 //   node relay.mjs [--listen 7916] [--target 127.0.0.1:7915]
+//                  [--cert fullchain.pem --key privkey.pem]
 //
-// Then point the wasm client at ws://<host>:7916 (Module.websocket.url).
+// Plain ws:// works for pages served over http (local testing).  A page
+// served over https (e.g. GitHub Pages) can only open wss:// connections,
+// so pass --cert/--key (or put the relay behind a TLS reverse proxy).
+//
+// Point the wasm client at the relay with ?server=ws://host:7916 (or wss://).
 import { WebSocketServer } from 'ws';
 import net from 'node:net';
+import https from 'node:https';
+import fs from 'node:fs';
 
 const args = process.argv.slice(2);
 function opt(name, dflt) {
@@ -21,9 +28,22 @@ function opt(name, dflt) {
 
 const listenPort = parseInt(opt('listen', '7916'), 10);
 const [targetHost, targetPort] = opt('target', '127.0.0.1:7915').split(':');
+const certFile = opt('cert', null);
+const keyFile = opt('key', null);
 
-const wss = new WebSocketServer({ port: listenPort });
-console.log(`relay: ws://0.0.0.0:${listenPort} -> tcp://${targetHost}:${targetPort}`);
+let wss;
+if (certFile && keyFile) {
+  const httpsServer = https.createServer({
+    cert: fs.readFileSync(certFile),
+    key: fs.readFileSync(keyFile)
+  });
+  wss = new WebSocketServer({ server: httpsServer });
+  httpsServer.listen(listenPort);
+  console.log(`relay: wss://0.0.0.0:${listenPort} -> tcp://${targetHost}:${targetPort}`);
+} else {
+  wss = new WebSocketServer({ port: listenPort });
+  console.log(`relay: ws://0.0.0.0:${listenPort} -> tcp://${targetHost}:${targetPort}`);
+}
 
 wss.on('connection', (ws, req) => {
   const peer = req.socket.remoteAddress;

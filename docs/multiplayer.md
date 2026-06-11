@@ -9,6 +9,11 @@ YSFLIGHT には TCP ベースのマルチプレイ実装が既にある
 
 ブラウザは生の TCP を張れないため、次の2段階で対応する。
 
+> **✅ Phase 1 は動作確認済み (2026-06-11)**
+> ネイティブ console server (Atsugi) + `relay.mjs` + wasm クライアントの構成で、
+> ログイン → 機体選択 (F/A-18E) → Join → 離陸までを headless Chromium で E2E 検証。
+> サーバログ: `User WebPilot logged on.` / `WebPilot took off (F-18E_SUPERHORNET)`
+
 ## Phase 1: WebSocket ブリッジ (実装コスト最小・本家サーバと相互運用)
 
 ```
@@ -27,11 +32,33 @@ YSFLIGHT には TCP ベースのマルチプレイ実装が既にある
   YSFLIGHT プロトコルは長さプレフィックス付きメッセージなので、
   リレーは素通しで良い (websockify と同じ)。
 
-### 必要な作業
-1. `server/relay.mjs` — Node + `ws` で WS→TCP 素通しリレー (済: スケルトン)
-2. wasm クライアントのリンクフラグに `-sSOCKET_WEBSOCKET_URL` 相当の設定
-   (`Module['websocket']['url']` を `web/index.html` で設定可能にする)
-3. ネイティブ YSFLIGHT サーバを同一ホストで起動 (`main_consvr` ターゲット)
+### 実行手順 (検証済み)
+
+```sh
+# 1. ネイティブのコンソールサーバをビルドして起動 (port 7915)
+#    要: build-essential, libglu1-mesa-dev (GL/X11ヘッダ)
+cmake -S upstream/YSFLIGHT/src -B build-native -DCMAKE_BUILD_TYPE=Release
+cmake --build build-native --target ysflight64_nownd -j
+cd build-native/main_consvr
+./ysflight64_nownd -server ServerName ATSUGI_AIRBASE
+
+# 2. WS→TCP リレーを起動 (port 7916)
+cd server && npm install
+node relay.mjs --listen 7916 --target 127.0.0.1:7915
+
+# 3. ブラウザでクライアントを開く
+#    http://localhost:8000/?client=YourName&server=ws://localhost:7916
+#    (Networkメニューから手動接続でも可)
+```
+
+### 注意点
+- **https で配信されたページ (GitHub Pages 等) からは `wss://` しか張れない**
+  (mixed content 制限)。リモート公開時は `relay.mjs --cert/--key` でTLSを
+  有効にするか、Caddy/nginx 等のTLS終端の背後に置くこと。
+- コンソールサーバの対話メニューは glibc の getchar() sticky-EOF の影響で
+  パイプ経由では操作不能。`-server Name FIELD` のCLI起動を使う。
+- Emscripten のソケットは `Module['websocket']['url']` で接続先WebSocketを
+  上書きできる (web/index.html では `?server=` クエリで指定)。
 
 ## Phase 2: WebRTC DataChannel (P2P / 低遅延 UDP 相当)
 

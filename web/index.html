@@ -93,10 +93,18 @@
     // ?freeflight=AIRPLANE,FIELD[,POSITION] jumps straight into a flight.
     arguments: (function () {
       var a = ['-language', 'en'];
-      var ff = new URLSearchParams(location.search).get('freeflight');
+      var q = new URLSearchParams(location.search);
+      var ff = q.get('freeflight');
       if (ff) {
         var p = ff.split(',');
         a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH3000');
+      }
+      // ?client=Name[,host] joins a network game (host defaults to the
+      // relay's machine; the actual transport goes through ?server=ws://...)
+      var cl = q.get('client');
+      if (cl) {
+        var c = cl.split(',');
+        a.push('-client', c[0], c[1] || 'localhost');
       }
       return a;
     })(),
