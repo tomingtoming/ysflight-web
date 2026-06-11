@@ -27,3 +27,11 @@ jobs:
 
       - name: Build
         run: scripts/build.sh
+
+      - name: Install smoke-test browser
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Smoke test (software GPU)
+        run: scripts/smoke-test.sh default

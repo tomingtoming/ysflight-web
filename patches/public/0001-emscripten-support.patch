@@ -755,7 +755,7 @@ index f1d02e7..2ea6d75 100644
  	endif()
  
 diff --git a/src/ysbitmapfont/src/ysglsldrawfontbitmap.c b/src/ysbitmapfont/src/ysglsldrawfontbitmap.c
-index 8d50a0d..24680fc 100644
+index 8d50a0d..c1d4bbf 100644
 --- a/src/ysbitmapfont/src/ysglsldrawfontbitmap.c
 +++ b/src/ysbitmapfont/src/ysglsldrawfontbitmap.c
 @@ -36,7 +36,7 @@ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
@@ -767,14 +767,6 @@ index 8d50a0d..24680fc 100644
  	#define YS_GLSL_LOWP "lowp "
  	#define YS_GLSL_MIDP "mediump "
  	#define YS_GLSL_HIGHP "highp "
-@@ -132,6 +132,7 @@ static const char *uglyFontVertexShaderSrc[]=
- 
- static const char *uglyFontFragmentShaderSrc[]=
- {
-+
- // Confirmed:
- //   0<gl_PointCoord.x && gl_PointCoord.x<1
- //   0<gl_PointCoord.y && gl_PointCoord.y<1
 diff --git a/src/ysclass/src/CMakeLists.txt b/src/ysclass/src/CMakeLists.txt
 index 533e8b1..60118c1 100644
 --- a/src/ysclass/src/CMakeLists.txt

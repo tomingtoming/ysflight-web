@@ -51,6 +51,19 @@ npx serve dist             # 任意の静的サーバでOK
 `dist/` の中身 (`index.html` + `ysflight32_gl2.{js,wasm,data}`) を
 そのまま静的ホスティングに置けば動きます。
 
+### スモークテスト / Smoke test
+
+```sh
+scripts/smoke-test.sh            # default(ソフトウェアGPU) + strict(実GPU/Mesa GL)
+```
+
+`strict` はシステムの Chrome を **headed** で起動し、ネイティブ Mesa GL
+(`--use-angle=gl`) 上でブートを検証します。実ドライバは mediump を fp16 に
+降格するため、ソフトウェアラスタライザでは検出できないシェーダの
+精度不一致リンクエラーを push 前に捕捉できます (要ディスプレイ +
+google-chrome)。CI では `default` のみ実行されます。
+**レンダラ周りを変更したら push 前に必ず実行してください。**
+
 ## デプロイ / Deploy
 
 Cloudflare Pages の Git integration で repository を接続し、Build settings を
