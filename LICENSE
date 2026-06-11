@@ -26,7 +26,13 @@ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 YS FLIGHT SIMULATOR and its libraries are copyright (c) Soji Yamakawa
 (CaptainYS, http://www.ysflight.com) and are used under the terms of the
-licenses found in the upstream repositories:
+upstream licenses:
 
-  https://github.com/captainys/YSFLIGHT
-  https://github.com/captainys/public
+  https://github.com/captainys/YSFLIGHT — 3-clause BSD (see LICENSE in that
+  repository; covers the simulator sources and the bundled runtime data)
+
+  https://github.com/captainys/public — 2-clause BSD license headers carried
+  in each source file
+
+The patches under patches/ contain fragments of the upstream sources and are
+therefore also subject to the corresponding upstream license terms.

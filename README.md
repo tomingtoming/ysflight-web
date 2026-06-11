@@ -70,8 +70,8 @@ YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッ
 
 ## License
 
-- 上流 YSFLIGHT / public のソースコードとデータ: 各リポジトリのライセンス
-  (BSD-style — see `upstream/*/LICENSE` / readme)
+- 上流 YSFLIGHT のソースコードとランタイムデータ: 3-clause BSD (`upstream/YSFLIGHT/LICENSE`)
+- 上流 public ライブラリ群: 各ソースファイルヘッダに記載の 2-clause BSD
 - 本リポジトリの追加コード (`src/port`, `web`, `server`, `scripts`, `patches`):
   同じく 2-clause BSD ライセンス
 
