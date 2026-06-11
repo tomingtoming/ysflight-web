@@ -43,6 +43,19 @@ if ! command -v emcmake >/dev/null 2>&1; then
     fi
 fi
 
+# --- CMake ---------------------------------------------------------------------
+CMAKE_VERSION="${CMAKE_VERSION:-3.31.6}"
+if ! command -v cmake >/dev/null 2>&1; then
+    CMAKE_DIR="$HOME/opt/cmake-$CMAKE_VERSION-linux-x86_64"
+    if [[ ! -x "$CMAKE_DIR/bin/cmake" ]]; then
+        echo "Installing CMake $CMAKE_VERSION into $CMAKE_DIR"
+        mkdir -p "$HOME/opt"
+        curl -sL "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-linux-x86_64.tar.gz" \
+            | tar xz -C "$HOME/opt"
+    fi
+    export PATH="$CMAKE_DIR/bin:$PATH"
+fi
+
 # --- Submodules + patches ----------------------------------------------------
 git -C "$ROOT" submodule update --init --depth 1 2>/dev/null || true
 "$ROOT/scripts/apply-patches.sh"
@@ -54,12 +67,47 @@ emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \
 
 cmake --build "$BUILD_DIR" --target ysflight32_gl2 -j"$(nproc)"
 
-# --- Stage dist/ --------------------------------------------------------------
-mkdir -p "$DIST_DIR"
-cp "$BUILD_DIR/main/ysflight32_gl2.js"   "$DIST_DIR/"
-cp "$BUILD_DIR/main/ysflight32_gl2.wasm" "$DIST_DIR/"
-cp "$BUILD_DIR/main/ysflight32_gl2.data" "$DIST_DIR/"
-cp "$ROOT/web/index.html" "$DIST_DIR/"
+# --- Stage dist/ with content-hashed asset names ------------------------------
+rm -rf "$DIST_DIR"
+mkdir -p "$DIST_DIR/icons"
+
+hash8() { sha1sum "$1" | cut -c1-8; }
+
+H_JS=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.js")
+H_WASM=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.wasm")
+H_DATA=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.data")
+BUILD_ID=$(printf '%s%s%s' "$H_JS" "$H_WASM" "$H_DATA" | sha1sum | cut -c1-12)
+
+JS_FILE="ysflight32_gl2.$H_JS.js"
+WASM_FILE="ysflight32_gl2.$H_WASM.wasm"
+DATA_FILE="ysflight32_gl2.$H_DATA.data"
+
+cp "$BUILD_DIR/main/ysflight32_gl2.js"   "$DIST_DIR/$JS_FILE"
+cp "$BUILD_DIR/main/ysflight32_gl2.wasm" "$DIST_DIR/$WASM_FILE"
+cp "$BUILD_DIR/main/ysflight32_gl2.data" "$DIST_DIR/$DATA_FILE"
+cp "$ROOT/web/manifest.webmanifest" "$DIST_DIR/"
+cp "$ROOT/web/icons/"*.png "$DIST_DIR/icons/"
+
+# index.html: point the ASSET line at the hashed names.
+sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',data:'$DATA_FILE',build:'$BUILD_ID'};|" \
+    "$ROOT/web/index.html" > "$DIST_DIR/index.html"
+
+# Service worker: build id + precache list.
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
+    "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
+
+# Cloudflare Pages cache policy: hashed assets immutable, HTML/SW always revalidated.
+cat > "$DIST_DIR/_headers" <<EOF
+/ysflight32_gl2.*
+  Cache-Control: public, max-age=31536000, immutable
+/icons/*
+  Cache-Control: public, max-age=86400
+/index.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache
+EOF
 
 echo
-echo "Done.  Serve with:  npx serve $DIST_DIR  (or any static file server)"
+echo "Done.  build=$BUILD_ID  Serve with:  npx serve $DIST_DIR  (or any static file server)"

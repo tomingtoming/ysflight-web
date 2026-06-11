@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0a0e14">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
 <title>YSFLIGHT web</title>
 <style>
   html, body {
@@ -82,6 +85,9 @@
 </div>
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
 <script>
+  // Asset names; scripts/build.sh rewrites this line with content-hashed names.
+  var ASSET = {js:'ysflight32_gl2.js',wasm:'ysflight32_gl2.wasm',data:'ysflight32_gl2.data',build:'dev'}; // __ASSET_LINE__
+
   var overlay = document.getElementById('overlay');
   var bar = document.getElementById('bar');
   var statusEl = document.getElementById('status');
@@ -89,6 +95,11 @@
 
   var Module = {
     canvas: document.getElementById('canvas'),
+    locateFile: function (path) {
+      if (path === 'ysflight32_gl2.wasm') return ASSET.wasm;
+      if (path === 'ysflight32_gl2.data') return ASSET.data;
+      return path;
+    },
     // UI language follows the browser locale (ja/en); override with ?lang=ja etc.
     // ?freeflight=AIRPLANE,FIELD[,POSITION] jumps straight into a flight.
     arguments: (function () {
@@ -153,7 +164,21 @@
   window.addEventListener('error', function (e) {
     if (!booted) statusEl.textContent = 'Error: ' + e.message;
   });
+
+  // PWA: cache the app for instant reload and offline play.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('sw.js').catch(function () {});
+    });
+  }
+
+  // Load the (possibly content-hashed) engine.
+  (function () {
+    var s = document.createElement('script');
+    s.async = true;
+    s.src = ASSET.js;
+    document.body.appendChild(s);
+  })();
 </script>
-<script async src="ysflight32_gl2.js"></script>
 </body>
 </html>
