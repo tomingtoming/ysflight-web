@@ -48,20 +48,18 @@ npx serve dist             # 任意の静的サーバでOK
 
 ## デプロイ / Deploy
 
-`main` への push で GitHub Actions が `scripts/build.sh` を実行し、`dist/` を
-Cloudflare Pages に Wrangler Direct Upload でデプロイします。
+Cloudflare Pages の Git integration で repository を接続し、Build settings を
+以下にしてください。
 
-事前に Cloudflare Pages の Direct Upload project を作成し、GitHub repository の
-Actions secrets に以下を設定してください。
+- Build command: `scripts/build.sh`
+- Build output directory: `dist`
 
-- `CLOUDFLARE_ACCOUNT_ID`
-- `CLOUDFLARE_API_TOKEN` (Cloudflare Pages の Edit 権限)
+Cloudflare Pages の build image には Emscripten が入っていないため、
+`scripts/build.sh` は `emcmake` が見つからない場合に `emsdk` を
+`$HOME/opt/emsdk` へ自動インストールします。固定したい場合は環境変数
+`EMSDK_VERSION` を設定してください (既定: `6.0.0`)。
 
-Cloudflare Pages project 名は既定で `ysflight-web` です。別名にする場合は
-GitHub repository variable `CLOUDFLARE_PAGES_PROJECT_NAME` を設定してください。
-
-GitHub Pages は repository settings の Pages で無効化してください。workflow 側の
-GitHub Pages artifact/deploy は使いません。
+GitHub Pages は repository settings の Pages で無効化してください。
 
 ## 操作 / Controls
 
