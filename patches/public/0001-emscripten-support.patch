@@ -755,16 +755,22 @@ index f1d02e7..2ea6d75 100644
  	endif()
  
 diff --git a/src/ysbitmapfont/src/ysglsldrawfontbitmap.c b/src/ysbitmapfont/src/ysglsldrawfontbitmap.c
-index 8d50a0d..832c811 100644
+index 8d50a0d..24680fc 100644
 --- a/src/ysbitmapfont/src/ysglsldrawfontbitmap.c
 +++ b/src/ysbitmapfont/src/ysglsldrawfontbitmap.c
-@@ -132,6 +132,10 @@ static const char *uglyFontVertexShaderSrc[]=
+@@ -36,7 +36,7 @@ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #include <ysglheader.h>
+ 
+ 
+-#if defined(__APPLE__) && (TARGET_OS_EMBEDDED!=0 || TARGET_OS_IPHONE!=0 || TARGET_OS_IPHONE_SIMULATOR!=0)
++#if (defined(__APPLE__) && (TARGET_OS_EMBEDDED!=0 || TARGET_OS_IPHONE!=0 || TARGET_OS_IPHONE_SIMULATOR!=0)) || defined(__EMSCRIPTEN__)
+ 	#define YS_GLSL_LOWP "lowp "
+ 	#define YS_GLSL_MIDP "mediump "
+ 	#define YS_GLSL_HIGHP "highp "
+@@ -132,6 +132,7 @@ static const char *uglyFontVertexShaderSrc[]=
  
  static const char *uglyFontFragmentShaderSrc[]=
  {
-+	"#ifdef GL_ES\n",
-+	"precision mediump float;\n",
-+	"#endif\n",
 +
  // Confirmed:
  //   0<gl_PointCoord.x && gl_PointCoord.x<1
