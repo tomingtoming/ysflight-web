@@ -53,6 +53,11 @@ Z/X: ラダー, G: ギア, Space: 機銃, etc.)。メニューから Simulation 
 フライト開始。本家同様、ジョイスティック未接続時は**マウスが操縦桿**として機能します
 (画面中心がニュートラル)。
 
+**ゲームパッド/ジョイスティック対応** (Gamepad API): 接続して何かボタンを押すと
+ブラウザがパッドを公開し、ゲームから利用可能になります (Gamepad API の仕様)。
+軸・ボタンの割り当ては Option → Config Key/Mouse/Joystick Assignment で変更可能。
+standardマッピングのD-padはPOVハットとして扱われます。
+
 ## マルチプレイ / Multiplayer (roadmap)
 
 YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッジします。
@@ -67,7 +72,7 @@ YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッ
 
 - サウンドは OpenAL (Web Audio) 実装済み。ATC音声(ボイス)は未実装
 - 日本語UIはフォント未対応のため文字化けします (現状 `-language en` 固定)
-- クリップボード・IME・ジョイスティック未対応 (Gamepad API 対応予定)
+- クリップボード・IME 未対応
 - シングルスレッドのため重いシーンでは fps が落ちます
 
 ## License
