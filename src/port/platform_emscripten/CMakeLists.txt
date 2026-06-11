@@ -1,11 +1,11 @@
 # YSFLIGHT platform layer for Emscripten (ysflight-web).
-# Reuses the generic fsplatform.cpp from the Android port and adds an
-# OpenAL-based sound implementation.
+# fsplatform with mouse-as-joystick support plus an OpenAL-based sound
+# implementation.
 
 set(TARGET_NAME ysflight_platform_emscripten)
 
 add_library(${TARGET_NAME}
-	${CMAKE_SOURCE_DIR}/platform/android/fsplatform.cpp
+	fsplatform_emscripten.cpp
 	${CMAKE_SOURCE_DIR}/sounddll/yswavfile/yswavfile.cpp
 	fsairsound_emscripten.cpp
 )

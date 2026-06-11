@@ -50,7 +50,8 @@ npx serve dist             # 任意の静的サーバでOK
 
 本家YSFLIGHTと同じキーボード操作です (矢印キー: 操縦桿, Q/A: スロットル,
 Z/X: ラダー, G: ギア, Space: 機銃, etc.)。メニューから Simulation → Create Flight で
-フライト開始。
+フライト開始。本家同様、ジョイスティック未接続時は**マウスが操縦桿**として機能します
+(画面中心がニュートラル)。
 
 ## マルチプレイ / Multiplayer (roadmap)
 
@@ -63,7 +64,7 @@ YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッ
 
 ## 既知の制限 / Known limitations
 
-- **サウンド未実装** (Androidポート同様スタブ。OpenAL バックエンドを計画中)
+- サウンドは OpenAL (Web Audio) 実装済み。ATC音声(ボイス)は未実装
 - 日本語UIはフォント未対応のため文字化けします (現状 `-language en` 固定)
 - クリップボード・IME・ジョイスティック未対応 (Gamepad API 対応予定)
 - シングルスレッドのため重いシーンでは fps が落ちます

@@ -86,6 +86,10 @@ bool FsOpenALPlayer::Initialize(void)
 	alGenSources(1,&environSource);
 	alSourcei(environSource,AL_LOOPING,AL_TRUE);
 
+	// Headroom so that the looping engine sound plus simultaneous one-shots
+	// don't clip when summed by Web Audio.
+	alListenerf(AL_GAIN,0.6f);
+
 	available=true;
 	return true;
 }
@@ -130,12 +134,39 @@ ALuint FsOpenALPlayer::GetBuffer(YsWavFile *wavFile)
 		return 0;
 	}
 
-	wavFile->ConvertTo16Bit();
+	// Do NOT use YsWavFile::ConvertTo16Bit here: it duplicates each unsigned
+	// 8-bit sample into both bytes of a 16-bit word, which is severely
+	// distorted when interpreted as signed PCM.  OpenAL's 8-bit formats are
+	// unsigned, matching the wav data as loaded, so pass 8-bit data through.
+	ALenum format;
+	const unsigned char *data=wavFile->DataPointer();
+	unsigned char *converted=nullptr;
+	if(8==wavFile->BitPerSample())
+	{
+		format=(YSTRUE==wavFile->Stereo()) ? AL_FORMAT_STEREO8 : AL_FORMAT_MONO8;
+		if(YSTRUE==wavFile->IsSigned())
+		{
+			// Rare: signed 8-bit wav.  OpenAL wants unsigned; flip the sign bit.
+			converted=new unsigned char [wavFile->SizeInByte()];
+			for(unsigned int i=0; i<wavFile->SizeInByte(); ++i)
+			{
+				converted[i]=data[i]^0x80;
+			}
+			data=converted;
+		}
+	}
+	else
+	{
+		format=(YSTRUE==wavFile->Stereo()) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16;
+	}
 
-	ALenum format=(YSTRUE==wavFile->Stereo()) ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16;
 	ALuint buf=0;
 	alGenBuffers(1,&buf);
-	alBufferData(buf,format,wavFile->DataPointer(),wavFile->SizeInByte(),wavFile->PlayBackRate());
+	alBufferData(buf,format,data,wavFile->SizeInByte(),wavFile->PlayBackRate());
+	if(nullptr!=converted)
+	{
+		delete [] converted;
+	}
 
 	cache[nCached].wav=wavFile;
 	cache[nCached].buf=buf;
