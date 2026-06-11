@@ -52,7 +52,7 @@ node relay.mjs --listen 7916 --target 127.0.0.1:7915
 ```
 
 ### 注意点
-- **https で配信されたページ (GitHub Pages 等) からは `wss://` しか張れない**
+- **https で配信されたページ (Cloudflare Pages 等) からは `wss://` しか張れない**
   (mixed content 制限)。リモート公開時は `relay.mjs --cert/--key` でTLSを
   有効にするか、Caddy/nginx 等のTLS終端の背後に置くこと。
 - コンソールサーバの対話メニューは glibc の getchar() sticky-EOF の影響で

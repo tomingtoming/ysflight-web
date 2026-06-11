@@ -46,6 +46,23 @@ npx serve dist             # 任意の静的サーバでOK
 `dist/` の中身 (`index.html` + `ysflight32_gl2.{js,wasm,data}`) を
 そのまま静的ホスティングに置けば動きます。
 
+## デプロイ / Deploy
+
+`main` への push で GitHub Actions が `scripts/build.sh` を実行し、`dist/` を
+Cloudflare Pages に Wrangler Direct Upload でデプロイします。
+
+事前に Cloudflare Pages の Direct Upload project を作成し、GitHub repository の
+Actions secrets に以下を設定してください。
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN` (Cloudflare Pages の Edit 権限)
+
+Cloudflare Pages project 名は既定で `ysflight-web` です。別名にする場合は
+GitHub repository variable `CLOUDFLARE_PAGES_PROJECT_NAME` を設定してください。
+
+GitHub Pages は repository settings の Pages で無効化してください。workflow 側の
+GitHub Pages artifact/deploy は使いません。
+
 ## 操作 / Controls
 
 本家YSFLIGHTと同じキーボード操作です (矢印キー: 操縦桿, Q/A: スロットル,

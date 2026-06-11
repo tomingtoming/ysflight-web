@@ -11,7 +11,7 @@
 //                  [--cert fullchain.pem --key privkey.pem]
 //
 // Plain ws:// works for pages served over http (local testing).  A page
-// served over https (e.g. GitHub Pages) can only open wss:// connections,
+// served over https (e.g. Cloudflare Pages) can only open wss:// connections,
 // so pass --cert/--key (or put the relay behind a TLS reverse proxy).
 //
 // Point the wasm client at the relay with ?server=ws://host:7916 (or wss://).
