@@ -31,7 +31,7 @@ index 0b3ece0..48b91ec 100644
 +	add_subdirectory(main_demoOnly)
 +endif()
 diff --git a/src/main/CMakeLists.txt b/src/main/CMakeLists.txt
-index 679a436..11df381 100644
+index 679a436..ffcbeec 100644
 --- a/src/main/CMakeLists.txt
 +++ b/src/main/CMakeLists.txt
 @@ -22,6 +22,8 @@ elseif(APPLE)
@@ -74,7 +74,7 @@ index 679a436..11df381 100644
  		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
  	endif()
  
-@@ -574,6 +578,33 @@ elseif(ANDROID)
+@@ -574,6 +578,34 @@ elseif(ANDROID)
  		ysflight_graphics_gl2
  		fslazywindow
  	)
@@ -100,7 +100,8 @@ index 679a436..11df381 100644
 +		-sFORCE_FILESYSTEM=1
 +		-sEXIT_RUNTIME=0
 +		-sENVIRONMENT=web
-+		-sEXPORTED_RUNTIME_METHODS=FS,IDBFS
++		-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,UTF8ToString,ENV
++		-sEXPORTED_FUNCTIONS=_main,_malloc,_free
 +		-lidbfs.js
 +		-lopenal
 +		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime@/ysflight"
@@ -108,7 +109,7 @@ index 679a436..11df381 100644
  elseif(UNIX)
  	target_link_libraries(ysflight${BITNESS}_gl1 
  		ysgl
-@@ -622,7 +653,9 @@ endforeach(ONE_TARGET)
+@@ -622,7 +654,9 @@ endforeach(ONE_TARGET)
  
  
  

@@ -89,11 +89,13 @@
 
   var Module = {
     canvas: document.getElementById('canvas'),
-    // Bitmap-font fallback cannot render CJK glyphs yet; default to English UI.
+    // UI language follows the browser locale (ja/en); override with ?lang=ja etc.
     // ?freeflight=AIRPLANE,FIELD[,POSITION] jumps straight into a flight.
     arguments: (function () {
-      var a = ['-language', 'en'];
+      var a = [];
       var q = new URLSearchParams(location.search);
+      var lang = q.get('lang');
+      if (lang) a.push('-language', lang);
       var ff = q.get('freeflight');
       if (ff) {
         var p = ff.split(',');
@@ -115,6 +117,10 @@
       subprotocol: 'binary'
     },
     preRun: [function () {
+      // Let YSFLIGHT's locale detection see the browser language.
+      try {
+        Module.ENV.LANG = (navigator.language || 'en').replace('-', '_') + '.UTF-8';
+      } catch (e) {}
       // Persist user config (/home/web_user/Documents) in IndexedDB.
       var FS = Module.FS, IDBFS = Module.IDBFS;
       try { FS.mkdir('/home/web_user/Documents'); } catch (e) {}

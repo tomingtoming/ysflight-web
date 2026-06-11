@@ -1446,7 +1446,7 @@ index 9706872..77c4e61 100644
  	endif()
  
 diff --git a/src/yssystemfont/src/CMakeLists.txt b/src/yssystemfont/src/CMakeLists.txt
-index 5a560a0..984052b 100644
+index 5a560a0..d6708e2 100644
 --- a/src/yssystemfont/src/CMakeLists.txt
 +++ b/src/yssystemfont/src/CMakeLists.txt
 @@ -10,6 +10,8 @@ elseif(MSVC)
@@ -1454,7 +1454,7 @@ index 5a560a0..984052b 100644
  elseif(APPLE)
  	set(SRCS macosx/ysmacosxsystemfont.cpp macosx/ysmacosxsystemfont_objc.m)
 +elseif(EMSCRIPTEN)
-+	set(SRCS null/ysnullsystemfont.cpp)
++	set(SRCS ${YSFLIGHT_WEB_PORT_DIR}/yssystemfont/yssystemfont_emscripten.cpp)
  elseif(UNIX)
  	set(SRCS linux/ysunixsystemfont.cpp)
  else()

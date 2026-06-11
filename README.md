@@ -71,7 +71,8 @@ YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッ
 ## 既知の制限 / Known limitations
 
 - サウンドは OpenAL (Web Audio) 実装済み。ATC音声(ボイス)は未実装
-- 日本語UIはフォント未対応のため文字化けします (現状 `-language en` 固定)
+- 日本語UI対応済み (Canvas 2D によるシステムフォント描画)。
+  言語はブラウザのロケールから自動選択、`?lang=ja` / `?lang=en` で強制可能
 - クリップボード・IME 未対応
 - シングルスレッドのため重いシーンでは fps が落ちます
 
