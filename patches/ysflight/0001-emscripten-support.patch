@@ -128,7 +128,7 @@ index e5a4953..ef70a32 100644
  	// Anti-aliasing options <<
  
 diff --git a/src/main/CMakeLists.txt b/src/main/CMakeLists.txt
-index 679a436..ffcbeec 100644
+index 679a436..92f289a 100644
 --- a/src/main/CMakeLists.txt
 +++ b/src/main/CMakeLists.txt
 @@ -22,6 +22,8 @@ elseif(APPLE)
@@ -197,7 +197,7 @@ index 679a436..ffcbeec 100644
 +		-sFORCE_FILESYSTEM=1
 +		-sEXIT_RUNTIME=0
 +		-sENVIRONMENT=web
-+		-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,UTF8ToString,ENV
++		-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,UTF8ToString,stringToUTF8,ENV
 +		-sEXPORTED_FUNCTIONS=_main,_malloc,_free
 +		-lidbfs.js
 +		-lopenal

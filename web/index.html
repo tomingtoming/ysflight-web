@@ -95,6 +95,10 @@
 
   var Module = {
     canvas: document.getElementById('canvas'),
+    // WebRTC multiplayer (Phase 2): signaling server and optional fixed room
+    // code for hosting.  ?signal=wss://host:7917  ?room=ABC123
+    ysfwSignalUrl: new URLSearchParams(location.search).get('signal') || undefined,
+    ysfwRoomCode: new URLSearchParams(location.search).get('room') || undefined,
     locateFile: function (path) {
       if (path === 'ysflight32_gl2.wasm') return ASSET.wasm;
       if (path === 'ysflight32_gl2.data') return ASSET.data;

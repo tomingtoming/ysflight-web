@@ -60,19 +60,46 @@ node relay.mjs --listen 7916 --target 127.0.0.1:7915
 - Emscripten のソケットは `Module['websocket']['url']` で接続先WebSocketを
   上書きできる (web/index.html では `?server=` クエリで指定)。
 
-## Phase 2: WebRTC DataChannel (P2P / 低遅延 UDP 相当)
+## Phase 2: WebRTC DataChannel (ブラウザホスト)
 
-飛行状態の同期は本来 UDP 向き。WebRTC DataChannel
-(unordered / maxRetransmits=0) で UDP 相当の特性が得られる。
+> **✅ Phase 2 動作確認済み (2026-06-12)**
+> ブラウザA (サーバモード) + ブラウザB (#ルームコードで接続) の
+> 2ページ構成で、ログオン → ロビー → 飛行参加まで E2E 検証。
+> ゲームデータは WebRTC DataChannel で P2P 直結。
 
-- シグナリングサーバ (Node, WebSocket) でロビーとSDP交換を提供
-- ホストプレイヤーのブラウザが「サーバ」になる P2P トポロジ、
-  もしくは SFU 的な中継サーバ
-- `fsnetwork` の transport 層を抽象化し、`yssocket` 実装と
-  `WebRTC DataChannel` 実装 (JSライブラリ経由、EM_JS バインディング) を差し替え可能にする
+```
+[browser host] <--DataChannel(P2P)--> [browser client]
+       \                                  /
+        +---- signal.mjs (SDP/ICE交換のみ) ----+
+```
 
-Phase 2 は transport 抽象化のリファクタリングが必要なため、
-Phase 1 を動かしてから着手する。
+- `yssocket` の Emscripten 実装 (`src/port/yssocket/yssocket_emscripten.cpp`) が
+  `YsSocketServer` を WebRTC DataChannel 上に実装。**ゲーム本体は無改造**
+- DataChannel は ordered/reliable (TCP相当)。ゲームデータはシグナリング
+  サーバを経由しない
+- ICE: STUN (stun.l.google.com) のみ。対称NAT同士などでは繋がらない場合あり
+  (TURN は未実装)
+
+### 使い方
+
+```sh
+# シグナリングサーバ (どこか1箇所で稼働させる; ゲームデータは流れない)
+cd server && npm install
+node signal.mjs                 # ws://host:7917 (https配信なら --cert/--key で wss)
+
+# ホスト (ブラウザ)
+https://.../?signal=wss://シグナリングホスト:7917
+→ ネットワークメニューから「サーバ開始」→ 画面右上に Room: #ABC123 が出る
+  (?room=好きなコード で固定も可)
+
+# クライアント (ブラウザ)
+https://.../?signal=wss://シグナリングホスト:7917
+→ ネットワーク接続のサーバアドレス欄に #ABC123 を入力
+  (または ?client=名前,%23ABC123 で自動接続)
+```
+
+接続先アドレスが `#...` / `rtc:...` なら WebRTC、通常のホスト名/IPなら
+従来の WebSocket リレー (Phase 1) が選ばれる。
 
 ## 状態同期に関するメモ
 
