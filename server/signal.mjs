@@ -34,6 +34,14 @@ if (certFile && keyFile) {
   console.log(`signal: wss://0.0.0.0:${listenPort}`);
 } else {
   wss = new WebSocketServer({ port: listenPort });
+  wss.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`error: port ${listenPort} is already in use.`);
+      console.error(`  Another instance may be running, or pick a port with --listen <port>.`);
+      process.exit(1);
+    }
+    throw e;
+  });
   console.log(`signal: ws://0.0.0.0:${listenPort}`);
 }
 
