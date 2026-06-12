@@ -56,14 +56,26 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
 const fatal = [];
-page.on('console', (m) => {
-  const t = m.text();
-  if (FATAL_PATTERNS.some((re) => re.test(t))) fatal.push('[console] ' + t);
-});
+const check = (tag, t) => {
+  if (FATAL_PATTERNS.some((re) => re.test(t))) fatal.push(`[${tag}] ` + t);
+};
+page.on('console', (m) => check('console', m.text()));
 page.on('pageerror', (e) => fatal.push('[pageerror] ' + e.message));
+// Driver-level messages ("[.WebGL-...] GL_INVALID_OPERATION: ...") do NOT
+// surface through the console event; they only arrive via the CDP Log domain.
+const cdp = await page.context().newCDPSession(page);
+await cdp.send('Log.enable');
+cdp.on('Log.entryAdded', (e) => check('driver', e.entry.text));
 
 await page.goto(url);
 await page.waitForTimeout(waitMs);
+
+// Dismiss the first-start dialog (button position differs per language) so
+// the title demo runs unobstructed — several GL paths (e.g. shadow maps)
+// only execute once the demo is actually being simulated and drawn.
+await page.mouse.click(42, 263);
+await page.mouse.click(61, 169);
+await page.waitForTimeout(30000);
 
 const renderer = await page.evaluate(() => {
   try {

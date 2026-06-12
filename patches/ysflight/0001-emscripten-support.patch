@@ -30,6 +30,26 @@ index 0b3ece0..48b91ec 100644
 +	add_subdirectory(main_consvr)
 +	add_subdirectory(main_demoOnly)
 +endif()
+diff --git a/src/graphics/common/fstexturemanager.cpp b/src/graphics/common/fstexturemanager.cpp
+index 008f3be..59fadfe 100644
+--- a/src/graphics/common/fstexturemanager.cpp
++++ b/src/graphics/common/fstexturemanager.cpp
+@@ -136,6 +136,15 @@ YSRESULT FsCommonTexture::ReadyShadowMap(void)
+ 			return YSERR;
+ 		}
+ 	}
++	for(YSSIZE_T idx=0; idx<MAX_NUM_SHADOWMAP; ++idx)
++	{
++		// The maps are still bound on sampler units 5.. from the previous
++		// frame (FsSimulation::SimDrawShadowMap binds map idx to unit 5+idx).
++		// Rendering into a texture that is also bound for sampling is a
++		// feedback loop; WebGL refuses such draws, so unbind them all before
++		// the shadow-map render pass starts.
++		texMan.Unbind((int)(5+idx));
++	}
+ 	return YSOK;
+ }
+ 
 diff --git a/src/graphics/gl2.0/fscloudgl2.0.cpp b/src/graphics/gl2.0/fscloudgl2.0.cpp
 index ab04d4b..c9f9278 100644
 --- a/src/graphics/gl2.0/fscloudgl2.0.cpp
@@ -55,7 +75,7 @@ index ab04d4b..c9f9278 100644
  		     cloudParticleTexBuf[i].GetHeight(),
  		     0,
 diff --git a/src/graphics/gl2.0/fsopengl2.0.cpp b/src/graphics/gl2.0/fsopengl2.0.cpp
-index e5a4953..d16acb4 100644
+index e5a4953..ef70a32 100644
 --- a/src/graphics/gl2.0/fsopengl2.0.cpp
 +++ b/src/graphics/gl2.0/fsopengl2.0.cpp
 @@ -152,8 +152,8 @@ static void FsSetBmpTexture(GLuint texId,const YsBitmap &bmp,YSBOOL repeat)
@@ -78,23 +98,7 @@ index e5a4953..d16acb4 100644
  	     bmp.GetWidth(),
  	     bmp.GetHeight(),
  	     0,
-@@ -510,6 +510,15 @@ static void FsSetupViewport(void)
- 
- void FsBeginRenderShadowMap(const YsMatrix4x4 &projTfm,const YsMatrix4x4 &viewTfm,int texWid,int texHei)
- {
-+	// Unbind the shadow-map textures (sampler units 5 and 6) left over from
-+	// the previous frame; sampling a texture that is also the render target
-+	// is a feedback loop, and WebGL rejects such draws.
-+	glActiveTexture(GL_TEXTURE5);
-+	glBindTexture(GL_TEXTURE_2D,0);
-+	glActiveTexture(GL_TEXTURE6);
-+	glBindTexture(GL_TEXTURE_2D,0);
-+	glActiveTexture(GL_TEXTURE0);
-+
- 	glViewport(0,0,texWid,texHei);
- 
- 	GLfloat projMat[16];
-@@ -650,10 +659,12 @@ void FsSetSceneProjection(const class FsProjection &prj)
+@@ -650,10 +650,12 @@ void FsSetSceneProjection(const class FsProjection &prj)
  
  	// Anti-aliasing options >>
  	/*
