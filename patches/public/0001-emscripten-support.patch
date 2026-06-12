@@ -1302,6 +1302,37 @@ index e96f8b2..b541001 100644
  	}
  	if(0<=renderer->uniformFogDensityPos)
  	{
+diff --git a/src/ysgl/src/ysglslbitmaprenderer.c b/src/ysgl/src/ysglslbitmaprenderer.c
+index 9c6091e..9b7dd02 100644
+--- a/src/ysgl/src/ysglslbitmaprenderer.c
++++ b/src/ysgl/src/ysglslbitmaprenderer.c
+@@ -268,6 +268,11 @@ void YsGLSLRenderRGBABitmap2D(
+ 	glBindTexture(GL_TEXTURE_2D,renderer->reserveTextureId);
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
++	/* Text bitmaps have arbitrary (non-power-of-two) sizes.  WebGL1 treats
++	   NPOT textures with the default GL_REPEAT wrap as incomplete and
++	   samples them as black, so clamp explicitly. */
++	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
++	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+ 	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,wid,hei,0,GL_RGBA,GL_UNSIGNED_BYTE,rgba);
+ 
+ 	YsGLSLRenderTexture2D(renderer,x,y,hAlign,vAlign,wid,hei,renderer->reserveTextureId);
+@@ -398,7 +403,13 @@ static void RenderTexture2D(
+ 	}
+ 
+ 	glUniform1i(renderer->transformationTypePos,1);
+-	glUniform1i(renderer->texturePos,samplerIdent);
++	/* The texture is always bound on texture unit 0 by the callers.  The
++	   sampler uniform takes a UNIT index; passing the texture object id
++	   (samplerIdent) only worked by accident on desktop GL, where the large
++	   id makes glUniform1i fail and the uniform keeps its initial value 0.
++	   On WebGL the small id is accepted and an unbound unit is sampled,
++	   which renders the text as a solid black box. */
++	glUniform1i(renderer->texturePos,0);
+ 
+ 	glVertexAttribPointer(renderer->vertexPos,4,GL_FLOAT,GL_FALSE,0,vertex);
+ 	glVertexAttribPointer(renderer->offsetPos,2,GL_FLOAT,GL_FALSE,0,offset);
 diff --git a/src/ysglcpp/src/CMakeLists.txt b/src/ysglcpp/src/CMakeLists.txt
 index fa3510d..0a6b9e0 100644
 --- a/src/ysglcpp/src/CMakeLists.txt

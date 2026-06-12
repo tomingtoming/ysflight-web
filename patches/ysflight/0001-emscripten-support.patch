@@ -91,7 +91,7 @@ index ab04d4b..c9f9278 100644
  		     cloudParticleTexBuf[i].GetHeight(),
  		     0,
 diff --git a/src/graphics/gl2.0/fsopengl2.0.cpp b/src/graphics/gl2.0/fsopengl2.0.cpp
-index e5a4953..ef70a32 100644
+index e5a4953..c529391 100644
 --- a/src/graphics/gl2.0/fsopengl2.0.cpp
 +++ b/src/graphics/gl2.0/fsopengl2.0.cpp
 @@ -152,8 +152,8 @@ static void FsSetBmpTexture(GLuint texId,const YsBitmap &bmp,YSBOOL repeat)
@@ -127,6 +127,45 @@ index e5a4953..ef70a32 100644
  	*/
  	// Anti-aliasing options <<
  
+@@ -1084,6 +1086,8 @@ void FsDrawTitleBmp(const YsBitmap &bmp,YSBOOL tile)
+ 	glBindTexture(GL_TEXTURE_2D,texId[0]);
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
++	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);  // NPOT-safe for WebGL1
++	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+ 	glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,bmpWid,bmpHei,0,GL_RGBA,GL_UNSIGNED_BYTE,bmpPtr);
+ 
+ 	if(tile==YSTRUE)
+@@ -1126,8 +1130,29 @@ void FsDrawBmp(const YsBitmap &bmp,int x,int y)
+ 	YsGLSLBitmapRenderer *renderer=YsGLSLSharedBitmapRenderer();
+ 	YsGLSLUseBitmapRenderer(renderer);
+ 
++	// The bitmap (system-font text) carries alpha; without blending it
++	// shows up as a solid rectangle.
++	const GLboolean blendWasEnabled=glIsEnabled(GL_BLEND);
++	glEnable(GL_BLEND);
++	glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
++
++	// 2D overlay text must draw unconditionally.  The cockpit/canopy pass
++	// leaves the stencil test in a state that can reject these pixels
++	// (driver-dependent), which blanked the messages.
++	const GLboolean stencilWasEnabled=glIsEnabled(GL_STENCIL_TEST);
++	glDisable(GL_STENCIL_TEST);
++
+ 	YsGLSLRenderRGBABitmap2D(renderer,x,y,YSGLSL_HALIGN_LEFT,YSGLSL_VALIGN_TOP,bmpWid,bmpHei,rgba);
+ 
++	if(GL_TRUE==stencilWasEnabled)
++	{
++		glEnable(GL_STENCIL_TEST);
++	}
++	if(GL_TRUE!=blendWasEnabled)
++	{
++		glDisable(GL_BLEND);
++	}
++
+ 	YsGLSLEndUseBitmapRenderer(renderer);
+ 
+ #ifdef YSOGLERRORCHECK
 diff --git a/src/main/CMakeLists.txt b/src/main/CMakeLists.txt
 index 679a436..92f289a 100644
 --- a/src/main/CMakeLists.txt
