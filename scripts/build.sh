@@ -56,9 +56,10 @@ if ! command -v cmake >/dev/null 2>&1; then
     export PATH="$CMAKE_DIR/bin:$PATH"
 fi
 
-# --- Submodules + patches ----------------------------------------------------
+# --- Submodules ----------------------------------------------------------------
+# upstream/ points at the tomingtoming forks' "emscripten" branches, which
+# carry the Emscripten support commits on top of captainys' master.
 git -C "$ROOT" submodule update --init --depth 1 2>/dev/null || true
-"$ROOT/scripts/apply-patches.sh"
 
 # --- Configure + build -------------------------------------------------------
 emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \

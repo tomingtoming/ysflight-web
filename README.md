@@ -10,17 +10,28 @@ with WebGL — no installation required.
 ## 構成 / Architecture
 
 ```
-upstream/YSFLIGHT   captainys/YSFLIGHT (submodule, BSD-licensed sources + runtime data)
-upstream/public     captainys/public   (submodule, ysclass/fssimplewindow/ysgl などの共通ライブラリ)
-patches/            上流に当てる最小限のEmscripten対応パッチ (CMake分岐・GLESヘッダ選択など)
+upstream/YSFLIGHT   tomingtoming/YSFLIGHT の emscripten ブランチ (captainys/YSFLIGHT のフォーク)
+upstream/public     tomingtoming/public  の emscripten ブランチ (captainys/public のフォーク)
 src/port/           本リポジトリで新規に書いたプラットフォーム層
   fssimplewindow/     Emscripten backend (WebGL context, DOM input events, timers)
   fslazywindow/       emscripten_set_main_loop driver
 web/                index.html シェル (ローディングUI, IDBFS永続化, 言語設定)
 server/             マルチプレイ用 WebSocket→TCP リレー (Phase 1)
-scripts/            build.sh / apply-patches.sh
+scripts/            build.sh / smoke-test.sh / serve.mjs
 docs/               設計ドキュメント (multiplayer.md ほか)
 ```
+
+上流への変更は、フォークの `emscripten` ブランチ上に**テーマ別の通常コミット**
+として管理しています (旧方式の `patches/*.patch` は廃止)。上流との差分は
+
+```sh
+git -C upstream/YSFLIGHT log --oneline master..emscripten
+git -C upstream/public   log --oneline master..emscripten
+```
+
+で一覧でき、上流が更新されたら `git fetch upstream && git rebase upstream/master`
+で追従します。上流にPR可能な純粋バグ修正 (例: ysgl のsampler uniformバグ) は
+独立コミットとして分離してあり、そのまま cherry-pick して提案できます。
 
 技術的な要点:
 

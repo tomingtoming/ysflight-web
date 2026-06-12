@@ -1,6 +1,8 @@
 [submodule "upstream/YSFLIGHT"]
 	path = upstream/YSFLIGHT
-	url = https://github.com/captainys/YSFLIGHT.git
+	url = https://github.com/tomingtoming/YSFLIGHT.git
+	branch = emscripten
 [submodule "upstream/public"]
 	path = upstream/public
-	url = https://github.com/captainys/public.git
+	url = https://github.com/tomingtoming/public.git
+	branch = emscripten
