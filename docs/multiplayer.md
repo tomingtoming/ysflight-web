@@ -53,8 +53,17 @@ node relay.mjs --listen 7916 --target 127.0.0.1:7915
 
 ### 注意点
 - **https で配信されたページ (Cloudflare Pages 等) からは `wss://` しか張れない**
-  (mixed content 制限)。リモート公開時は `relay.mjs --cert/--key` でTLSを
-  有効にするか、Caddy/nginx 等のTLS終端の背後に置くこと。
+  (mixed content 制限。`?signal=ws://192.168.x.x:7917` は別PCからブロックされる)。
+  対処は次のいずれか:
+  1. **Cloudflare Tunnel (推奨・無料)**: シグナリングを動かすマシンで
+     `cloudflared tunnel --url http://localhost:7917` を実行すると
+     `https://xxxx.trycloudflare.com` が発行される。これをそのまま
+     `?signal=wss://xxxx.trycloudflare.com` に指定 (WebSocket対応・TLS付き)
+  2. `signal.mjs --cert fullchain.pem --key privkey.pem` で直接TLS
+     (正規の証明書が必要。自己署名はブラウザに拒否される)
+  3. **LAN内だけなら http 配信を使う**: ホスト機で `npx serve dist` し、
+     全員 `http://192.168.x.x:3000/?signal=ws://192.168.x.x:7917` で開く
+     (httpページからは ws:// が使える)
 - コンソールサーバの対話メニューは glibc の getchar() sticky-EOF の影響で
   パイプ経由では操作不能。`-server Name FIELD` のCLI起動を使う。
 - Emscripten のソケットは `Module['websocket']['url']` で接続先WebSocketを

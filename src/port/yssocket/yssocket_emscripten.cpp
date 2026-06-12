@@ -53,6 +53,13 @@ EM_JS(void, jsRtcInit, (), {
 			return Module.ysfwSignalUrl ||
 				((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':7917');
 		},
+		mixedContent: function (url) {
+			// Browsers block insecure ws:// from https pages (except localhost).
+			if (location.protocol !== 'https:') return false;
+			if (url.lastIndexOf('ws://', 0) !== 0) return false;
+			var host = url.substring(5).split('/')[0].split(':')[0];
+			return host !== 'localhost' && host !== '127.0.0.1';
+		},
 		makeQueue: function () {
 			return { chunks: [], offset: 0, size: 0 };
 		},
@@ -113,6 +120,13 @@ EM_JS(int, jsHostStart, (int maxClients), {
 	R.host = H;
 	R.overlay('Room: #' + room + ' (connecting...)');
 
+	if (R.mixedContent(R.signalUrl())) {
+		H.failed = true;
+		R.overlay('Blocked: https page cannot use ws:// — use wss:// for ?signal=');
+		console.error('ysflight-web: this page is https, so the browser blocks ws:// signaling URLs. ' +
+			'Use wss:// (TLS) for ?signal=, e.g. via a Cloudflare Tunnel or a TLS reverse proxy.');
+		return 0;
+	}
 	var ws;
 	try { ws = new WebSocket(R.signalUrl()); } catch (e) { H.failed = true; R.overlay('Signal server unreachable'); return 0; }
 	H.ws = ws;
@@ -260,6 +274,12 @@ EM_JS(void, jsCliConnect, (const char *roomPtr), {
 	var C = { state: 0, q: R.makeQueue(), pending: [], pc: null, ch: null, ws: null, iceQ: [], remoteSet: false };  // state: 0=connecting 1=open 2=closed
 	R.cli = C;
 
+	if (R.mixedContent(R.signalUrl())) {
+		C.state = 2;
+		console.error('ysflight-web: this page is https, so the browser blocks ws:// signaling URLs. ' +
+			'Use wss:// (TLS) for ?signal=.');
+		return;
+	}
 	var ws;
 	try { ws = new WebSocket(R.signalUrl()); } catch (e) { C.state = 2; return; }
 	C.ws = ws;
