@@ -1,5 +1,5 @@
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 0b3ece0..48b91ec 100644
+index 0b3ece0..5bda52b 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -4,7 +4,7 @@ project(YSFLIGHT)
@@ -11,7 +11,19 @@ index 0b3ece0..48b91ec 100644
  	set(BUILD_YSFLIGHT_CONSOLE_SERVER 1)
  endif()
  
-@@ -59,6 +59,8 @@ elseif(APPLE)
+@@ -20,6 +20,11 @@ endif()
+ 
+ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+ 
++if(EMSCRIPTEN)
++	add_compile_options(-pthread)
++	add_link_options(-pthread)
++endif()
++
+ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../public/src)
+ 	add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../public/src public)
+ else()
+@@ -59,6 +64,8 @@ elseif(APPLE)
  	add_subdirectory(platform/macosx)
  	add_subdirectory(sounddll/macosx)
  	add_subdirectory(voicedll/generic)
@@ -20,7 +32,7 @@ index 0b3ece0..48b91ec 100644
  elseif(UNIX)
  	add_subdirectory(platform/linux)
  	add_subdirectory(sounddll/linux-alsa)
-@@ -79,5 +81,7 @@ add_subdirectory(ui)
+@@ -79,5 +86,7 @@ add_subdirectory(ui)
  add_subdirectory(gui)
  
  add_subdirectory(main)
@@ -167,7 +179,7 @@ index e5a4953..c529391 100644
  
  #ifdef YSOGLERRORCHECK
 diff --git a/src/main/CMakeLists.txt b/src/main/CMakeLists.txt
-index 679a436..92f289a 100644
+index 679a436..556f172 100644
 --- a/src/main/CMakeLists.txt
 +++ b/src/main/CMakeLists.txt
 @@ -22,6 +22,8 @@ elseif(APPLE)
@@ -210,7 +222,7 @@ index 679a436..92f289a 100644
  		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
  	endif()
  
-@@ -574,6 +578,34 @@ elseif(ANDROID)
+@@ -574,6 +578,37 @@ elseif(ANDROID)
  		ysflight_graphics_gl2
  		fslazywindow
  	)
@@ -231,6 +243,9 @@ index 679a436..92f289a 100644
 +	target_link_options(ysflight${BITNESS}_gl2 PRIVATE
 +		-sFULL_ES2=1
 +		-sASSERTIONS=1
++		-pthread
++		-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency+4
++		-sDEFAULT_PTHREAD_STACK_SIZE=1048576
 +		-sALLOW_MEMORY_GROWTH=1
 +		-sSTACK_SIZE=8388608
 +		-sFORCE_FILESYSTEM=1
@@ -245,7 +260,7 @@ index 679a436..92f289a 100644
  elseif(UNIX)
  	target_link_libraries(ysflight${BITNESS}_gl1 
  		ysgl
-@@ -622,7 +654,9 @@ endforeach(ONE_TARGET)
+@@ -622,7 +657,9 @@ endforeach(ONE_TARGET)
  
  
  

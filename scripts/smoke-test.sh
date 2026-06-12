@@ -26,7 +26,7 @@ if [[ ! -d "$ROOT/node_modules/playwright" ]]; then
     (cd "$ROOT" && npx playwright install chromium >/dev/null)
 fi
 
-python3 -m http.server "$PORT" --directory "$ROOT/dist" >/dev/null 2>&1 &
+node "$ROOT/scripts/serve.mjs" "$PORT" "$ROOT/dist" >/dev/null 2>&1 &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null' EXIT
 sleep 1

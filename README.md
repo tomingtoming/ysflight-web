@@ -29,8 +29,10 @@ docs/               設計ドキュメント (multiplayer.md ほか)
 - メインループは `fslazywindow` のコールバック構造を `requestAnimationFrame` に接続
 - ゲームデータ (`runtime/`, 約25MB) は `--preload-file` で `.data` にパッケージ
 - ユーザ設定 (`/home/web_user/Documents`) は **IndexedDB (IDBFS)** で永続化
-- スレッドプールはシングルスレッドWasmでは逐次実行にフォールバック
-  (`-pthread` 化すれば従来通り並列実行)
+- **wasm pthreads 有効** — シミュレーションのスレッドプールが本来の並列実行で
+  動作 (COOP/COEP ヘッダ必須。Cloudflare Pages へは `_headers` で自動付与、
+  ローカルは `node scripts/serve.mjs` を使うこと。ヘッダ無し配信では
+  SharedArrayBuffer が使えずロードに失敗する)
 - **PWA**: Service Worker によるオフラインプレイ・2回目以降の即時起動。
   アセットはコンテンツハッシュ付きファイル名で配信されるため、
   更新時のキャッシュ問題なし (`_headers` で immutable キャッシュ指定)
@@ -45,7 +47,7 @@ docs/               設計ドキュメント (multiplayer.md ほか)
 git clone --recursive git@github.com:tomingtoming/ysflight-web.git
 cd ysflight-web
 scripts/build.sh           # パッチ適用 → emcmake configure → build → dist/ に出力
-npx serve dist             # 任意の静的サーバでOK
+node scripts/serve.mjs     # COOP/COEP ヘッダ付き配信 (pthreads に必須)
 ```
 
 `dist/` の中身 (`index.html` + `ysflight32_gl2.{js,wasm,data}`) を
@@ -112,7 +114,8 @@ YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッ
 - 日本語UI対応済み (Canvas 2D によるシステムフォント描画)。
   言語はブラウザのロケールから自動選択、`?lang=ja` / `?lang=en` で強制可能
 - クリップボード・IME 未対応
-- シングルスレッドのため重いシーンでは fps が落ちます
+- SharedArrayBuffer 必須 (COOP/COEP ヘッダ付き配信が前提)。
+  かなり古いブラウザでは動作しません
 
 ## License
 
