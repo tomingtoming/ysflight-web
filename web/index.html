@@ -164,7 +164,7 @@
       // compiler optimized out.  Keep the console readable by default;
       // ?verbose=1 shows everything.
       var verbose = new URLSearchParams(location.search).get('verbose');
-      var benign = /^(Called from YsGLSL|Cannot find uniform location|Could be normal since error check)/;
+      var benign = /^(Called from YsGLSL|Cannot find uniform location|Could be normal since error check|warning: unsupported syscall: __syscall_setsockopt)/;
       return function (text) {
         if (!verbose && benign.test(text)) return;
         console.warn(text);

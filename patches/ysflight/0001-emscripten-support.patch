@@ -30,6 +30,22 @@ index 0b3ece0..48b91ec 100644
 +	add_subdirectory(main_consvr)
 +	add_subdirectory(main_demoOnly)
 +endif()
+diff --git a/src/core/fsnetwork.cpp b/src/core/fsnetwork.cpp
+index 168f19e..49d98be 100644
+--- a/src/core/fsnetwork.cpp
++++ b/src/core/fsnetwork.cpp
+@@ -8899,6 +8899,11 @@ void FsSimulation::RunServerModeOneStep(FsServerRunLoop &svrSta)
+ 			else
+ 			{
+ 				++svrSta.startServerRetryCount;
++#ifdef __EMSCRIPTEN__
++				// The browser can never start listening; skip the 90-second
++				// retry cycle and terminate server mode immediately.
++				svrSta.startServerRetryCount=6;
++#endif
+ 				if(6<=svrSta.startServerRetryCount)
+ 				{
+ 					svrSta.fatalError=FsServerRunLoop::SERVER_FATAL_CANNOT_START;
 diff --git a/src/graphics/common/fstexturemanager.cpp b/src/graphics/common/fstexturemanager.cpp
 index 008f3be..59fadfe 100644
 --- a/src/graphics/common/fstexturemanager.cpp

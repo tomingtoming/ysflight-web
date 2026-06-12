@@ -99,6 +99,10 @@ YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッ
 - **Phase 1 (動作確認済み)**: Emscripten のソケットエミュレーション +
   `server/relay.mjs` (WS→TCP リレー) でネイティブ YSFLIGHT サーバに接続。
   `?client=名前&server=ws://ホスト:7916` で起動するとロビーに自動ログイン
+- **ブラウザからのサーバホストは不可** (WebSocket は外向き接続専用のため)。
+  ゲーム内でサーバ開始を選んだ場合は即座にエラーとなりメニューへ戻ります。
+  ホストはネイティブサーバ + リレーで行ってください (Phase 2 の WebRTC で
+  ブラウザホストを実現予定)
 - **Phase 2 (構想)**: WebRTC DataChannel による P2P / 低遅延転送
 
 ## 既知の制限 / Known limitations

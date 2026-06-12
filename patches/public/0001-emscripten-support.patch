@@ -1470,6 +1470,26 @@ index 9706872..77c4e61 100644
  		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
  	endif()
  
+diff --git a/src/yssocket/src/yssocket.cpp b/src/yssocket/src/yssocket.cpp
+index 1066c2d..e445139 100644
+--- a/src/yssocket/src/yssocket.cpp
++++ b/src/yssocket/src/yssocket.cpp
+@@ -69,6 +69,15 @@ YsSocketServer::~YsSocketServer()
+ 
+ YSRESULT YsSocketServer::Start(void)
+ {
++#ifdef __EMSCRIPTEN__
++	// Browsers cannot accept inbound connections (WebSocket is outbound
++	// only), so hosting from the wasm build can never work.  Fail fast;
++	// hosting requires the native server + WebSocket relay
++	// (see docs/multiplayer.md of ysflight-web).
++	printf("Server mode is not available in the browser.\n");
++	printf("Run the native YSFLIGHT server + WebSocket relay to host.\n");
++	return YSERR;
++#endif
+ 	if(started!=YSTRUE)
+ 	{
+ 		SOCKADDR_IN addr;
 diff --git a/src/yssystemfont/src/CMakeLists.txt b/src/yssystemfont/src/CMakeLists.txt
 index 5a560a0..d6708e2 100644
 --- a/src/yssystemfont/src/CMakeLists.txt
