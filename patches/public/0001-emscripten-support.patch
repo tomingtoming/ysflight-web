@@ -1275,6 +1275,33 @@ index 594714c..a70746a 100644
  	#include <GLES2/gl2.h>
  	#include <GLES2/gl2ext.h>
  	#define YS_GL_ES2
+diff --git a/src/ysgl/src/ysglsl3ddrawing.c b/src/ysgl/src/ysglsl3ddrawing.c
+index e96f8b2..b541001 100644
+--- a/src/ysgl/src/ysglsl3ddrawing.c
++++ b/src/ysgl/src/ysglsl3ddrawing.c
+@@ -1022,7 +1022,10 @@ static void YsGLSL3DRendererInitializeUniform(struct YsGLSL3DRenderer *renderer)
+ 	}
+ 	if(0<=renderer->uniformTextureSampleCoeff)
+ 	{
+-		glUniform1f(renderer->uniformTextureSampleCoeff,0);
++		// textureSampleCoeff is a vec3; glUniform1f on it is a type mismatch
++		// and strict drivers (WebGL) drop the assignment.
++		const GLfloat zeroCoeff[3]={0,0,0};
++		glUniform3fv(renderer->uniformTextureSampleCoeff,1,zeroCoeff);
+ 	}
+ 	if(0<=renderer->uniformUseNegativeOneToPositiveOnTexCoordPos)
+ 	{
+@@ -1054,7 +1057,9 @@ static void YsGLSL3DRendererInitializeUniform(struct YsGLSL3DRenderer *renderer)
+ 
+ 	if(0<=renderer->uniformFogEnabledPos)
+ 	{
+-		glUniform1i(renderer->uniformFogEnabledPos,0);
++		// fogEnabled is a float uniform; use glUniform1f (glUniform1i is a
++		// type mismatch that strict drivers reject).
++		glUniform1f(renderer->uniformFogEnabledPos,0.0f);
+ 	}
+ 	if(0<=renderer->uniformFogDensityPos)
+ 	{
 diff --git a/src/ysglcpp/src/CMakeLists.txt b/src/ysglcpp/src/CMakeLists.txt
 index fa3510d..0a6b9e0 100644
 --- a/src/ysglcpp/src/CMakeLists.txt
@@ -1504,6 +1531,32 @@ index 35357e5..3131bea 100644
  		target_link_libraries(${ONE_TARGET} pthread -static-libstdc++ -static-libgcc)
  	endif()
  
+diff --git a/src/ystexturemanager/src/gl/ystexturemanager_gl.cpp b/src/ystexturemanager/src/gl/ystexturemanager_gl.cpp
+index 3c570bb..a217742 100644
+--- a/src/ystexturemanager/src/gl/ystexturemanager_gl.cpp
++++ b/src/ystexturemanager/src/gl/ystexturemanager_gl.cpp
+@@ -50,8 +50,8 @@ OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ {
+ 	glBindTexture(GL_TEXTURE_2D,texPtr->texId);
+ 
+-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+-	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
++	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
++	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+ 
+@@ -254,7 +254,9 @@ YSRESULT YsTextureManager::Unit::Bind(int texIdent) const
+ 		glDisable(GL_TEXTURE_GEN_T);
+ 	#endif
+ 
+-		glEnable(GL_TEXTURE_2D);
++#ifndef __EMSCRIPTEN__
++		glEnable(GL_TEXTURE_2D);  // Fixed-function relic; invalid in GLES2.
++#endif
+ 
+ 		res=YSOK;
+ 	}
 diff --git a/src/ystexturemanager/src/null/CMakeLists.txt b/src/ystexturemanager/src/null/CMakeLists.txt
 index 75563ed..c6569eb 100644
 --- a/src/ystexturemanager/src/null/CMakeLists.txt

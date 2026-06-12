@@ -32,7 +32,11 @@ const FATAL_PATTERNS = [
   /declared as type/,          // precision/type mismatch between stages
   /Error Message: error/,
   /Aborted\(/,
-  /Failed to create WebGL context/
+  /Failed to create WebGL context/,
+  /Feedback loop/,             // texture bound while being rendered to
+  /invalid internalformat/,    // GL1-style internalformat (e.g. "4")
+  /INVALID_ENUM/,              // desktop-only caps/enums on GLES2
+  /does not match uniform method/  // glUniform type/size mismatch
 ];
 
 const flags = BACKEND_FLAGS[backend];

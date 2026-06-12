@@ -30,6 +30,83 @@ index 0b3ece0..48b91ec 100644
 +	add_subdirectory(main_consvr)
 +	add_subdirectory(main_demoOnly)
 +endif()
+diff --git a/src/graphics/gl2.0/fscloudgl2.0.cpp b/src/graphics/gl2.0/fscloudgl2.0.cpp
+index ab04d4b..c9f9278 100644
+--- a/src/graphics/gl2.0/fscloudgl2.0.cpp
++++ b/src/graphics/gl2.0/fscloudgl2.0.cpp
+@@ -366,8 +366,8 @@ void FsSolidClouds::SetUpCloudPerFrame(void)
+ 
+ 		glBindTexture(GL_TEXTURE_2D,fsCloudParticleTex[i]);
+ 
+-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
++		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
++		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+ 
+ 		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+ 		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+@@ -375,7 +375,7 @@ void FsSolidClouds::SetUpCloudPerFrame(void)
+ 		glTexImage2D
+ 		    (GL_TEXTURE_2D,
+ 		     0,
+-		     4,
++		     GL_RGBA, // "4" is a GL1 relic; invalid in GLES2/WebGL.
+ 		     cloudParticleTexBuf[i].GetWidth(),
+ 		     cloudParticleTexBuf[i].GetHeight(),
+ 		     0,
+diff --git a/src/graphics/gl2.0/fsopengl2.0.cpp b/src/graphics/gl2.0/fsopengl2.0.cpp
+index e5a4953..d16acb4 100644
+--- a/src/graphics/gl2.0/fsopengl2.0.cpp
++++ b/src/graphics/gl2.0/fsopengl2.0.cpp
+@@ -152,8 +152,8 @@ static void FsSetBmpTexture(GLuint texId,const YsBitmap &bmp,YSBOOL repeat)
+ 	}
+ 	else
+ 	{
+-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP);
+-		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP);
++		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
++		glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+ 	}
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+ 	glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+@@ -161,7 +161,7 @@ static void FsSetBmpTexture(GLuint texId,const YsBitmap &bmp,YSBOOL repeat)
+ 	glTexImage2D
+ 	    (GL_TEXTURE_2D,
+ 	     0,
+-	     4,
++	     GL_RGBA, // "4" is a GL1 relic; invalid in GLES2/WebGL.
+ 	     bmp.GetWidth(),
+ 	     bmp.GetHeight(),
+ 	     0,
+@@ -510,6 +510,15 @@ static void FsSetupViewport(void)
+ 
+ void FsBeginRenderShadowMap(const YsMatrix4x4 &projTfm,const YsMatrix4x4 &viewTfm,int texWid,int texHei)
+ {
++	// Unbind the shadow-map textures (sampler units 5 and 6) left over from
++	// the previous frame; sampling a texture that is also the render target
++	// is a feedback loop, and WebGL rejects such draws.
++	glActiveTexture(GL_TEXTURE5);
++	glBindTexture(GL_TEXTURE_2D,0);
++	glActiveTexture(GL_TEXTURE6);
++	glBindTexture(GL_TEXTURE_2D,0);
++	glActiveTexture(GL_TEXTURE0);
++
+ 	glViewport(0,0,texWid,texHei);
+ 
+ 	GLfloat projMat[16];
+@@ -650,10 +659,12 @@ void FsSetSceneProjection(const class FsProjection &prj)
+ 
+ 	// Anti-aliasing options >>
+ 	/*
++#ifndef __EMSCRIPTEN__
+ 	glEnable(GL_POINT_SMOOTH);
+ 	glEnable(GL_LINE_SMOOTH);
+ 	glEnable(GL_POLYGON_SMOOTH);
+ 	glHint(GL_POLYGON_SMOOTH_HINT,GL_NICEST);
++#endif
+ 	*/
+ 	// Anti-aliasing options <<
+ 
 diff --git a/src/main/CMakeLists.txt b/src/main/CMakeLists.txt
 index 679a436..ffcbeec 100644
 --- a/src/main/CMakeLists.txt
