@@ -1,0 +1,21 @@
+{
+  // Cloudflare Workers Static Assets config.
+  //
+  // The Cloudflare build runs `scripts/build.sh` (produces dist/) and then
+  // `npx wrangler versions upload` (preview branches) / `wrangler deploy`
+  // (production).  Those commands need this file to know what to upload:
+  // dist/ is served as static assets, no Worker script required for now.
+  //
+  // dist/_headers still applies (Workers Static Assets honors _headers /
+  // _redirects).  The web build is single-threaded, so no COOP/COEP / SAB.
+  //
+  // To add server-side expansion-pack handling later, add e.g.
+  //   "main": "worker/index.ts"
+  // and an R2/KV binding; static assets are served first, the Worker handles
+  // the remaining (e.g. /api/*) routes.
+  "name": "ysflight-web",
+  "compatibility_date": "2025-06-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}
