@@ -40,10 +40,12 @@ git -C upstream/public   log --oneline master..emscripten
 - メインループは `fslazywindow` のコールバック構造を `requestAnimationFrame` に接続
 - ゲームデータ (`runtime/`, 約25MB) は `--preload-file` で `.data` にパッケージ
 - ユーザ設定 (`/home/web_user/Documents`) は **IndexedDB (IDBFS)** で永続化
-- **wasm pthreads 有効** — シミュレーションのスレッドプールが本来の並列実行で
-  動作 (COOP/COEP ヘッダ必須。Cloudflare Pages へは `_headers` で自動付与、
-  ローカルは `node scripts/serve.mjs` を使うこと。ヘッダ無し配信では
-  SharedArrayBuffer が使えずロードに失敗する)
+- **シミュレーションは単一スレッド実行** — `-pthread` を使うと (`-sPROXY_TO_PTHREAD`
+  無しでは) `main()` とメインループがブラウザのメインスレッド上で動き、`YsThreadPool`
+  がワーカー完了を `condition_variable` で待ってメインスレッドをブロックする。ワーカーが
+  遅延・停止するとページ全体が凍結する (rAF 停止) ため、Web では単一スレッドで実行する。
+  これにより SharedArrayBuffer / COOP+COEP は不要 (再有効化には
+  `-sPROXY_TO_PTHREAD` + OffscreenCanvas が必要)
 - **PWA**: Service Worker によるオフラインプレイ・2回目以降の即時起動。
   アセットはコンテンツハッシュ付きファイル名で配信されるため、
   更新時のキャッシュ問題なし (`_headers` で immutable キャッシュ指定)
@@ -58,7 +60,7 @@ git -C upstream/public   log --oneline master..emscripten
 git clone --recursive git@github.com:tomingtoming/ysflight-web.git
 cd ysflight-web
 scripts/build.sh           # パッチ適用 → emcmake configure → build → dist/ に出力
-node scripts/serve.mjs     # COOP/COEP ヘッダ付き配信 (pthreads に必須)
+node scripts/serve.mjs     # dist/ をローカル配信 (素の静的配信。COOP/COEP 不要)
 ```
 
 `dist/` の中身 (`index.html` + `ysflight32_gl2.{js,wasm,data}`) を
@@ -125,8 +127,8 @@ YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッ
 - 日本語UI対応済み (Canvas 2D によるシステムフォント描画)。
   言語はブラウザのロケールから自動選択、`?lang=ja` / `?lang=en` で強制可能
 - クリップボード・IME 未対応
-- SharedArrayBuffer 必須 (COOP/COEP ヘッダ付き配信が前提)。
-  かなり古いブラウザでは動作しません
+- シミュレーションは単一スレッド実行 (Web のメインスレッドをブロックしないため)。
+  ネイティブのような並列シミュレーションは行わない
 
 ## License
 

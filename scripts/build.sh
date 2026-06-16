@@ -98,12 +98,10 @@ PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"ma
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 
-# Cloudflare Pages headers: COOP/COEP enable SharedArrayBuffer (wasm
-# pthreads); cache policy keeps hashed assets immutable and HTML/SW fresh.
+# Cloudflare Pages headers: cache policy keeps hashed assets immutable and
+# HTML/SW fresh.  (Single-threaded web build -> no SharedArrayBuffer, so the
+# COOP/COEP cross-origin isolation headers are not required.)
 cat > "$DIST_DIR/_headers" <<EOF
-/*
-  Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: require-corp
 /ysflight32_gl2.*
   Cache-Control: public, max-age=31536000, immutable
 /icons/*
@@ -115,4 +113,4 @@ cat > "$DIST_DIR/_headers" <<EOF
 EOF
 
 echo
-echo "Done.  build=$BUILD_ID  Serve with:  node scripts/serve.mjs  (COOP/COEP headers required for pthreads)"
+echo "Done.  build=$BUILD_ID  Serve with:  node scripts/serve.mjs"
