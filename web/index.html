@@ -99,10 +99,12 @@
     // (a Cloudflare Worker + Durable Object; see worker/signal.js).  Game traffic
     // is peer-to-peer over WebRTC DataChannels with public STUN.
     //   ?signal=wss://host/path  overrides the signaling endpoint
-    //   ?room=ABC123             fixes the host's room code
+    //   ?room=12345678           fixes the host's room code (8-digit numeric)
+    //   ?join=12345678           pre-fills the Room ID to join (invite links)
     ysfwSignalUrl: new URLSearchParams(location.search).get('signal') ||
       ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal'),
     ysfwRoomCode: new URLSearchParams(location.search).get('room') || undefined,
+    ysfwJoinRoom: new URLSearchParams(location.search).get('join') || undefined,
     locateFile: function (path) {
       if (path === 'ysflight32_gl2.wasm') return ASSET.wasm;
       if (path === 'ysflight32_gl2.data') return ASSET.data;
@@ -110,7 +112,6 @@
     },
     // UI language follows the browser locale (ja/en); override with ?lang=ja etc.
     // ?freeflight=AIRPLANE,FIELD[,POSITION] jumps straight into a flight.
-    // ?join=ROOMCODE[&name=NAME] auto-joins a multiplayer room over WebRTC.
     arguments: (function () {
       var a = [];
       var q = new URLSearchParams(location.search);
@@ -120,14 +121,6 @@
       if (ff) {
         var p = ff.split(',');
         a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH3000');
-      }
-      // ?join=ABC123 auto-joins that room as a network client.  The "#" prefix
-      // routes the connection through the WebRTC DataChannel path (signaling via
-      // this site's /signal); there is no host IP or port to enter.
-      var join = q.get('join');
-      if (join) {
-        var nm = q.get('name') || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
-        a.push('-client', nm, '#' + join);
       }
       return a;
     })(),
@@ -197,55 +190,94 @@
     });
   }
 
-  // Multiplayer host helper: while hosting, the engine shows a "Room: #CODE"
-  // overlay (#ysfw-room-overlay).  Offer a one-click copy of the invite link
-  // https://<this-site>/?join=CODE so the host just sends a URL — opening it
-  // auto-joins the room (see ?join= above).  No IP/port: the room code is all
-  // a guest needs; signaling rides this site's /signal endpoint.
-  (function () {
-    var btn = document.createElement('button');
-    btn.type = 'button';
-    btn.style.cssText = 'position:fixed;top:46px;right:8px;z-index:31;display:none;' +
-      'background:#1d2633;color:#cfd8e3;border:1px solid #33425a;border-radius:6px;' +
-      'padding:6px 12px;font:13px system-ui,sans-serif;cursor:pointer';
-    var idle = '📋 招待リンクをコピー'; // 📋 招待リンクをコピー
-    btn.textContent = idle;
-    var url = '';
-    btn.addEventListener('click', function () {
-      if (!url) return;
-      var ok = function () {
-        btn.textContent = '✓ コピーしました'; // ✓ コピーしました
-        setTimeout(function () { btn.textContent = idle; }, 1500);
-      };
-      var fallback = function () {
-        var ta = document.createElement('textarea');
-        ta.value = url; ta.style.cssText = 'position:fixed;opacity:0';
-        document.body.appendChild(ta); ta.select();
-        try { document.execCommand('copy'); ok(); } catch (e) {}
-        ta.remove();
-      };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(ok, fallback);
-      } else { fallback(); }
-    });
-    document.addEventListener('DOMContentLoaded', function () { document.body.appendChild(btn); });
-    if (document.body) document.body.appendChild(btn);
-    // The engine rewrites the overlay's textContent ("Room: #X (connecting...)"
-    // then "Room: #X"), so poll for the current room code rather than mutating it.
-    setInterval(function () {
-      var ov = document.getElementById('ysfw-room-overlay');
-      var m = ov && ov.textContent && ov.textContent.match(/#([0-9A-Z]+)/);
-      if (m) { url = location.origin + '/?join=' + m[1]; btn.title = url; btn.style.display = ''; }
-      else { btn.style.display = 'none'; }
-    }, 800);
-  })();
-
-  // Load the (possibly content-hashed) engine.
-  (function () {
+  function loadEngine() {
     var s = document.createElement('script');
     s.async = true;
     s.src = ASSET.js;
     document.body.appendChild(s);
+  }
+
+  // Host invite link: while this browser hosts, the engine shows "Room: <id>"
+  // in #ysfw-room-overlay.  Offer a button that copies an invite URL which
+  // opens this site already joining that room.
+  (function () {
+    var btn = null;
+    function ensureBtn() {
+      if (btn) return btn;
+      btn = document.createElement('button');
+      btn.textContent = '📋 招待リンクをコピー';
+      btn.style.cssText = 'position:fixed;right:12px;top:44px;z-index:20;font-size:13px;padding:7px 12px;border-radius:6px;border:0;background:#1f6feb;color:#fff;cursor:pointer;display:none';
+      document.body.appendChild(btn);
+      return btn;
+    }
+    setInterval(function () {
+      var ov = document.getElementById('ysfw-room-overlay');
+      var m = ov && ov.textContent && ov.textContent.match(/Room:\s*(\d{6,})/);
+      if (m) {
+        var url = location.origin + '/?join=' + m[1];
+        var b = ensureBtn();
+        b.title = url;
+        b.style.display = 'block';
+        b.onclick = function () {
+          var done = function () {
+            b.textContent = '✓ コピーしました';
+            setTimeout(function () { b.textContent = '📋 招待リンクをコピー'; }, 1500);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(done, done);
+          } else {
+            var ta = document.createElement('textarea');
+            ta.value = url; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); } catch (e) {}
+            ta.remove(); done();
+          }
+        };
+      } else if (btn) {
+        btn.style.display = 'none';
+      }
+    }, 800);
+  })();
+
+  // Invite join flow: ?join=<id> asks for a player name (unless ?name= is set),
+  // then auto-joins Room <id> over WebRTC as a client.
+  (function () {
+    var q = new URLSearchParams(location.search);
+    var joinRoom = q.get('join');
+    var presetName = q.get('name');
+
+    function startJoin(name) {
+      var nm = (name && name.trim()) || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
+      Module.arguments = Module.arguments.concat(['-client', nm, joinRoom]);
+      loadEngine();
+    }
+
+    if (joinRoom && !presetName) {
+      statusEl.textContent = '';
+      var form = document.createElement('div');
+      form.style.cssText = 'margin-top:18px;display:flex;flex-direction:column;align-items:center;gap:10px';
+      var label = document.createElement('div');
+      label.style.cssText = 'font-size:14px;color:#cfd8e3';
+      label.textContent = 'Room ' + joinRoom + ' に参加 — 名前を入力';
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.maxLength = 200;
+      input.placeholder = 'Pilot';
+      input.style.cssText = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
+      var goBtn = document.createElement('button');
+      goBtn.textContent = '参加する';
+      goBtn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
+      var go = function () { form.remove(); statusEl.textContent = 'loading...'; startJoin(input.value); };
+      goBtn.addEventListener('click', go);
+      input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+      form.appendChild(label); form.appendChild(input); form.appendChild(goBtn);
+      overlay.appendChild(form);
+      setTimeout(function () { input.focus(); }, 50);
+    } else {
+      if (joinRoom && presetName) {
+        Module.arguments = Module.arguments.concat(['-client', presetName, joinRoom]);
+      }
+      loadEngine();
+    }
   })();
 </script>
 </body>

@@ -65,6 +65,11 @@ export class SignalHub {
     try { m = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw)); }
     catch (e) { return; }
 
+    // Keepalive ping from a host/peer: nothing to relay, but receiving traffic
+    // keeps the WebSocket (and therefore the in-memory room) alive so invite
+    // links don't expire while a host sits idle waiting for players.
+    if (m.t === 'ping') return;
+
     if (m.t === 'host' && typeof m.room === 'string' && m.room.length <= 16) {
       if (this.rooms.has(m.room)) { this.send(ws, { t: 'host-taken' }); return; }
       conn.role = 'host';
