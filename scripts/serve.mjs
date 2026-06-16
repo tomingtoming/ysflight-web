@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Static dev server for dist/ that sends the COOP/COEP headers required
-// for SharedArrayBuffer (wasm pthreads).  Plain `python3 -m http.server`
-// will NOT work for the threaded build.
+// Static dev server for dist/.  The web build is single-threaded (no
+// SharedArrayBuffer), so no COOP/COEP cross-origin isolation headers are
+// required -- any static server works; this one just sets correct MIME types.
 //
 //   node scripts/serve.mjs [port] [dir]
 import http from 'node:http';
@@ -26,10 +26,8 @@ http.createServer((req, res) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
     res.writeHead(200, {
       'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cache-Control': 'no-cache'
     });
     res.end(data);
   });
-}).listen(port, () => console.log(`serving ${root} on http://localhost:${port} (COOP/COEP enabled)`));
+}).listen(port, () => console.log(`serving ${root} on http://localhost:${port}`));

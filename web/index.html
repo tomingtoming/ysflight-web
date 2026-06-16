@@ -156,7 +156,17 @@
     onRuntimeInitialized: function () {
       booted = true;
       overlay.classList.add('hidden');
-      var flush = function () { try { Module.FS.syncfs(false, function () {}); } catch (e) {} };
+      // Persist /home/web_user/Documents to IndexedDB.  Guard against
+      // overlapping syncfs calls (interval + visibilitychange/beforeunload, or a
+      // slow write): a second syncfs while one is in flight is wasted work and
+      // triggers emscripten's "N FS.syncfs operations in flight" warning.
+      var syncing = false;
+      var flush = function () {
+        if (syncing) return;
+        syncing = true;
+        try { Module.FS.syncfs(false, function () { syncing = false; }); }
+        catch (e) { syncing = false; }
+      };
       setInterval(flush, 10000);
       window.addEventListener('visibilitychange', flush);
       window.addEventListener('beforeunload', flush);
