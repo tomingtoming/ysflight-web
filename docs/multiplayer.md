@@ -1,119 +1,97 @@
 # ysflight-web マルチプレイ設計 (Multiplayer Design)
 
+## 概要
+
+ブラウザ同士の **WebRTC DataChannel による P2P 対戦**。1人のブラウザがホスト
+(YSFLIGHT のサーバモード = 権威) になり、他のブラウザがルームコードで参加する。
+ゲームデータは P2P で直結し、公開 STUN で NAT を越える。専用サーバの運用は不要で、
+シグナリングだけを Cloudflare Worker + Durable Object が担う。
+
+> **✅ P2P 対戦は動作確認済み (2026-06-12)**
+> ブラウザA (サーバモード) + ブラウザB (#ルームコードで接続) の2ページ構成で、
+> ログオン → ロビー → 飛行参加まで E2E 検証。ゲームデータは DataChannel で直結。
+
+```
+[browser host (server mode)] <--- WebRTC DataChannel (P2P) ---> [browser client]
+              \                                                 /
+               +------ /signal (Cloudflare Worker + DO) -------+
+                        SDP/ICE 交換のみ。ゲームデータは流れない
+```
+
 ## 背景: YSFLIGHT 既存ネットコード
 
-YSFLIGHT には TCP ベースのマルチプレイ実装が既にある
-(`upstream/YSFLIGHT/src/core` の `fsnetwork*` / `fssocketserver` / `fssocketclient`、
-既定ポート 7915、独自バイナリプロトコル `NETVERSION`)。
-サーバ・クライアントとも `yssocket` (BSD ソケット) 上に実装されている。
+YSFLIGHT は TCP ベースの client-server マルチプレイを持つ
+(`fsnetwork*` / `fssocketserver` / `fssocketclient`、独自バイナリプロトコル
+`NETVERSION`)。ブラウザは生 TCP を張れないため、本プロジェクトでは **WebRTC
+DataChannel を「ソケットの代わり」に使い、1つのブラウザをサーバ役にする** ことで、
+サーバ運用なしの P2P 対戦を実現している。
 
-ブラウザは生の TCP を張れないため、次の2段階で対応する。
+> かつてはネイティブ YSFLIGHT サーバへ WebSocket→TCP でブリッジする経路
+> (`server/relay.mjs`) もあったが、別途ネイティブサーバの運用が要り相互運用も
+> 限定的だったため廃止し、P2P 一本に集約した。
 
-> **✅ Phase 1 は動作確認済み (2026-06-11)**
-> ネイティブ console server (Atsugi) + `relay.mjs` + wasm クライアントの構成で、
-> ログイン → 機体選択 (F/A-18E) → Join → 離陸までを headless Chromium で E2E 検証。
-> サーバログ: `User WebPilot logged on.` / `WebPilot took off (F-18E_SUPERHORNET)`
+## シグナリング: Cloudflare Worker + Durable Object
 
-## Phase 1: WebSocket ブリッジ (実装コスト最小・本家サーバと相互運用)
+`worker/signal.js`。配信サイトと同一オリジンの `/signal` で WebSocket を受け、
+単一のハブ Durable Object (`SignalHub`) が room ごとに host / peers の接続を保持して
+SDP/ICE を中継する (旧 `server/signal.mjs` の置き換え)。ゲームデータは一切通らない。
 
-```
-[browser wasm client] --WebSocket--> [ws-tcp relay (Node)] --TCP--> [YSFLIGHT console server]
-```
+- **同一オリジン wss://** なので、https 配信でもブラウザの mixed-content 制限に
+  かからず、TLS 証明書や Cloudflare Tunnel の準備も不要。
+- Durable Object は **SQLite クラス**として宣言 (`new_sqlite_classes`) ＝ Workers
+  Free プランで利用可。ストレージ未使用・接続中のみ常駐するため、単一ハブでも無料枠
+  (リクエスト 100k/日、計算 13,000 GB秒/日) に収まる。
+- クライアントは既定で `wss://<配信ホスト>/signal` に接続する (`web/index.html`)。
+  `?signal=wss://...` で上書き可。
 
-- Emscripten はリンク時に BSD ソケット呼び出しを WebSocket に変換する
-  (`-lwebsocket.js`, デフォルトで `ws://<host>/`)。クライアント側コード変更ゼロで
-  `connect()` が WebSocket 接続になる。
-- サーバ側に [websockify](https://github.com/novnc/websockify) 互換の
-  リレー(`server/relay.mjs`)を置き、TCP の YSFLIGHT サーバ
-  (`main_consvr` をネイティブビルドしたもの、または通常クライアントのサーバモード)
-  へ中継する。
-- バイナリフレーミング: Emscripten の WebSocket ソケットは
-  `binaryType=arraybuffer` のメッセージ単位で TCP ストリームをエミュレートする。
-  YSFLIGHT プロトコルは長さプレフィックス付きメッセージなので、
-  リレーは素通しで良い (websockify と同じ)。
+### プロトコル (client ⇄ /signal)
 
-### 実行手順 (検証済み)
+JSON メッセージ。`worker/signal.js` と wasm 側
+(`src/port/yssocket/yssocket_emscripten.cpp`) で形を一致させている。
 
-```sh
-# 1. ネイティブのコンソールサーバをビルドして起動 (port 7915)
-#    要: build-essential, libglu1-mesa-dev (GL/X11ヘッダ)
-cmake -S upstream/YSFLIGHT/src -B build-native -DCMAKE_BUILD_TYPE=Release
-cmake --build build-native --target ysflight64_nownd -j
-cd build-native/main_consvr
-./ysflight64_nownd -server ServerName ATSUGI_AIRBASE
+| 向き | メッセージ |
+|---|---|
+| host → | `{t:'host', room}` / `{t:'sdp'\|'ice', peer, data}` |
+| → host | `{t:'host-ok', room}` / `{t:'host-taken'}` / `{t:'peer', peer}` / `{t:'sdp'\|'ice', peer, data}` / `{t:'peer-left', peer}` |
+| peer → | `{t:'join', room}` / `{t:'sdp'\|'ice', data}` (peer は付けない=サーバが接続から推定) |
+| → peer | `{t:'no-room'}` / `{t:'join-ok', peer}` / `{t:'sdp'\|'ice', peer, data}` / `{t:'host-left'}` |
 
-# 2. WS→TCP リレーを起動 (port 7916)
-cd server && npm install
-node relay.mjs --listen 7916 --target 127.0.0.1:7915
+確立後はゲームデータが P2P (DataChannel) で流れ、シグナリングは新規参加・追加
+ICE・切断通知のみに使われる。
 
-# 3. ブラウザでクライアントを開く
-#    http://localhost:8000/?client=YourName&server=ws://localhost:7916
-#    (Networkメニューから手動接続でも可)
-```
+## NAT 越え / STUN・TURN
 
-### 注意点
-- **https で配信されたページ (Cloudflare Pages 等) からは `wss://` しか張れない**
-  (mixed content 制限。`?signal=ws://192.168.x.x:7917` は別PCからブロックされる)。
-  対処は次のいずれか:
-  1. **Cloudflare Tunnel (推奨・無料)**: シグナリングを動かすマシンで
-     `cloudflared tunnel --url http://localhost:7917` を実行すると
-     `https://xxxx.trycloudflare.com` が発行される。これをそのまま
-     `?signal=wss://xxxx.trycloudflare.com` に指定 (WebSocket対応・TLS付き)
-  2. `signal.mjs --cert fullchain.pem --key privkey.pem` で直接TLS
-     (正規の証明書が必要。自己署名はブラウザに拒否される)
-  3. **LAN内だけなら http 配信を使う**: ホスト機で `npx serve dist` し、
-     全員 `http://192.168.x.x:3000/?signal=ws://192.168.x.x:7917` で開く
-     (httpページからは ws:// が使える)
-- コンソールサーバの対話メニューは glibc の getchar() sticky-EOF の影響で
-  パイプ経由では操作不能。`-server Name FIELD` のCLI起動を使う。
-- Emscripten のソケットは `Module['websocket']['url']` で接続先WebSocketを
-  上書きできる (web/index.html では `?server=` クエリで指定)。
+- 既定の ICE 設定は公開 STUN (`stun:stun.l.google.com:19302`) のみ。
+- 多くの家庭回線 (cone NAT) 同士、または両者 IPv6 なら STUN だけで直結できる。
+- 両者がモバイル / CGNAT / 対称NAT (例: Starlink の IPv4) の場合は直結できず
+  **TURN** が必要になるが、**現状 TURN は未導入** (将来対応)。
+- 接続が中継 (relay) になったかは `RTCPeerConnection.getStats()` の選択候補ペアの
+  `candidateType` で判定できる (将来 UI 表示予定)。
 
-## Phase 2: WebRTC DataChannel (ブラウザホスト)
+## 動かし方
 
-> **✅ Phase 2 動作確認済み (2026-06-12)**
-> ブラウザA (サーバモード) + ブラウザB (#ルームコードで接続) の
-> 2ページ構成で、ログオン → ロビー → 飛行参加まで E2E 検証。
-> ゲームデータは WebRTC DataChannel で P2P 直結。
+### 本番 (Cloudflare)
 
-```
-[browser host] <--DataChannel(P2P)--> [browser client]
-       \                                  /
-        +---- signal.mjs (SDP/ICE交換のみ) ----+
-```
+`scripts/build.sh` で `dist/` を生成 → Cloudflare Workers Builds が
+`worker/signal.js` と `dist/` をデプロイ。利用者は配信 URL を開き、ゲーム内
+「サーバ開始」でルームコード (右上に `Room: #ABC123`) を得て共有、参加者は
+サーバアドレス欄に `#ABC123` を入力するだけ。
 
-- `yssocket` の Emscripten 実装 (`src/port/yssocket/yssocket_emscripten.cpp`) が
-  `YsSocketServer` を WebRTC DataChannel 上に実装。**ゲーム本体は無改造**
-- DataChannel は ordered/reliable (TCP相当)。ゲームデータはシグナリング
-  サーバを経由しない
-- ICE: STUN (stun.l.google.com) のみ。対称NAT同士などでは繋がらない場合あり
-  (TURN は未実装)
-
-### 使い方
+### ローカル
 
 ```sh
-# シグナリングサーバ (どこか1箇所で稼働させる; ゲームデータは流れない)
-cd server && npm install
-node signal.mjs                 # ws://host:7917 (https配信なら --cert/--key で wss)
-
-# ホスト (ブラウザ)
-https://.../?signal=wss://シグナリングホスト:7917
-→ ネットワークメニューから「サーバ開始」→ 画面右上に Room: #ABC123 が出る
-  (?room=好きなコード で固定も可)
-
-# クライアント (ブラウザ)
-https://.../?signal=wss://シグナリングホスト:7917
-→ ネットワーク接続のサーバアドレス欄に #ABC123 を入力
-  (または ?client=名前,%23ABC123 で自動接続)
+scripts/build.sh        # dist/ を生成
+npx wrangler dev        # /signal(Worker+DO) + dist/ を http://localhost:8787 で提供
+# 2タブで開く: 一方で「サーバ開始」、もう一方で #ルームコード を入力
 ```
 
-接続先アドレスが `#...` / `rtc:...` なら WebRTC、通常のホスト名/IPなら
-従来の WebSocket リレー (Phase 1) が選ばれる。
+ローカルは http なので既定で `ws://localhost:8787/signal` が使われる (ブラウザは
+localhost の ws:// を許可する)。
 
-## 状態同期に関するメモ
+## 今後
 
-- YSFLIGHT は 状態スナップショット + イベント型のメッセージを混在送信する
-- ティックレートはサーバ側設定 (`fsconsole` 参照)
-- ブラウザのタブ非アクティブ時は requestAnimationFrame が止まるため、
-  クライアントは setTimeout フォールバック (emscripten main loop の
-  `emscripten_set_main_loop_timing`) を検討すること
+- **TURN 連携**: モバイル / CGNAT / 対称NAT 同士でも繋がるように。Cloudflare
+  Realtime TURN か coturn を外部に置き、Worker で短命クレデンシャルを発行する形
+  (静的な長期クレデンシャルは配らない)。
+- **接続診断**: 事前に STUN で直結可否を推定 (cone/symmetric・IPv6 有無)、接続後は
+  `getStats()` で「直接 / 中継経由」をバッジ表示。
