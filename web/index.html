@@ -95,9 +95,13 @@
 
   var Module = {
     canvas: document.getElementById('canvas'),
-    // WebRTC multiplayer (Phase 2): signaling server and optional fixed room
-    // code for hosting.  ?signal=wss://host:7917  ?room=ABC123
-    ysfwSignalUrl: new URLSearchParams(location.search).get('signal') || undefined,
+    // WebRTC multiplayer: signaling defaults to this site's own /signal endpoint
+    // (a Cloudflare Worker + Durable Object; see worker/signal.js).  Game traffic
+    // is peer-to-peer over WebRTC DataChannels with public STUN.
+    //   ?signal=wss://host/path  overrides the signaling endpoint
+    //   ?room=ABC123             fixes the host's room code
+    ysfwSignalUrl: new URLSearchParams(location.search).get('signal') ||
+      ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal'),
     ysfwRoomCode: new URLSearchParams(location.search).get('room') || undefined,
     locateFile: function (path) {
       if (path === 'ysflight32_gl2.wasm') return ASSET.wasm;
@@ -116,21 +120,8 @@
         var p = ff.split(',');
         a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH3000');
       }
-      // ?client=Name[,host] joins a network game (host defaults to the
-      // relay's machine; the actual transport goes through ?server=ws://...)
-      var cl = q.get('client');
-      if (cl) {
-        var c = cl.split(',');
-        a.push('-client', c[0], c[1] || 'localhost');
-      }
       return a;
     })(),
-    // Multiplayer (Phase 1): TCP sockets are emulated over WebSocket.
-    // Point at a ws-tcp relay (server/relay.mjs) with ?server=ws://host:7916
-    websocket: {
-      url: new URLSearchParams(location.search).get('server') || undefined,
-      subprotocol: 'binary'
-    },
     preRun: [function () {
       // Let YSFLIGHT's locale detection see the browser language.
       try {

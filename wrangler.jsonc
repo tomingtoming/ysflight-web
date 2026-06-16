@@ -1,21 +1,33 @@
 {
-  // Cloudflare Workers Static Assets config.
+  // Cloudflare Workers config.
   //
-  // The Cloudflare build runs `scripts/build.sh` (produces dist/) and then
-  // `npx wrangler versions upload` (preview branches) / `wrangler deploy`
-  // (production).  Those commands need this file to know what to upload:
-  // dist/ is served as static assets, no Worker script required for now.
+  // - Static game assets (dist/) are served by Workers Static Assets.
+  // - worker/signal.js adds a tiny WebRTC signaling Worker at /signal, backed by
+  //   a single Durable Object hub (SignalHub).  It replaces the old self-hosted
+  //   server/signal.mjs.  Game traffic stays P2P (WebRTC DataChannel, public
+  //   STUN); only SDP/ICE setup messages pass through here.
   //
-  // dist/_headers still applies (Workers Static Assets honors _headers /
-  // _redirects).  The web build is single-threaded, so no COOP/COEP / SAB.
+  // The DO is declared as a SQLite-backed class (new_sqlite_classes), which is
+  // available on the Workers Free plan.  It uses no storage (in-memory room
+  // map), so it stays within the free tier.
   //
-  // To add server-side expansion-pack handling later, add e.g.
-  //   "main": "worker/index.ts"
-  // and an R2/KV binding; static assets are served first, the Worker handles
-  // the remaining (e.g. /api/*) routes.
+  // Build: scripts/build.sh produces dist/; Cloudflare runs `wrangler deploy`
+  // (production) / `wrangler versions upload` (preview), uploading this Worker +
+  // dist/ assets.  dist/_headers still applies.  Single-threaded build -> no
+  // SharedArrayBuffer / COOP+COEP.
   "name": "ysflight-web",
   "compatibility_date": "2025-06-01",
+  "main": "worker/signal.js",
   "assets": {
-    "directory": "./dist"
-  }
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "SIGNAL", "class_name": "SignalHub" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SignalHub"] }
+  ]
 }

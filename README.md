@@ -16,7 +16,7 @@ src/port/           本リポジトリで新規に書いたプラットフォー
   fssimplewindow/     Emscripten backend (WebGL context, DOM input events, timers)
   fslazywindow/       emscripten_set_main_loop driver
 web/                index.html シェル (ローディングUI, IDBFS永続化, 言語設定)
-server/             マルチプレイ用 WebSocket→TCP リレー (Phase 1)
+worker/             WebRTC シグナリング (Cloudflare Worker + Durable Object)
 scripts/            build.sh / smoke-test.sh / serve.mjs
 docs/               設計ドキュメント (multiplayer.md ほか)
 ```
@@ -106,20 +106,24 @@ Z/X: ラダー, G: ギア, Space: 機銃, etc.)。メニューから Simulation 
 軸・ボタンの割り当ては Option → Config Key/Mouse/Joystick Assignment で変更可能。
 standardマッピングのD-padはPOVハットとして扱われます。
 
-## マルチプレイ / Multiplayer (roadmap)
+## マルチプレイ / Multiplayer
 
-YSFLIGHT 既存の TCP ネットコード (port 7915) を WebSocket でブリッジします。
-詳細・実行手順は [docs/multiplayer.md](docs/multiplayer.md) を参照。
+ブラウザ同士の **WebRTC P2P** で対戦します。1人が「サーバ開始」でホストになり
+(画面右上に `Room: #ABC123` を表示)、他の参加者はサーバアドレス欄に `#ABC123`
+を入力して参加。ゲームデータは WebRTC DataChannel の P2P で直結し、公開 STUN
+(Google) で NAT を越えます。ホストのブラウザがサーバ権威です。
 
-- **Phase 1 (動作確認済み)**: Emscripten のソケットエミュレーション +
-  `server/relay.mjs` (WS→TCP リレー) でネイティブ YSFLIGHT サーバに接続。
-  `?client=名前&server=ws://ホスト:7916` で起動するとロビーに自動ログイン
-- **Phase 2 (動作確認済み)**: **ブラウザがサーバになれます**。WebRTC
-  DataChannel の P2P 接続で、ゲーム内の「サーバ開始」がルームコード
-  (画面右上に `Room: #ABC123`) を発行し、他のブラウザはサーバアドレス欄に
-  `#ABC123` を入力して参加。必要なのは軽量なシグナリングサーバ
-  (`server/signal.mjs`、SDP交換のみでゲームデータは流れない) だけ。
-  `?signal=wss://...` で指定、`?room=` でルームコード固定も可
+シグナリング (SDP/ICE 交換のみ。ゲームデータは流れない) は、サイト自身の
+`/signal` エンドポイント = **Cloudflare Worker + Durable Object**
+(`worker/signal.js`) が担います。配信元と同一オリジンの `wss://` なので、別途
+シグナリングサーバを立てる必要も、TLS 証明書や mixed-content の調整も不要です。
+`?signal=wss://...` で上書き、`?room=` でルームコード固定も可。
+
+詳細は [docs/multiplayer.md](docs/multiplayer.md)。
+
+> **NAT 越え**: 多くの家庭回線同士なら STUN だけで直結します。両者がモバイル /
+> CGNAT / 対称NAT (例: Starlink の IPv4) だと直結できず TURN が必要ですが、TURN
+> は現状未導入です (将来対応)。両者が IPv6 で繋がれば直結できることが多いです。
 
 ## 既知の制限 / Known limitations
 
