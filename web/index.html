@@ -110,6 +110,7 @@
     },
     // UI language follows the browser locale (ja/en); override with ?lang=ja etc.
     // ?freeflight=AIRPLANE,FIELD[,POSITION] jumps straight into a flight.
+    // ?join=ROOMCODE[&name=NAME] auto-joins a multiplayer room over WebRTC.
     arguments: (function () {
       var a = [];
       var q = new URLSearchParams(location.search);
@@ -119,6 +120,14 @@
       if (ff) {
         var p = ff.split(',');
         a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH3000');
+      }
+      // ?join=ABC123 auto-joins that room as a network client.  The "#" prefix
+      // routes the connection through the WebRTC DataChannel path (signaling via
+      // this site's /signal); there is no host IP or port to enter.
+      var join = q.get('join');
+      if (join) {
+        var nm = q.get('name') || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
+        a.push('-client', nm, '#' + join);
       }
       return a;
     })(),
@@ -187,6 +196,49 @@
       navigator.serviceWorker.register('sw.js').catch(function () {});
     });
   }
+
+  // Multiplayer host helper: while hosting, the engine shows a "Room: #CODE"
+  // overlay (#ysfw-room-overlay).  Offer a one-click copy of the invite link
+  // https://<this-site>/?join=CODE so the host just sends a URL — opening it
+  // auto-joins the room (see ?join= above).  No IP/port: the room code is all
+  // a guest needs; signaling rides this site's /signal endpoint.
+  (function () {
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.style.cssText = 'position:fixed;top:46px;right:8px;z-index:31;display:none;' +
+      'background:#1d2633;color:#cfd8e3;border:1px solid #33425a;border-radius:6px;' +
+      'padding:6px 12px;font:13px system-ui,sans-serif;cursor:pointer';
+    var idle = '📋 招待リンクをコピー'; // 📋 招待リンクをコピー
+    btn.textContent = idle;
+    var url = '';
+    btn.addEventListener('click', function () {
+      if (!url) return;
+      var ok = function () {
+        btn.textContent = '✓ コピーしました'; // ✓ コピーしました
+        setTimeout(function () { btn.textContent = idle; }, 1500);
+      };
+      var fallback = function () {
+        var ta = document.createElement('textarea');
+        ta.value = url; ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); ok(); } catch (e) {}
+        ta.remove();
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(ok, fallback);
+      } else { fallback(); }
+    });
+    document.addEventListener('DOMContentLoaded', function () { document.body.appendChild(btn); });
+    if (document.body) document.body.appendChild(btn);
+    // The engine rewrites the overlay's textContent ("Room: #X (connecting...)"
+    // then "Room: #X"), so poll for the current room code rather than mutating it.
+    setInterval(function () {
+      var ov = document.getElementById('ysfw-room-overlay');
+      var m = ov && ov.textContent && ov.textContent.match(/#([0-9A-Z]+)/);
+      if (m) { url = location.origin + '/?join=' + m[1]; btn.title = url; btn.style.display = ''; }
+      else { btn.style.display = 'none'; }
+    }, 800);
+  })();
 
   // Load the (possibly content-hashed) engine.
   (function () {
