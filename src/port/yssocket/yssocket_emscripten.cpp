@@ -106,8 +106,8 @@ EM_JS(int, jsHostStart, (int maxClients), {
 	if (R.host) return 0;
 
 	var room = (Module.ysfwRoomCode ||
-		Array.from({ length: 6 }, function () {
-			return 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)];
+		Array.from({ length: 8 }, function () {
+			return '' + Math.floor(Math.random() * 10);   // 8-digit numeric Room ID
 		}).join(''));
 
 	var H = {
@@ -115,10 +115,10 @@ EM_JS(int, jsHostStart, (int maxClients), {
 		slots: {},          // slot -> {pc, ch, open, closed, q}
 		peerToSlot: {},     // signaling peerId -> slot
 		acceptQueue: [], closeQueue: [],
-		ws: null
+		ws: null, ping: null
 	};
 	R.host = H;
-	R.overlay('Room: #' + room + ' (connecting...)');
+	R.overlay('Room: ' + room + ' (connecting...)');
 
 	if (R.mixedContent(R.signalUrl())) {
 		H.failed = true;
@@ -131,13 +131,21 @@ EM_JS(int, jsHostStart, (int maxClients), {
 	try { ws = new WebSocket(R.signalUrl()); } catch (e) { H.failed = true; R.overlay('Signal server unreachable'); return 0; }
 	H.ws = ws;
 	ws.onerror = function () { if (!H.ok) { H.failed = true; R.overlay('Signal server unreachable'); } };
-	ws.onclose = function () { if (!H.ok) { H.failed = true; } };
-	ws.onopen = function () { ws.send(JSON.stringify({ t: 'host', room: room })); };
+	ws.onclose = function () { if (H.ping) { clearInterval(H.ping); H.ping = null; } if (!H.ok) { H.failed = true; } };
+	ws.onopen = function () {
+		ws.send(JSON.stringify({ t: 'host', room: room }));
+		// Keepalive: an idle signaling WebSocket gets closed by Cloudflare/the
+		// network, which fires the hub's onClose and deletes the room — late
+		// joiners then see "no-room".  Ping to keep the socket (and room) alive.
+		H.ping = setInterval(function () {
+			if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'ping' })); } catch (e) {} }
+		}, 25000);
+	};
 	ws.onmessage = function (ev) {
 		var m = JSON.parse(ev.data);
 		if (m.t === 'host-ok') {
 			H.ok = true;
-			R.overlay('Room: #' + room);
+			R.overlay('Room: ' + room);
 		} else if (m.t === 'host-taken') {
 			H.failed = true;
 			R.overlay('Room code taken — restart server');
@@ -260,6 +268,7 @@ EM_JS(void, jsHostStop, (), {
 		try { S.ch.close(); } catch (e) {}
 		try { S.pc.close(); } catch (e) {}
 	}
+	if (H.ping) { clearInterval(H.ping); H.ping = null; }
 	try { H.ws.close(); } catch (e) {}
 	R.overlay(null);
 	R.host = null;
@@ -271,7 +280,7 @@ EM_JS(void, jsHostStop, (), {
 EM_JS(void, jsCliConnect, (const char *roomPtr), {
 	var R = globalThis.ysfwRtc;
 	var room = UTF8ToString(roomPtr);
-	var C = { state: 0, q: R.makeQueue(), pending: [], pc: null, ch: null, ws: null, iceQ: [], remoteSet: false };  // state: 0=connecting 1=open 2=closed
+	var C = { state: 0, q: R.makeQueue(), pending: [], pc: null, ch: null, ws: null, ping: null, iceQ: [], remoteSet: false };  // state: 0=connecting 1=open 2=closed
 	R.cli = C;
 
 	if (R.mixedContent(R.signalUrl())) {
@@ -284,7 +293,12 @@ EM_JS(void, jsCliConnect, (const char *roomPtr), {
 	try { ws = new WebSocket(R.signalUrl()); } catch (e) { C.state = 2; return; }
 	C.ws = ws;
 	ws.onerror = function () { if (C.state === 0) C.state = 2; };
-	ws.onopen = function () { ws.send(JSON.stringify({ t: 'join', room: room })); };
+	ws.onopen = function () {
+		ws.send(JSON.stringify({ t: 'join', room: room }));
+		C.ping = setInterval(function () {
+			if (ws.readyState === 1) { try { ws.send(JSON.stringify({ t: 'ping' })); } catch (e) {} }
+		}, 25000);
+	};
 	ws.onmessage = function (ev) {
 		var m = JSON.parse(ev.data);
 		if (m.t === 'no-room') {
@@ -353,6 +367,7 @@ EM_JS(void, jsCliClose, (), {
 	var R = globalThis.ysfwRtc;
 	var C = R && R.cli;
 	if (!C) return;
+	if (C.ping) { clearInterval(C.ping); C.ping = null; }
 	try { if (C.ch) C.ch.close(); } catch (e) {}
 	try { if (C.pc) C.pc.close(); } catch (e) {}
 	try { if (C.ws) C.ws.close(); } catch (e) {}
@@ -362,20 +377,21 @@ EM_JS(void, jsCliClose, (), {
 // ============================================================================
 // Helpers
 
-// "#ABC123" or "rtc:ABC123" selects the WebRTC path; anything that looks
-// like a hostname/IP goes through the TCP path (WebSocket relay).
+// On the web build every connection is a WebRTC room join — there is no raw
+// TCP transport — so the whole address is treated as a Room ID.  A leading "#"
+// or "rtc:" is tolerated for backward compatibility with older invite links.
 static const char *YsfwRtcRoomFromHost(const char host[])
 {
-	if (nullptr == host) {
+	if (nullptr == host || 0 == host[0]) {
 		return nullptr;
 	}
-	if ('#' == host[0] && 0 != host[1]) {
-		return host + 1;
+	if ('#' == host[0]) {
+		return (0 != host[1]) ? host + 1 : nullptr;
 	}
-	if (0 == strncmp(host, "rtc:", 4) && 0 != host[4]) {
-		return host + 4;
+	if (0 == strncmp(host, "rtc:", 4)) {
+		return (0 != host[4]) ? host + 4 : nullptr;
 	}
-	return nullptr;
+	return host;
 }
 
 // ============================================================================
@@ -417,7 +433,7 @@ YSRESULT YsSocketServer::Start(void)
 
 	char room[32];
 	jsHostRoomCode(room, sizeof(room));
-	printf("WebRTC room opened.  Other players join with address: #%s\n", room);
+	printf("WebRTC room opened.  Other players join with Room ID: %s\n", room);
 	printf("(Signaling server: see ?signal= ; game data flows peer-to-peer.)\n");
 
 	started = YSTRUE;
@@ -622,7 +638,7 @@ YSRESULT YsSocketClient::Connect(const char hostaddr[])
 	const char *room = YsfwRtcRoomFromHost(hostaddr);
 	if (nullptr != room) {
 		jsRtcInit();
-		printf("Joining WebRTC room #%s ...\n", room);
+		printf("Joining WebRTC room %s ...\n", room);
 		jsCliConnect(room);
 		ysfwCliRtcMode[this] = true;
 		// The channel opens asynchronously; sends are queued in the JS glue

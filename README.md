@@ -109,15 +109,17 @@ standardマッピングのD-padはPOVハットとして扱われます。
 ## マルチプレイ / Multiplayer
 
 ブラウザ同士の **WebRTC P2P** で対戦します。1人が「サーバ開始」でホストになり
-(画面右上に `Room: #ABC123` を表示)、他の参加者はサーバアドレス欄に `#ABC123`
-を入力して参加。ゲームデータは WebRTC DataChannel の P2P で直結し、公開 STUN
-(Google) で NAT を越えます。ホストのブラウザがサーバ権威です。
+(画面右上に `Room: 12345678` の 8 桁数字を表示)、他の参加者は招待リンク
+(`?join=12345678`) を開いて名前を入力すれば自動参加、またはネットワーク→
+クライアントの「Room ID」欄に 8 桁を入力して参加。ゲームデータは WebRTC
+DataChannel の P2P で直結し、公開 STUN (Google) で NAT を越えます。ホストの
+ブラウザがサーバ権威です (web 版はチャット・ポート設定なし、P2P/Room ID のみ)。
 
 シグナリング (SDP/ICE 交換のみ。ゲームデータは流れない) は、サイト自身の
 `/signal` エンドポイント = **Cloudflare Worker + Durable Object**
 (`worker/signal.js`) が担います。配信元と同一オリジンの `wss://` なので、別途
 シグナリングサーバを立てる必要も、TLS 証明書や mixed-content の調整も不要です。
-`?signal=wss://...` で上書き、`?room=` でルームコード固定も可。
+`?signal=wss://...` で上書き、`?room=` でルームコード固定、`?join=` で参加先指定も可。
 
 詳細は [docs/multiplayer.md](docs/multiplayer.md)。
 
