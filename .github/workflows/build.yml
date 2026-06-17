@@ -28,6 +28,9 @@ jobs:
       - name: Build
         run: scripts/build.sh
 
+      - name: Unit tests (pack engine)
+        run: scripts/test.sh
+
       - name: Install smoke-test browser
         run: |
           npm install --no-save playwright
@@ -35,3 +38,10 @@ jobs:
 
       - name: Smoke test (software GPU)
         run: scripts/smoke-test.sh default
+
+      # Heavier add-on-pack integration smoke (install/toggle/uninstall + the
+      # service-worker-cached reload that guards the run-dependency startup
+      # race).  Several boot cycles, so PR-only; run locally before push too.
+      - name: Pack smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: scripts/smoke-pack.sh
