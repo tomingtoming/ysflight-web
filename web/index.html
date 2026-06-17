@@ -220,6 +220,7 @@
     function ensureInvite() {
       if (inviteBtn) return inviteBtn;
       inviteBtn = document.createElement('button');
+      inviteBtn.id = 'ysfw-invite-btn';
       inviteBtn.textContent = '📋 招待リンクをコピー';
       inviteBtn.style.cssText = 'position:fixed;right:12px;top:12px;z-index:20;font-size:13px;padding:7px 12px;border-radius:6px;border:0;background:#1f6feb;color:#fff;cursor:pointer;display:none';
       inviteBtn.onclick = function () {
@@ -250,13 +251,18 @@
     function ensureBadge() {
       if (badge) return badge;
       badge = document.createElement('button');
+      badge.id = 'ysfw-conn-badge';
       badge.style.cssText = 'position:fixed;left:12px;top:12px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
       badge.title = '対戦の接続性チェック（クリックで再確認）';
       badge.onclick = function () { if (checkState !== 'running') runCheck(); };
       document.body.appendChild(badge);
       return badge;
     }
-    function setBadge(t) { ensureBadge().textContent = t; }
+    function setBadge(text, title) {
+      var b = ensureBadge();
+      b.textContent = text;
+      if (title) b.title = title;
+    }
 
     function srflxPort(iceServer, timeoutMs) {
       return new Promise(function (resolve) {
@@ -276,15 +282,22 @@
     }
     function runCheck() {
       checkState = 'running';
-      setBadge('接続: 確認中…');
+      setBadge('接続を確認中…', '対戦の接続性をチェックしています');
       Promise.all([
         srflxPort('stun:stun.l.google.com:19302'),
         srflxPort('stun:stun1.l.google.com:19302')
       ]).then(function (ports) {
         checkState = 'done';
-        if (!ports[0] && !ports[1]) setBadge('🟠 接続: STUN到達せず');
-        else if (ports[0] && ports[1] && ports[0] !== ports[1]) setBadge('🟡 接続: 対称NAT（TURN要かも）');
-        else setBadge('🟢 接続: 直結できそう');
+        if (!ports[0] && !ports[1]) {
+          setBadge('🟠 接続を確認できません',
+            'STUN サーバに到達できませんでした。ネットワーク／ファイアウォール、またはオフラインの可能性があります。クリックで再確認。');
+        } else if (ports[0] && ports[1] && ports[0] !== ports[1]) {
+          setBadge('🟡 一部の相手と繋がらないかも',
+            'この回線は通信タイプが厳しめ（いわゆる対称NAT）です。相手も同じタイプだと直接つながらないことがありますが、多くの相手とは対戦できます。クリックで再確認。');
+        } else {
+          setBadge('🟢 マルチプレイOK',
+            'この回線は対戦に適しています（直接つながります）。クリックで再確認。');
+        }
       });
     }
 
