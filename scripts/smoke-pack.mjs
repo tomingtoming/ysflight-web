@@ -79,6 +79,35 @@ await page
 await page.waitForTimeout(3000);
 if (fatal.length) die('fatal output during pre-boot install / first boot');
 
+// 3b. Regression guard for the run-dependency ordering race.  Once the service
+//     worker is controlling, a reload serves the .data preload from cache (it
+//     resolves instantly), so the IDBFS syncfs finishes AFTER it.  preRun must
+//     keep the run-dependency count > 0 across that transition; otherwise
+//     Emscripten schedules main() early and aborts with "cannot call main when
+//     async dependencies remain".  (This is the exact crash the gate ordering
+//     fix addresses; a fresh first load does not reproduce it.)
+await page
+  .waitForFunction(() => navigator.serviceWorker && navigator.serviceWorker.controller, { timeout: 30000 })
+  .catch(() => {});
+logs.length = 0;
+fatal.length = 0;
+await page.goto(url);
+await page
+  .waitForFunction(() => window.ysfwPacks && window.ysfwPacks.fsReady === true, { timeout: 60000 })
+  .catch(() => die('cached reload: pack layer not ready'));
+await page.evaluate(() => window.ysfwPacks.start());
+await page
+  .waitForFunction(
+    () => {
+      const ov = document.getElementById('overlay');
+      return ov && ov.classList.contains('hidden');
+    },
+    { timeout: bootMs },
+  )
+  .catch(() => die('cached reload did not boot (run-dependency ordering race?)'));
+if (fatal.length) die('abort on SW-cached reload: ' + fatal.join(' | '));
+console.log('SW-cached reload booted cleanly (run-dependency ordering guarded)');
+
 // Reload straight into a flight with an aircraft that ONLY this pack provides
 // (test1.dat: IDENTIFY "YSFW_TEST1"). ?freeflight auto-launches (no gate); the
 // engine loads the IDBFS-persisted pack at boot.  The engine prints
