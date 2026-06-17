@@ -103,7 +103,14 @@
     //   ?join=12345678           pre-fills the Room ID to join (invite links)
     ysfwSignalUrl: new URLSearchParams(location.search).get('signal') ||
       ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal'),
-    ysfwRoomCode: new URLSearchParams(location.search).get('room') || undefined,
+    ysfwRoomCode: (function () {
+      var q = new URLSearchParams(location.search);
+      if (q.get('room')) return q.get('room');
+      if (q.get('join')) return undefined;   // this tab is joining, not hosting
+      // Pre-generate an 8-digit host Room ID so the invite link is available
+      // from the menu (the engine creates the room only on "Start Server").
+      return Array.from({ length: 8 }, function () { return '' + Math.floor(Math.random() * 10); }).join('');
+    })(),
     ysfwJoinRoom: new URLSearchParams(location.search).get('join') || undefined,
     locateFile: function (path) {
       if (path === 'ysflight32_gl2.wasm') return ASSET.wasm;
@@ -197,43 +204,114 @@
     document.body.appendChild(s);
   }
 
-  // Host invite link: while this browser hosts, the engine shows "Room: <id>"
-  // in #ysfw-room-overlay.  Offer a button that copies an invite URL which
-  // opens this site already joining that room.
+  // ---- Menu overlays: invite link + connection badge ----------------------
+  // Both show ONLY on the menu (after boot, not in flight).  The engine sets
+  // globalThis.ysfwRtc.inFlight via ChangeRunMode; in flight we also hide the
+  // engine's own "Room: <id>" overlay (#ysfw-room-overlay) to keep the view clean.
   (function () {
-    var btn = null;
-    function ensureBtn() {
-      if (btn) return btn;
-      btn = document.createElement('button');
-      btn.textContent = '📋 招待リンクをコピー';
-      btn.style.cssText = 'position:fixed;right:12px;top:44px;z-index:20;font-size:13px;padding:7px 12px;border-radius:6px;border:0;background:#1f6feb;color:#fff;cursor:pointer;display:none';
-      document.body.appendChild(btn);
-      return btn;
+    function onMenu() {
+      var R = globalThis.ysfwRtc;
+      return booted && !(R && R.inFlight);
     }
-    setInterval(function () {
-      var ov = document.getElementById('ysfw-room-overlay');
-      var m = ov && ov.textContent && ov.textContent.match(/Room:\s*(\d{6,})/);
-      if (m) {
-        var url = location.origin + '/?join=' + m[1];
-        var b = ensureBtn();
-        b.title = url;
-        b.style.display = 'block';
-        b.onclick = function () {
-          var done = function () {
-            b.textContent = '✓ コピーしました';
-            setTimeout(function () { b.textContent = '📋 招待リンクをコピー'; }, 1500);
-          };
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(url).then(done, done);
-          } else {
-            var ta = document.createElement('textarea');
-            ta.value = url; document.body.appendChild(ta); ta.select();
-            try { document.execCommand('copy'); } catch (e) {}
-            ta.remove(); done();
-          }
+
+    // Invite-link button (host).  Uses the pre-generated/fixed host Room ID, so
+    // the host can grab the link from the menu before starting the server.
+    var inviteBtn = null;
+    function ensureInvite() {
+      if (inviteBtn) return inviteBtn;
+      inviteBtn = document.createElement('button');
+      inviteBtn.id = 'ysfw-invite-btn';
+      inviteBtn.textContent = '📋 招待リンクをコピー';
+      inviteBtn.style.cssText = 'position:fixed;right:12px;top:12px;z-index:20;font-size:13px;padding:7px 12px;border-radius:6px;border:0;background:#1f6feb;color:#fff;cursor:pointer;display:none';
+      inviteBtn.onclick = function () {
+        var code = Module.ysfwRoomCode;
+        if (!code) return;
+        var url = location.origin + '/?join=' + code;
+        var done = function () {
+          inviteBtn.textContent = '✓ コピーしました (' + code + ')';
+          setTimeout(function () { inviteBtn.textContent = '📋 招待リンクをコピー'; }, 1800);
         };
-      } else if (btn) {
-        btn.style.display = 'none';
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(done, done);
+        } else {
+          var ta = document.createElement('textarea');
+          ta.value = url; document.body.appendChild(ta); ta.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          ta.remove(); done();
+        }
+      };
+      document.body.appendChild(inviteBtn);
+      return inviteBtn;
+    }
+
+    // Connection badge: a one-shot STUN probe hinting whether direct P2P is
+    // likely.  Same mapped port from two STUN servers => cone NAT (P2P OK);
+    // different ports => symmetric NAT (a TURN relay would be needed).
+    var badge = null, checkState = 'idle';
+    function ensureBadge() {
+      if (badge) return badge;
+      badge = document.createElement('button');
+      badge.id = 'ysfw-conn-badge';
+      badge.style.cssText = 'position:fixed;left:12px;top:12px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
+      badge.title = '対戦の接続性チェック（クリックで再確認）';
+      badge.onclick = function () { if (checkState !== 'running') runCheck(); };
+      document.body.appendChild(badge);
+      return badge;
+    }
+    function setBadge(text, title) {
+      var b = ensureBadge();
+      b.textContent = text;
+      if (title) b.title = title;
+    }
+
+    function srflxPort(iceServer, timeoutMs) {
+      return new Promise(function (resolve) {
+        var pc, done = false;
+        var finish = function (p) { if (!done) { done = true; try { pc.close(); } catch (e) {} resolve(p); } };
+        try { pc = new RTCPeerConnection({ iceServers: [{ urls: iceServer }] }); }
+        catch (e) { return resolve(null); }
+        try { pc.createDataChannel('probe'); } catch (e) {}
+        pc.onicecandidate = function (e) {
+          if (!e.candidate) return finish(null);
+          var parts = (e.candidate.candidate || '').split(' ');
+          if (parts[7] === 'srflx') finish(parts[5]); // server-reflexive mapped port
+        };
+        pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function () { finish(null); });
+        setTimeout(function () { finish(null); }, timeoutMs || 4000);
+      });
+    }
+    function runCheck() {
+      checkState = 'running';
+      setBadge('接続を確認中…', '対戦の接続性をチェックしています');
+      Promise.all([
+        srflxPort('stun:stun.l.google.com:19302'),
+        srflxPort('stun:stun1.l.google.com:19302')
+      ]).then(function (ports) {
+        checkState = 'done';
+        if (!ports[0] && !ports[1]) {
+          setBadge('🟠 接続を確認できません',
+            'STUN サーバに到達できませんでした。ネットワーク／ファイアウォール、またはオフラインの可能性があります。クリックで再確認。');
+        } else if (ports[0] && ports[1] && ports[0] !== ports[1]) {
+          setBadge('🟡 一部の相手と繋がらないかも',
+            'この回線は通信タイプが厳しめ（いわゆる対称NAT）です。相手も同じタイプだと直接つながらないことがありますが、多くの相手とは対戦できます。クリックで再確認。');
+        } else {
+          setBadge('🟢 マルチプレイOK',
+            'この回線は対戦に適しています（直接つながります）。クリックで再確認。');
+        }
+      });
+    }
+
+    setInterval(function () {
+      var roomEl = document.getElementById('ysfw-room-overlay');
+      if (onMenu()) {
+        if (roomEl) roomEl.style.display = '';
+        if (Module.ysfwRoomCode) ensureInvite().style.display = 'block';
+        ensureBadge().style.display = 'block';
+        if (checkState === 'idle') runCheck();
+      } else {
+        if (roomEl) roomEl.style.display = 'none'; // hide engine "Room: <id>" in flight
+        if (inviteBtn) inviteBtn.style.display = 'none';
+        if (badge) badge.style.display = 'none';
       }
     }, 800);
   })();
