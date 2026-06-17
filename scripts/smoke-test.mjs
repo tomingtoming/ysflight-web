@@ -68,6 +68,23 @@ await cdp.send('Log.enable');
 cdp.on('Log.entryAdded', (e) => check('driver', e.entry.text));
 
 await page.goto(url);
+
+// A pre-boot pack panel (packs-ui.js, milestone M2) now gates startup until the
+// user presses "play".  Release it so this boot/GPU smoke proceeds; harmless on
+// builds without the pack layer (we then just fall through to the auto-boot).
+for (let i = 0; i < 60; i++) {
+  const go = await page.evaluate(() => {
+    if (window.ysfwPacks && window.ysfwPacks.fsReady) {
+      window.ysfwPacks.start();
+      return true;
+    }
+    const ov = document.getElementById('overlay');
+    return !!(ov && ov.classList.contains('hidden'));
+  });
+  if (go) break;
+  await page.waitForTimeout(500);
+}
+
 await page.waitForTimeout(waitMs);
 
 // Dismiss the first-start dialog (button position differs per language) so
