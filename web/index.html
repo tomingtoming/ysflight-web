@@ -136,7 +136,6 @@
       FS.mount(IDBFS, {}, '/home/web_user/Documents');
       Module.addRunDependency('idbfs-load');
       FS.syncfs(true, function () {
-        Module.removeRunDependency('idbfs-load');
         // Pre-boot add-on pack management.  Hold a run dependency so the
         // engine's one-time template scan (a few frames into main) only runs
         // after the user has chosen their packs — no reload needed.  Skipped
@@ -166,6 +165,11 @@
             Module.__ysfwGateHeld = false;
           }
         }
+        // Release idbfs-load LAST so the run-dependency count never transiently
+        // hits 0 above — otherwise a cached/instant .data preload lets Emscripten
+        // schedule run()/callMain before the gate is added, aborting with
+        // "cannot call main when async dependencies remain".
+        Module.removeRunDependency('idbfs-load');
       });
     }],
     setStatus: function (text) {
