@@ -201,28 +201,29 @@
   // Three states, driven by globalThis.ysfwInFlight (set by the engine's
   // ChangeRunMode) and globalThis.ysfwRtc.host (set while this browser hosts):
   //   - menu (not flying)        -> connection badge only
-  //   - hosting a server         -> Room ID overlay + invite-link button
+  //   - hosting a server         -> clickable Room ID chip (click = copy invite)
   //   - flying as client / solo  -> nothing
   (function () {
-    // Invite-link button, shown only while hosting; links to /?join=<room>
-    // using the live host room code.
-    var inviteBtn = null;
-    function ensureInvite() {
-      if (inviteBtn) return inviteBtn;
-      inviteBtn = document.createElement('button');
-      inviteBtn.id = 'ysfw-invite-btn';
-      inviteBtn.textContent = '📋 招待リンクをコピー';
-      // Sits just below the engine's Room ID overlay (#ysfw-room-overlay, fixed
-      // at top:8/right:8) so the two don't overlap while hosting.
-      inviteBtn.style.cssText = 'position:fixed;right:8px;top:48px;z-index:31;font-size:13px;padding:7px 12px;border-radius:6px;border:0;background:#1f6feb;color:#fff;cursor:pointer;display:none';
-      inviteBtn.onclick = function () {
+    // Room ID chip (shown only while hosting): the Room ID itself is the copy
+    // control — hover shows a pointer cursor, a 📋 icon hints it is clickable,
+    // and clicking copies the invite link /?join=<room>.  It replaces (and
+    // hides) the engine's #ysfw-room-overlay.
+    var chip = null;
+    function ensureChip() {
+      if (chip) return chip;
+      chip = document.createElement('div');
+      chip.id = 'ysfw-room-chip';
+      chip.style.cssText = 'position:fixed;top:8px;right:8px;z-index:31;background:rgba(10,14,20,.85);color:#cfd8e3;padding:8px 14px;border-radius:6px;font:14px monospace;cursor:pointer;user-select:none;display:none';
+      chip.title = 'クリックで招待リンクをコピー';
+      chip.onclick = function () {
         var R = globalThis.ysfwRtc;
         var code = (R && R.host && R.host.room) || Module.ysfwRoomCode;
         if (!code) return;
         var url = location.origin + '/?join=' + code;
         var done = function () {
-          inviteBtn.textContent = '✓ コピーしました (' + code + ')';
-          setTimeout(function () { inviteBtn.textContent = '📋 招待リンクをコピー'; }, 1800);
+          chip._copied = true;
+          chip.textContent = '✓ 招待リンクをコピーしました';
+          setTimeout(function () { chip._copied = false; }, 1600);
         };
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard.writeText(url).then(done, done);
@@ -233,8 +234,13 @@
           ta.remove(); done();
         }
       };
-      document.body.appendChild(inviteBtn);
-      return inviteBtn;
+      document.body.appendChild(chip);
+      return chip;
+    }
+    function renderChip(code, connecting) {
+      var c = ensureChip();
+      if (c._copied) return;  // keep the "copied" confirmation visible briefly
+      c.textContent = 'Room: ' + code + (connecting ? '（接続中…）📋' : '  📋');
     }
 
     // Connection badge: a one-shot STUN probe hinting whether direct P2P is
@@ -300,22 +306,29 @@
       var roomEl = document.getElementById('ysfw-room-overlay');
       var R = globalThis.ysfwRtc;
       var inFlight = !!globalThis.ysfwInFlight;
-      var hosting = !!(R && R.host);
+      var host = R && R.host;
       if (!inFlight) {
         // MENU: connection badge only.
         ensureBadge().style.display = 'block';
         if (checkState === 'idle') runCheck();
-        if (inviteBtn) inviteBtn.style.display = 'none';
+        if (chip) chip.style.display = 'none';
         if (roomEl) roomEl.style.display = 'none';
-      } else if (hosting) {
-        // HOSTING (server screen): Room ID overlay + invite link, no badge.
+      } else if (host && !host.failed) {
+        // HOSTING: clickable Room ID chip (click to copy invite link); no badge.
+        // The chip replaces the engine overlay, so hide #ysfw-room-overlay.
         if (badge) badge.style.display = 'none';
+        if (roomEl) roomEl.style.display = 'none';
+        renderChip(host.room, !host.ok);
+        ensureChip().style.display = 'block';
+      } else if (host && host.failed) {
+        // Host setup failed: show the engine overlay's specific error message.
+        if (badge) badge.style.display = 'none';
+        if (chip) chip.style.display = 'none';
         if (roomEl) roomEl.style.display = '';
-        ensureInvite().style.display = 'block';
       } else {
         // FLYING as client/solo: hide everything.
         if (badge) badge.style.display = 'none';
-        if (inviteBtn) inviteBtn.style.display = 'none';
+        if (chip) chip.style.display = 'none';
         if (roomEl) roomEl.style.display = 'none';
       }
     }, 800);
