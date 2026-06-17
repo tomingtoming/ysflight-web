@@ -5,12 +5,16 @@
 // JSON protocol the wasm client already speaks (see
 // src/port/yssocket/yssocket_emscripten.cpp):
 //
-//   client -> server : {t:'host',room} | {t:'join',room}
+//   client -> server : {t:'host',room,manifest?} | {t:'join',room}
 //                      | {t:'sdp'|'ice', peer?, data}   (host sends peer, peer omits it)
 //   server -> client : {t:'host-ok',room} | {t:'host-taken'} | {t:'no-room'}
-//                      | {t:'join-ok',peer} | {t:'peer',peer}
+//                      | {t:'join-ok',peer,manifest?} | {t:'peer',peer}
 //                      | {t:'sdp'|'ice', peer, data}
 //                      | {t:'host-left'} | {t:'peer-left',peer}
+//
+// manifest (optional) is the host's add-on-pack list (ids+hashes+categories,
+// tiny control metadata) stored in room state and echoed to joiners; pack BYTES
+// are transferred P2P over a separate 'ysf-pack' DataChannel (see pack-net.js).
 //
 // Game traffic never touches this Worker -- after signaling it flows P2P over
 // WebRTC DataChannels (public STUN; no TURN for now).  Everything else (the
@@ -38,7 +42,7 @@ export default {
 export class SignalHub {
   constructor(state, env) {
     this.state = state;
-    // room -> { host: WebSocket, peers: Map<peerId, WebSocket>, nextPeer: number }
+    // room -> { host: WebSocket, peers: Map<peerId, WebSocket>, nextPeer: number, manifest: object|null }
     this.rooms = new Map();
   }
 
@@ -74,7 +78,17 @@ export class SignalHub {
       if (this.rooms.has(m.room)) { this.send(ws, { t: 'host-taken' }); return; }
       conn.role = 'host';
       conn.room = m.room;
-      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1 });
+      // Optional add-on-pack manifest (tiny control metadata so a joiner knows
+      // which packs the host requires; pack BYTES never touch the Worker -- they
+      // go P2P).  Cap its serialized size so a host can't bloat the in-memory hub.
+      let manifest = null;
+      if (m.manifest != null) {
+        try {
+          const s = JSON.stringify(m.manifest);
+          if (s.length <= 64 * 1024) manifest = m.manifest;
+        } catch (e) {}
+      }
+      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest });
       this.send(ws, { t: 'host-ok', room: m.room });
 
     } else if (m.t === 'join' && typeof m.room === 'string') {
@@ -84,7 +98,9 @@ export class SignalHub {
       conn.room = m.room;
       conn.peerId = r.nextPeer++;
       r.peers.set(conn.peerId, ws);
-      this.send(ws, { t: 'join-ok', peer: conn.peerId });
+      // Echo the host's pack manifest so the joiner can diff it against its local
+      // packs BEFORE the WebRTC/log-on handshake (see web/pack-net.js).
+      this.send(ws, { t: 'join-ok', peer: conn.peerId, manifest: r.manifest || null });
       this.send(r.host, { t: 'peer', peer: conn.peerId });
 
     } else if ((m.t === 'sdp' || m.t === 'ice') && conn.room) {
