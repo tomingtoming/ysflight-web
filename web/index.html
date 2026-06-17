@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#0a0e14">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
+<script type="module" src="packs-ui.js"></script>
 <title>YSFLIGHT web</title>
 <style>
   html, body {
@@ -134,7 +135,38 @@
       try { FS.mkdir('/home/web_user/Documents'); } catch (e) {}
       FS.mount(IDBFS, {}, '/home/web_user/Documents');
       Module.addRunDependency('idbfs-load');
-      FS.syncfs(true, function () { Module.removeRunDependency('idbfs-load'); });
+      FS.syncfs(true, function () {
+        Module.removeRunDependency('idbfs-load');
+        // Pre-boot add-on pack management.  Hold a run dependency so the
+        // engine's one-time template scan (a few frames into main) only runs
+        // after the user has chosen their packs — no reload needed.  Skipped
+        // for auto-launch flows (?join / ?freeflight), which boot straight in.
+        // packs-ui.js renders the panel and releases the gate on "play".
+        try {
+          var q = new URLSearchParams(location.search);
+          var auto = !!(Module.ysfwJoinRoom || q.get('freeflight'));
+          Module.__ysfwUserDir = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
+          try { FS.mkdirTree(Module.__ysfwUserDir); } catch (e) {}
+          if (!auto) {
+            Module.addRunDependency('ysfw-packs');
+            Module.__ysfwGateHeld = true;
+            // Safety net: if packs-ui.js failed to load, never hang the boot.
+            setTimeout(function () {
+              if (Module.__ysfwGateHeld && !Module.__ysfwPanelShown) {
+                Module.removeRunDependency('ysfw-packs');
+                Module.__ysfwGateHeld = false;
+              }
+            }, 5000);
+          }
+          window.__ysfwFsReady = true;
+          if (window.ysfwPacksInit) window.ysfwPacksInit();
+        } catch (e) {
+          if (Module.__ysfwGateHeld) {
+            Module.removeRunDependency('ysfw-packs');
+            Module.__ysfwGateHeld = false;
+          }
+        }
+      });
     }],
     setStatus: function (text) {
       if (booted) return;

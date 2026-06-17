@@ -89,12 +89,18 @@ cp "$BUILD_DIR/main/ysflight32_gl2.data" "$DIST_DIR/$DATA_FILE"
 cp "$ROOT/web/manifest.webmanifest" "$DIST_DIR/"
 cp "$ROOT/web/icons/"*.png "$DIST_DIR/icons/"
 
+# Add-on pack layer: engine-agnostic core (packs.js) + pre-boot UI (packs-ui.js)
+# + vendored unzip (vendor/fflate.js).  Plain ES modules, no bundler.
+cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$DIST_DIR/"
+mkdir -p "$DIST_DIR/vendor"
+cp "$ROOT/web/vendor/fflate.js" "$DIST_DIR/vendor/"
+
 # index.html: point the ASSET line at the hashed names.
 sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',data:'$DATA_FILE',build:'$BUILD_ID'};|" \
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
 
 # Service worker: build id + precache list.
-PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"vendor/fflate.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 
@@ -109,6 +115,12 @@ cat > "$DIST_DIR/_headers" <<EOF
 /index.html
   Cache-Control: no-cache
 /sw.js
+  Cache-Control: no-cache
+/packs.js
+  Cache-Control: no-cache
+/packs-ui.js
+  Cache-Control: no-cache
+/vendor/*
   Cache-Control: no-cache
 EOF
 
