@@ -11,7 +11,7 @@
 // held).  The smoke test (scripts/smoke-pack.mjs) drives window.ysfwPacks
 // directly.  Install/list only here; enable-disable + uninstall land in M3.
 
-import { installPack } from './packs.js';
+import { installPack, setEnabled as pkSetEnabled, uninstall as pkUninstall } from './packs.js';
 
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
 const ACCENT = '#4da3ff';
@@ -131,25 +131,64 @@ async function refresh() {
     listEl.appendChild(empty);
   } else {
     for (const p of packs) {
+      const enabled = p.enabled !== false;
       const row = document.createElement('div');
       row.style.cssText =
         'display:flex;justify-content:space-between;align-items:center;gap:10px;' +
-        'padding:7px 10px;border:1px solid #2a3647;border-radius:6px;margin-bottom:6px;background:#0d141d';
+        'padding:7px 10px;border:1px solid #2a3647;border-radius:6px;margin-bottom:6px;background:#0d141d;' +
+        (enabled ? '' : 'opacity:.5');
       const left = document.createElement('div');
       left.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
       const nm = document.createElement('span');
       nm.textContent = p.name || p.id;
       nm.style.cssText = 'color:#e6edf3;font-size:14px';
       const cat = document.createElement('span');
-      cat.textContent = '  ' + (p.categories || []).join('/');
-      cat.style.cssText = 'color:' + ACCENT + ';font-size:12px';
+      cat.textContent = '  ' + (p.categories || []).join('/') + ' · ' + fmtBytes(p.bytes || 0);
+      cat.style.cssText = 'color:#8fa3bb;font-size:12px';
       left.appendChild(nm);
       left.appendChild(cat);
-      const sz = document.createElement('span');
-      sz.textContent = fmtBytes(p.bytes || 0);
-      sz.style.cssText = 'color:#8fa3bb;font-size:12px;flex:none';
+
+      const ctl = document.createElement('div');
+      ctl.style.cssText = 'flex:none;display:flex;gap:6px;align-items:center';
+      const toggle = document.createElement('button');
+      toggle.textContent = enabled ? '有効' : '無効';
+      toggle.title = enabled ? 'クリックで無効化' : 'クリックで有効化';
+      toggle.style.cssText =
+        'font-size:12px;padding:4px 9px;border-radius:5px;cursor:pointer;border:1px solid ' +
+        (enabled
+          ? ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT
+          : '#2a3647;background:#0d141d;color:#8fa3bb');
+      const setErr = (e) => {
+        const s = document.getElementById('ysfw-pack-status');
+        if (s) s.textContent = 'エラー: ' + (e && e.message ? e.message : e);
+      };
+      toggle.addEventListener('click', async () => {
+        toggle.disabled = true;
+        try {
+          await window.ysfwPacks.setEnabled(p.id, !enabled);
+        } catch (e) {
+          setErr(e);
+        }
+      });
+      const del = document.createElement('button');
+      del.textContent = '🗑';
+      del.title = 'アンインストール';
+      del.style.cssText =
+        'font-size:12px;padding:4px 8px;border-radius:5px;border:1px solid #2a3647;background:#0d141d;color:#c75d6a;cursor:pointer';
+      del.addEventListener('click', async () => {
+        if (!self.confirm('「' + (p.name || p.id) + '」を削除しますか？')) return;
+        del.disabled = true;
+        try {
+          await window.ysfwPacks.uninstall(p.id);
+        } catch (e) {
+          setErr(e);
+        }
+      });
+      ctl.appendChild(toggle);
+      ctl.appendChild(del);
+
       row.appendChild(left);
-      row.appendChild(sz);
+      row.appendChild(ctl);
       listEl.appendChild(row);
     }
   }
@@ -161,11 +200,31 @@ async function refresh() {
   }
 }
 
+async function sync() {
+  await new Promise((resolve) => FS.syncfs(false, () => resolve())); // persist to IndexedDB
+}
+
 async function installFromBytes(bytes, name) {
   if (!adapter) throw new Error('pack layer not ready');
   const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   const res = await installPack(buf, { fs: adapter, sha256: webSha256, name });
-  await new Promise((resolve) => FS.syncfs(false, () => resolve())); // persist to IndexedDB
+  await sync();
+  await refresh();
+  return res;
+}
+
+async function setEnabled(id, enabled) {
+  if (!adapter) throw new Error('pack layer not ready');
+  const res = await pkSetEnabled(id, enabled, { fs: adapter });
+  await sync();
+  await refresh();
+  return res;
+}
+
+async function uninstall(id) {
+  if (!adapter) throw new Error('pack layer not ready');
+  const res = await pkUninstall(id, { fs: adapter });
+  await sync();
   await refresh();
   return res;
 }
@@ -289,6 +348,8 @@ function init() {
 window.ysfwPacks = {
   fsReady: false,
   installFromBytes,
+  setEnabled,
+  uninstall,
   list: readIndex,
   start,
   refresh,

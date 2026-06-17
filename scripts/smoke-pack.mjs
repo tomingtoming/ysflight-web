@@ -79,43 +79,57 @@ await page
 await page.waitForTimeout(3000);
 if (fatal.length) die('fatal output during pre-boot install / first boot');
 
-// 4. The decisive use-it check.  Reload straight into a flight with an aircraft
-//    that ONLY this pack provides (test1.dat: IDENTIFY "YSFW_TEST1").  ?freeflight
-//    auto-launches (no gate); the engine loads the IDBFS-persisted pack at boot
-//    and spawns YSFW_TEST1.  If the template weren't registered, it could not
-//    enter flight.  globalThis.ysfwInFlight is set by the engine's ChangeRunMode.
-const ff = new URL(url);
-ff.searchParams.set('freeflight', 'YSFW_TEST1,ATSUGI_AIRBASE,NORTH3000');
-await page.goto(ff.toString());
-await page
-  .waitForFunction(
-    () => {
-      const ov = document.getElementById('overlay');
-      return ov && ov.classList.contains('hidden');
-    },
-    { timeout: bootMs },
-  )
-  .catch(() => die('engine did not boot on the freeflight reload'));
-
-// The engine prints "Airplane:<name>" only when freeflight successfully
-// resolved the aircraft to a loaded template (confirmed by negative control:
-// without the pack, freeflight=YSFW_TEST1 prints "Field:..." but NO "Airplane:"
-// line).  So this line is proof the persisted pack was loaded with no reload.
-const t0 = Date.now();
-let spawned = false;
-while (Date.now() - t0 < 40000) {
-  if (logs.some((l) => /Airplane:\s*YSFW_TEST1/.test(l))) {
-    spawned = true;
-    break;
+// Reload straight into a flight with an aircraft that ONLY this pack provides
+// (test1.dat: IDENTIFY "YSFW_TEST1"). ?freeflight auto-launches (no gate); the
+// engine loads the IDBFS-persisted pack at boot.  The engine prints
+// "Airplane:<name>" ONLY when freeflight resolved the aircraft to a loaded
+// template (negative control: with no pack, freeflight=YSFW_TEST1 prints
+// "Field:..." but NO "Airplane:" line).  So that line is proof of load.
+async function freeflightLoadsYSFW_TEST1() {
+  logs.length = 0;
+  const ff = new URL(url);
+  ff.searchParams.set('freeflight', 'YSFW_TEST1,ATSUGI_AIRBASE,NORTH3000');
+  await page.goto(ff.toString());
+  await page
+    .waitForFunction(
+      () => {
+        const ov = document.getElementById('overlay');
+        return ov && ov.classList.contains('hidden');
+      },
+      { timeout: bootMs },
+    )
+    .catch(() => die('engine did not boot on the freeflight reload'));
+  const t0 = Date.now();
+  while (Date.now() - t0 < 30000) {
+    if (logs.some((l) => /Airplane:\s*YSFW_TEST1/.test(l))) return true;
+    await page.waitForTimeout(250);
   }
-  await page.waitForTimeout(250);
+  return false;
 }
 
-if (fatal.length) die('engine logged a fatal / Cannot-Load while loading the pack');
-if (!spawned) {
+// 4. Enabled pack -> the engine loads it with no reload.
+if (!(await freeflightLoadsYSFW_TEST1())) {
   die('engine never set up a flight with pack-only aircraft "YSFW_TEST1" — the persisted pack was not loaded');
 }
+if (fatal.length) die('engine logged a fatal / Cannot-Load while loading the pack');
+console.log('enabled pack: engine loaded pack-only aircraft "YSFW_TEST1" via freeflight (no reload)');
 
-console.log('engine loaded pack-only aircraft "YSFW_TEST1" into a flight via freeflight — pack works with no reload');
+// 5. M3 toggle: disable the pack (window.ysfwPacks is available on this page
+//    too), then the same freeflight must NOT load YSFW_TEST1 (.lst -> .lst.off so
+//    the engine's air*.lst glob skips it).
+await page
+  .waitForFunction(() => window.ysfwPacks && window.ysfwPacks.fsReady === true, { timeout: 30000 })
+  .catch(() => die('pack layer not ready to disable'));
+const disabled = await page.evaluate(async (id) => {
+  await window.ysfwPacks.setEnabled(id, false);
+  return (await window.ysfwPacks.list()).find((p) => p.id === id);
+}, res.id);
+if (!disabled || disabled.enabled !== false) die('setEnabled(false) did not update the index');
+
+if (await freeflightLoadsYSFW_TEST1()) {
+  die('disabled pack was STILL loaded — the .lst.off rename was not honored by the engine');
+}
+console.log('disabled pack: engine did NOT load "YSFW_TEST1" (.lst.off honored)');
+
 console.log('SMOKE-PACK PASSED');
 await browser.close();
