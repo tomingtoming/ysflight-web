@@ -123,9 +123,11 @@ DataChannel の P2P で直結し、公開 STUN (Google) で NAT を越えます�
 
 詳細は [docs/multiplayer.md](docs/multiplayer.md)。
 
-> **NAT 越え**: 多くの家庭回線同士なら STUN だけで直結します。両者がモバイル /
-> CGNAT / 対称NAT (例: Starlink の IPv4) だと直結できず TURN が必要ですが、TURN
-> は現状未導入です (将来対応)。両者が IPv6 で繋がれば直結できることが多いです。
+> **NAT 越え / 接続性**: 多くの家庭回線同士なら公開 STUN だけで直結します。両者が
+> ともにモバイル / CGNAT / 対称NAT (例: Starlink の IPv4) だと直結できず TURN 中継が
+> 必要ですが、TURN は意図的に未導入 (保留) です。メニューの接続バッジで自分側が直結
+> 可能かを事前確認できます。両者が IPv6 なら直結できることが多いです。導入時のコストは
+> [docs/multiplayer.md](docs/multiplayer.md) を参照。
 
 ## 既知の制限 / Known limitations
 
