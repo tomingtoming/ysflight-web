@@ -1,0 +1,353 @@
+// Add-on pack engine for ysflight-web.  Pure ESM with NO DOM/Emscripten
+// coupling: every filesystem touch goes through an injected adapter, so the
+// exact same code runs in the browser (over Module.FS / IDBFS) and in node
+// tests (over a temp directory).  See docs/addon-packs.md for the full design.
+//
+// What installPack() does:
+//   1. unzip the archive (fflate, synchronous)
+//   2. drop archive cruft (__MACOSX, .DS_Store, AppleDouble ._*, dir entries)
+//   3. find the lists YSFLIGHT actually scans: aircraft/air*.lst,
+//      scenery/sce*.lst, ground/gro*.lst (engine: fsworld.cpp Load*TemplateList)
+//   4. content-hash the payload -> a stable, collision-free pack id
+//   5. stage every payload file under packs/<id>/ (isolated, so two packs that
+//      ship a file of the same name never clobber each other) and commit it
+//      atomically (staging dir -> rename)
+//   6. regenerate each list as <dir>/<prefix><id>.lst whose entries point at
+//      packs/<id>/..., resolving the original references case-INsensitively
+//      (real community packs say "User/foo" while shipping "user/foo") and
+//      writing clean LF — so the engine's glob scan picks them up verbatim
+//   7. record the install in packs/index.json
+//
+// The adapter is the YSFLIGHT *user dir* root; all paths here are relative to
+// it (the browser adapter prepends /home/web_user/Documents/YSFLIGHT.COM/
+// YSFLIGHT, the node adapter prepends a temp dir).  The generated list entries
+// are likewise relative to that root, which is exactly how the engine resolves
+// them (MakeFullPathName(userYsflightDir, entry)).
+//
+// Out of scope here (later milestones): the pre-boot UI + run-dependency gate
+// (M2), enable/disable + uninstall (M3), Shift-JIS transcoding of legacy packs
+// (v1.5), multiplayer host->client distribution (v2).
+//
+// Adapter interface (all async):
+//   exists(path)            -> boolean
+//   mkdirp(path)            -> create dir and parents
+//   writeFile(path, bytes)  -> write a Uint8Array (creates parent dirs)
+//   readFile(path)          -> Uint8Array
+//   rename(from, to)        -> move (creates dest parent)
+//   rmrf(path)              -> recursive remove, no error if absent
+
+import { unzipSync } from './vendor/fflate.js';
+
+// The three list globs YSFLIGHT scans from each root, and how each list's lines
+// are shaped.  'files' = every token is a file path (aircraft, ground).
+// 'field' = "IDENT <paths...> [MODE]" (scenery), so the first token is an
+// identifier and a trailing bareword may be a flight mode, not a file.
+const CATEGORIES = [
+  { key: 'aircraft', dir: 'aircraft', prefix: 'air', kind: 'files' },
+  { key: 'ground', dir: 'ground', prefix: 'gro', kind: 'files' },
+  { key: 'scenery', dir: 'scenery', prefix: 'sce', kind: 'field' },
+];
+
+const enc = new TextEncoder();
+const dec = new TextDecoder('utf-8', { fatal: false });
+const strToBytes = (s) => enc.encode(s);
+const strFromBytes = (b) => dec.decode(b);
+
+const listRe = (c) => new RegExp(`^${c.dir}/${c.prefix}[^/]*\\.lst$`, 'i');
+
+function join(...parts) {
+  return parts.filter((p) => p !== '' && p != null).join('/').replace(/\/{2,}/g, '/');
+}
+function parentDir(p) {
+  const i = p.lastIndexOf('/');
+  return i < 0 ? '' : p.slice(0, i);
+}
+
+// Normalize a path read out of the archive or a list entry: backslashes to
+// slashes, strip a leading "./" and any leading slashes.
+function normPath(p) {
+  return String(p).replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/^\/+/, '');
+}
+
+// Things we must never write to the FS.
+function isCruft(rawPath) {
+  if (rawPath.endsWith('/')) return true; // directory entry
+  const parts = rawPath.replace(/\\/g, '/').split('/');
+  if (parts.includes('__MACOSX')) return true; // mac zip resource-fork sidecar
+  const base = parts[parts.length - 1];
+  if (base === '.DS_Store' || base === 'Thumbs.db' || base === 'desktop.ini') return true;
+  if (base.startsWith('._')) return true; // AppleDouble
+  return false;
+}
+
+// Tokenize a list line honouring double-quoted segments (scenery paths can be
+// quoted and contain spaces).
+function tokenize(line) {
+  const out = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    const quoted = m[1] !== undefined;
+    out.push({ value: quoted ? m[1] : m[2], quoted });
+  }
+  return out;
+}
+
+// Emit a path token, quoting only if it contains whitespace.
+function emitPath(p) {
+  return /\s/.test(p) ? `"${p}"` : p;
+}
+
+// Build a case-insensitive resolver from a referenced path to the actual
+// (real-case) payload path, or null if the pack doesn't contain it.
+function buildResolver(files) {
+  const byLower = new Map();
+  for (const f of files) byLower.set(f.path.toLowerCase(), f.path);
+  return (ref) => byLower.get(normPath(ref).toLowerCase()) || null;
+}
+
+// aircraft / ground: every token is a file path.
+function rewriteFilesLine(line, resolve, prefixDir) {
+  const toks = tokenize(line);
+  if (toks.length === 0) return null;
+  let resolved = 0;
+  let missing = 0;
+  const parts = toks.map((t) => {
+    const actual = resolve(t.value);
+    if (actual) {
+      resolved++;
+      return emitPath(`${prefixDir}/${actual}`);
+    }
+    missing++;
+    return emitPath(t.value); // keep; engine logs "Cannot Load" and skips
+  });
+  return { line: parts.join(' '), tokens: toks.length, resolved, missing };
+}
+
+// scenery: "IDENT <fld> <stp> [<yfs>|""] [MODE]".  Keep the identifier and any
+// trailing mode bareword; rewrite the path-looking tokens.
+function rewriteFieldLine(line, resolve, prefixDir) {
+  const toks = tokenize(line);
+  if (toks.length === 0) return null;
+  const parts = [toks[0].quoted ? `"${toks[0].value}"` : toks[0].value]; // IDENT
+  let resolved = 0;
+  let missing = 0;
+  for (let i = 1; i < toks.length; i++) {
+    const v = toks[i].value;
+    if (v === '') {
+      parts.push('""');
+      continue;
+    }
+    const looksPath = /[\\/]/.test(v) || /\.(fld|stp|yfs)$/i.test(v);
+    if (!looksPath) {
+      parts.push(v); // flight-mode keyword (e.g. AIRRACE)
+      continue;
+    }
+    const actual = resolve(v);
+    if (actual) {
+      resolved++;
+      parts.push(`"${prefixDir}/${actual}"`);
+    } else {
+      missing++;
+      parts.push(`"${v}"`);
+    }
+  }
+  return { line: parts.join(' '), tokens: toks.length, resolved, missing };
+}
+
+// Unzip and return the usable payload files (cruft removed).
+export function readArchive(zipBytes) {
+  const buf = zipBytes instanceof Uint8Array ? zipBytes : new Uint8Array(zipBytes);
+  const raw = unzipSync(buf);
+  const files = [];
+  for (const rawPath of Object.keys(raw)) {
+    if (isCruft(rawPath)) continue;
+    const path = normPath(rawPath);
+    if (!path || path.endsWith('/')) continue;
+    files.push({ path, bytes: raw[rawPath] });
+  }
+  return files;
+}
+
+// Locate the list files the engine scans, with their decoded text.
+export function findLists(files) {
+  const lists = [];
+  for (const f of files) {
+    for (const c of CATEGORIES) {
+      if (listRe(c).test(f.path)) {
+        lists.push({ category: c, path: f.path, text: strFromBytes(f.bytes) });
+        break;
+      }
+    }
+  }
+  return lists;
+}
+
+// Derive a human-ish name from the first list file ("aircraft/air_toming.lst"
+// -> "toming"), falling back to "pack".
+function deriveName(lists) {
+  if (lists.length === 0) return 'pack';
+  const base = lists[0].path.split('/').pop().replace(/\.lst$/i, '');
+  const stripped = base.replace(new RegExp(`^${lists[0].category.prefix}`, 'i'), '').replace(/^[_-]+/, '');
+  return stripped || base || 'pack';
+}
+
+// Turn the located lists into the regenerated, path-rewritten lists we will
+// drop into the scanned dirs.  Returns [{category, file, text, entries}].
+function buildGeneratedLists(lists, resolve, id) {
+  const prefixDir = `packs/${id}`;
+  const generated = [];
+  for (const c of CATEGORIES) {
+    const catLists = lists.filter((l) => l.category.key === c.key);
+    if (catLists.length === 0) continue;
+    const outLines = [];
+    for (const l of catLists) {
+      for (const rawLine of l.text.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith('#') || line.startsWith('REM ')) continue;
+        const rw = c.kind === 'field'
+          ? rewriteFieldLine(line, resolve, prefixDir)
+          : rewriteFilesLine(line, resolve, prefixDir);
+        // YSFLIGHT requires >= 3 tokens per usable entry; skip anything shorter.
+        if (!rw || rw.tokens < 3) continue;
+        outLines.push(rw.line);
+      }
+    }
+    if (outLines.length === 0) continue;
+    generated.push({
+      category: c.key,
+      file: `${c.dir}/${c.prefix}${id}.lst`,
+      text: outLines.join('\n') + '\n',
+      entries: outLines.length,
+    });
+  }
+  return generated;
+}
+
+// Install a pack archive into the user dir via the adapter.  Idempotent:
+// re-installing the same bytes reuses the existing payload and just refreshes
+// the generated lists + index entry.
+export async function installPack(zipBytes, opts) {
+  const {
+    fs,
+    sha256,
+    name,
+    source = 'user-supplied',
+    now = Date.now(),
+    maxFileBytes = 64 * 1024 * 1024,
+    maxPackBytes = 256 * 1024 * 1024,
+  } = opts;
+  if (!fs || !sha256) throw new Error('installPack requires { fs, sha256 }');
+
+  const files = readArchive(zipBytes);
+  if (files.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
+
+  // Reject path traversal and enforce size limits before touching the FS.
+  let total = 0;
+  for (const f of files) {
+    if (f.path.split('/').includes('..')) throw new Error(`unsafe path in pack: ${f.path}`);
+    if (f.bytes.length > maxFileBytes) throw new Error(`file exceeds ${maxFileBytes} bytes: ${f.path}`);
+    total += f.bytes.length;
+  }
+  if (total > maxPackBytes) throw new Error(`pack exceeds ${maxPackBytes} bytes (${total})`);
+
+  const lists = findLists(files);
+  if (lists.length === 0) {
+    throw new Error('no YSFLIGHT list found (expected aircraft/air*.lst, scenery/sce*.lst, or ground/gro*.lst)');
+  }
+
+  // Per-file hashes (sorted) -> a stable Merkle-ish pack id.
+  const hashed = [];
+  for (const f of files) hashed.push({ path: f.path, size: f.bytes.length, sha256: await sha256(f.bytes) });
+  hashed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const idDigest = await sha256(strToBytes(hashed.map((h) => `${h.path}\0${h.sha256}`).join('\n')));
+  const id = idDigest.slice(0, 16);
+
+  const resolve = buildResolver(files);
+  const generated = buildGeneratedLists(lists, resolve, id);
+  if (generated.length === 0) throw new Error('pack lists contained no usable entries');
+
+  const packName = name || deriveName(lists);
+  const manifest = {
+    schema: 1,
+    id,
+    name: packName,
+    source,
+    installedAt: now,
+    categories: generated.map((g) => g.category),
+    bytes: total,
+    files: hashed,
+    lists: generated.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
+  };
+
+  // Stage the payload (+ manifest) and commit it atomically, unless an
+  // identical pack id is already present.
+  const packRoot = `packs/${id}`;
+  if (!(await fs.exists(packRoot))) {
+    const staging = `packs/.staging-${id}`;
+    await fs.rmrf(staging);
+    for (const f of files) {
+      const dest = join(staging, f.path);
+      await fs.mkdirp(parentDir(dest));
+      await fs.writeFile(dest, f.bytes);
+    }
+    await fs.writeFile(join(staging, 'manifest.json'), strToBytes(JSON.stringify(manifest, null, 2)));
+    await fs.mkdirp('packs');
+    await fs.rename(staging, packRoot);
+  }
+
+  // Drop the regenerated lists into the scanned dirs (this is what the engine
+  // globs).  Done after the payload commit so a live list never points at a
+  // half-written pack.
+  for (const g of generated) {
+    await fs.mkdirp(parentDir(g.file));
+    await fs.writeFile(g.file, strToBytes(g.text));
+  }
+
+  // Update the installed-packs index.
+  const indexPath = 'packs/index.json';
+  let index = [];
+  if (await fs.exists(indexPath)) {
+    try {
+      const parsed = JSON.parse(strFromBytes(await fs.readFile(indexPath)));
+      if (Array.isArray(parsed)) index = parsed;
+    } catch {
+      index = [];
+    }
+  }
+  index = index.filter((e) => e && e.id !== id);
+  index.push({
+    id,
+    name: packName,
+    enabled: true,
+    bytes: total,
+    categories: manifest.categories,
+    source,
+    installedAt: now,
+  });
+  await fs.mkdirp('packs');
+  await fs.writeFile(indexPath, strToBytes(JSON.stringify(index, null, 2)));
+
+  return {
+    id,
+    name: packName,
+    categories: manifest.categories,
+    bytes: total,
+    templates: generated.reduce((n, g) => n + g.entries, 0),
+    lists: generated.map((g) => g.file),
+  };
+}
+
+// Exposed for unit tests; not part of the public surface.
+export const _internals = {
+  CATEGORIES,
+  normPath,
+  isCruft,
+  tokenize,
+  buildResolver,
+  rewriteFilesLine,
+  rewriteFieldLine,
+  findLists,
+  deriveName,
+  buildGeneratedLists,
+};
