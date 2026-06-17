@@ -53,6 +53,34 @@ const dec = new TextDecoder('utf-8', { fatal: false });
 const strToBytes = (s) => enc.encode(s);
 const strFromBytes = (b) => dec.decode(b);
 
+const INDEX_PATH = 'packs/index.json';
+
+async function loadIndex(fs) {
+  if (await fs.exists(INDEX_PATH)) {
+    try {
+      const parsed = JSON.parse(strFromBytes(await fs.readFile(INDEX_PATH)));
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      /* corrupt index -> treat as empty */
+    }
+  }
+  return [];
+}
+
+async function saveIndex(fs, index) {
+  await fs.mkdirp('packs');
+  await fs.writeFile(INDEX_PATH, strToBytes(JSON.stringify(index, null, 2)));
+}
+
+// The generated list file for one category of a pack, and its disabled twin.
+// The engine globs <prefix>*.lst, so the .off suffix removes it from the scan.
+function listFilesForCategory(id, categoryKey) {
+  const c = CATEGORIES.find((x) => x.key === categoryKey);
+  if (!c) return null;
+  const base = `${c.dir}/${c.prefix}${id}.lst`;
+  return { on: base, off: base + '.off' };
+}
+
 const listRe = (c) => new RegExp(`^${c.dir}/${c.prefix}[^/]*\\.lst$`, 'i');
 
 function join(...parts) {
@@ -305,17 +333,7 @@ export async function installPack(zipBytes, opts) {
   }
 
   // Update the installed-packs index.
-  const indexPath = 'packs/index.json';
-  let index = [];
-  if (await fs.exists(indexPath)) {
-    try {
-      const parsed = JSON.parse(strFromBytes(await fs.readFile(indexPath)));
-      if (Array.isArray(parsed)) index = parsed;
-    } catch {
-      index = [];
-    }
-  }
-  index = index.filter((e) => e && e.id !== id);
+  const index = (await loadIndex(fs)).filter((e) => e && e.id !== id);
   index.push({
     id,
     name: packName,
@@ -325,8 +343,7 @@ export async function installPack(zipBytes, opts) {
     source,
     installedAt: now,
   });
-  await fs.mkdirp('packs');
-  await fs.writeFile(indexPath, strToBytes(JSON.stringify(index, null, 2)));
+  await saveIndex(fs, index);
 
   return {
     id,
@@ -336,6 +353,45 @@ export async function installPack(zipBytes, opts) {
     templates: generated.reduce((n, g) => n + g.entries, 0),
     lists: generated.map((g) => g.file),
   };
+}
+
+// Enable or disable an installed pack by renaming its generated lists between
+// <prefix><id>.lst and <prefix><id>.lst.off.  The engine globs <prefix>*.lst,
+// so the .off suffix takes the pack out of the scan.  Updates index.json.
+export async function setEnabled(id, enabled, opts) {
+  const { fs } = opts || {};
+  if (!fs) throw new Error('setEnabled requires { fs }');
+  const index = await loadIndex(fs);
+  const entry = index.find((e) => e.id === id);
+  if (!entry) throw new Error('pack not installed: ' + id);
+  for (const cat of entry.categories || []) {
+    const lf = listFilesForCategory(id, cat);
+    if (!lf) continue;
+    const from = enabled ? lf.off : lf.on;
+    const to = enabled ? lf.on : lf.off;
+    if (await fs.exists(from)) await fs.rename(from, to);
+  }
+  entry.enabled = !!enabled;
+  await saveIndex(fs, index);
+  return { id, enabled: !!enabled };
+}
+
+// Remove an installed pack: its isolated payload (packs/<id>/), its generated
+// lists (.lst and .lst.off across categories), and its index entry.
+export async function uninstall(id, opts) {
+  const { fs } = opts || {};
+  if (!fs) throw new Error('uninstall requires { fs }');
+  const index = await loadIndex(fs);
+  const entry = index.find((e) => e.id === id);
+  const cats = entry && entry.categories ? entry.categories : CATEGORIES.map((c) => c.key);
+  for (const cat of cats) {
+    const lf = listFilesForCategory(id, cat);
+    if (!lf) continue;
+    for (const f of [lf.on, lf.off]) if (await fs.exists(f)) await fs.rmrf(f);
+  }
+  if (await fs.exists(`packs/${id}`)) await fs.rmrf(`packs/${id}`);
+  await saveIndex(fs, index.filter((e) => e.id !== id));
+  return { id, removed: true };
 }
 
 // Exposed for unit tests; not part of the public surface.

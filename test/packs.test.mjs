@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { installPack, _internals } from '../web/packs.js';
+import { installPack, setEnabled, uninstall, _internals } from '../web/packs.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = readFileSync(join(here, 'fixtures', 'testpack.zip'));
@@ -150,6 +150,49 @@ test('rejects path traversal in a pack', async () => {
   });
   const fs = makeAdapter();
   await assert.rejects(() => installPack(zip, { fs, sha256 }), /unsafe path/);
+});
+
+test('setEnabled toggles the generated list between .lst and .lst.off + index flag', async () => {
+  const fs = makeAdapter();
+  const r = await installPack(FIXTURE, { fs, sha256, now: 1700000000000 });
+  const listPath = `aircraft/air${r.id}.lst`;
+  assert.ok(await fs.exists(listPath));
+
+  await setEnabled(r.id, false, { fs });
+  assert.ok(!(await fs.exists(listPath)), '.lst removed when disabled');
+  assert.ok(await fs.exists(listPath + '.off'), '.lst.off present when disabled');
+  let idx = JSON.parse(new TextDecoder().decode(await fs.readFile('packs/index.json')));
+  assert.equal(idx[0].enabled, false);
+
+  await setEnabled(r.id, true, { fs });
+  assert.ok(await fs.exists(listPath), '.lst restored when enabled');
+  assert.ok(!(await fs.exists(listPath + '.off')));
+  idx = JSON.parse(new TextDecoder().decode(await fs.readFile('packs/index.json')));
+  assert.equal(idx[0].enabled, true);
+});
+
+test('uninstall removes the payload, generated lists, and index entry', async () => {
+  const fs = makeAdapter();
+  const r = await installPack(FIXTURE, { fs, sha256 });
+  assert.ok(await fs.exists(`packs/${r.id}`));
+  assert.ok(await fs.exists(`aircraft/air${r.id}.lst`));
+
+  await uninstall(r.id, { fs });
+  assert.ok(!(await fs.exists(`packs/${r.id}`)), 'payload subtree removed');
+  assert.ok(!(await fs.exists(`aircraft/air${r.id}.lst`)), 'generated list removed');
+  const idx = JSON.parse(new TextDecoder().decode(await fs.readFile('packs/index.json')));
+  assert.equal(idx.length, 0, 'index entry removed');
+});
+
+test('uninstall also removes a disabled (.lst.off) list', async () => {
+  const fs = makeAdapter();
+  const r = await installPack(FIXTURE, { fs, sha256 });
+  await setEnabled(r.id, false, { fs });
+  assert.ok(await fs.exists(`aircraft/air${r.id}.lst.off`));
+
+  await uninstall(r.id, { fs });
+  assert.ok(!(await fs.exists(`aircraft/air${r.id}.lst.off`)), 'disabled list removed');
+  assert.ok(!(await fs.exists(`packs/${r.id}`)));
 });
 
 test('scenery line: identifier and flight-mode kept, paths rewritten and quoted', () => {
