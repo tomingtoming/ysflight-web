@@ -210,8 +210,9 @@
   // engine's own "Room: <id>" overlay (#ysfw-room-overlay) to keep the view clean.
   (function () {
     function onMenu() {
-      var R = globalThis.ysfwRtc;
-      return booted && !(R && R.inFlight);
+      // globalThis.ysfwInFlight is set by the engine (ChangeRunMode); before any
+      // flight it is undefined, so the menu shows once booted.
+      return booted && !globalThis.ysfwInFlight;
     }
 
     // Invite-link button (host).  Uses the pre-generated/fixed host Room ID, so
@@ -252,7 +253,7 @@
       if (badge) return badge;
       badge = document.createElement('button');
       badge.id = 'ysfw-conn-badge';
-      badge.style.cssText = 'position:fixed;left:12px;top:12px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
+      badge.style.cssText = 'position:fixed;right:12px;top:48px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
       badge.title = '対戦の接続性チェック（クリックで再確認）';
       badge.onclick = function () { if (checkState !== 'running') runCheck(); };
       document.body.appendChild(badge);
