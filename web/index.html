@@ -103,14 +103,7 @@
     //   ?join=12345678           pre-fills the Room ID to join (invite links)
     ysfwSignalUrl: new URLSearchParams(location.search).get('signal') ||
       ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal'),
-    ysfwRoomCode: (function () {
-      var q = new URLSearchParams(location.search);
-      if (q.get('room')) return q.get('room');
-      if (q.get('join')) return undefined;   // this tab is joining, not hosting
-      // Pre-generate an 8-digit host Room ID so the invite link is available
-      // from the menu (the engine creates the room only on "Start Server").
-      return Array.from({ length: 8 }, function () { return '' + Math.floor(Math.random() * 10); }).join('');
-    })(),
+    ysfwRoomCode: new URLSearchParams(location.search).get('room') || undefined,
     ysfwJoinRoom: new URLSearchParams(location.search).get('join') || undefined,
     locateFile: function (path) {
       if (path === 'ysflight32_gl2.wasm') return ASSET.wasm;
@@ -204,19 +197,15 @@
     document.body.appendChild(s);
   }
 
-  // ---- Menu overlays: invite link + connection badge ----------------------
-  // Both show ONLY on the menu (after boot, not in flight).  The engine sets
-  // globalThis.ysfwRtc.inFlight via ChangeRunMode; in flight we also hide the
-  // engine's own "Room: <id>" overlay (#ysfw-room-overlay) to keep the view clean.
+  // ---- On-screen multiplayer UI: connection badge + invite link ------------
+  // Three states, driven by globalThis.ysfwInFlight (set by the engine's
+  // ChangeRunMode) and globalThis.ysfwRtc.host (set while this browser hosts):
+  //   - menu (not flying)        -> connection badge only
+  //   - hosting a server         -> Room ID overlay + invite-link button
+  //   - flying as client / solo  -> nothing
   (function () {
-    function onMenu() {
-      // globalThis.ysfwInFlight is set by the engine (ChangeRunMode); before any
-      // flight it is undefined, so the menu shows once booted.
-      return booted && !globalThis.ysfwInFlight;
-    }
-
-    // Invite-link button (host).  Uses the pre-generated/fixed host Room ID, so
-    // the host can grab the link from the menu before starting the server.
+    // Invite-link button, shown only while hosting; links to /?join=<room>
+    // using the live host room code.
     var inviteBtn = null;
     function ensureInvite() {
       if (inviteBtn) return inviteBtn;
@@ -225,7 +214,8 @@
       inviteBtn.textContent = '📋 招待リンクをコピー';
       inviteBtn.style.cssText = 'position:fixed;right:12px;top:12px;z-index:20;font-size:13px;padding:7px 12px;border-radius:6px;border:0;background:#1f6feb;color:#fff;cursor:pointer;display:none';
       inviteBtn.onclick = function () {
-        var code = Module.ysfwRoomCode;
+        var R = globalThis.ysfwRtc;
+        var code = (R && R.host && R.host.room) || Module.ysfwRoomCode;
         if (!code) return;
         var url = location.origin + '/?join=' + code;
         var done = function () {
@@ -303,16 +293,27 @@
     }
 
     setInterval(function () {
+      if (!booted) return;
       var roomEl = document.getElementById('ysfw-room-overlay');
-      if (onMenu()) {
-        if (roomEl) roomEl.style.display = '';
-        if (Module.ysfwRoomCode) ensureInvite().style.display = 'block';
+      var R = globalThis.ysfwRtc;
+      var inFlight = !!globalThis.ysfwInFlight;
+      var hosting = !!(R && R.host);
+      if (!inFlight) {
+        // MENU: connection badge only.
         ensureBadge().style.display = 'block';
         if (checkState === 'idle') runCheck();
-      } else {
-        if (roomEl) roomEl.style.display = 'none'; // hide engine "Room: <id>" in flight
         if (inviteBtn) inviteBtn.style.display = 'none';
+        if (roomEl) roomEl.style.display = 'none';
+      } else if (hosting) {
+        // HOSTING (server screen): Room ID overlay + invite link, no badge.
         if (badge) badge.style.display = 'none';
+        if (roomEl) roomEl.style.display = '';
+        ensureInvite().style.display = 'block';
+      } else {
+        // FLYING as client/solo: hide everything.
+        if (badge) badge.style.display = 'none';
+        if (inviteBtn) inviteBtn.style.display = 'none';
+        if (roomEl) roomEl.style.display = 'none';
       }
     }, 800);
   })();
