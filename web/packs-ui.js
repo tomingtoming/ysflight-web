@@ -204,10 +204,12 @@ async function sync() {
   await new Promise((resolve) => FS.syncfs(false, () => resolve())); // persist to IndexedDB
 }
 
-async function installFromBytes(bytes, name) {
+async function installFromBytes(bytes, name, sourceUrl) {
   if (!adapter) throw new Error('pack layer not ready');
   const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  const res = await installPack(buf, { fs: adapter, sha256: webSha256, name });
+  // sourceUrl (optional): records where the pack came from so a HOST can
+  // re-advertise that URL and let joiners self-fetch it (Option B, M7).
+  const res = await installPack(buf, { fs: adapter, sha256: webSha256, name, sourceUrl });
   await sync();
   await refresh();
   return res;
@@ -330,6 +332,72 @@ function renderPanel() {
   refresh();
 }
 
+// Obtain-failure UX (M7): a ?join pre-boot sync could not obtain one or more
+// REQUIRED field/scenery packs (Option B URL self-fetch AND Option A host push
+// both failed — e.g. an unreachable peer with no TURN, or a dead URL).  A missing
+// field is fatal in the engine, so instead of booting silently into a session
+// that will desync/disconnect, show an explicit panel: Retry the obtain, or play
+// Solo (single-player).  index.html holds the boot gate until the user chooses.
+//   failed:   [{ id, name, categories }]  (the required packs not obtained)
+//   handlers: { onRetry(), onSolo() }
+function showJoinFailure(failed, handlers) {
+  const M = window.Module;
+  if (M) M.__ysfwJoinFailureShown = true;
+  const overlay = document.getElementById('overlay');
+  if (!overlay) { if (handlers && handlers.onSolo) handlers.onSolo(); return; } // no UI host -> degrade to solo
+  const existing = document.getElementById('ysfw-join-failure');
+  if (existing) existing.remove(); // a Retry re-renders fresh
+
+  const panel = document.createElement('div');
+  panel.id = 'ysfw-join-failure';
+  panel.style.cssText =
+    'margin-top:22px;width:min(460px,86vw);background:#1a1010;border:1px solid #5a2a2a;' +
+    'border-radius:10px;padding:16px 16px 14px;text-align:left;box-shadow:0 8px 30px rgba(0,0,0,.4)';
+
+  const title = document.createElement('div');
+  title.textContent = '⚠ 必須パックを取得できませんでした';
+  title.style.cssText = 'color:#f0c0c0;font-size:14px;font-weight:600;letter-spacing:.03em;margin-bottom:8px';
+  panel.appendChild(title);
+
+  const names = (failed || []).map((f) => f && (f.name || f.id)).filter(Boolean);
+  const desc = document.createElement('div');
+  desc.style.cssText = 'color:#cbb;font-size:12px;line-height:1.6;margin-bottom:12px';
+  desc.textContent =
+    'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
+    'を取得できませんでした。このまま参加すると正しく飛べません。再試行するか、ソロ（シングルプレイ）で開始してください。';
+  panel.appendChild(desc);
+
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:10px';
+
+  const retryBtn = document.createElement('button');
+  retryBtn.id = 'ysfw-join-retry';
+  retryBtn.textContent = '↻ 再試行';
+  retryBtn.style.cssText =
+    'flex:1;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';color:#04101f;font-size:14px;font-weight:700;cursor:pointer';
+  retryBtn.addEventListener('click', () => {
+    retryBtn.disabled = true; soloBtn.disabled = true;
+    panel.remove();
+    if (handlers && handlers.onRetry) handlers.onRetry();
+  });
+
+  const soloBtn = document.createElement('button');
+  soloBtn.id = 'ysfw-join-solo';
+  soloBtn.textContent = 'ソロでプレイ';
+  soloBtn.style.cssText =
+    'flex:1;padding:11px;border:1px solid #2a3647;border-radius:8px;background:#0d141d;color:#cfd8e3;font-size:14px;cursor:pointer';
+  soloBtn.addEventListener('click', () => {
+    retryBtn.disabled = true; soloBtn.disabled = true;
+    panel.remove();
+    if (handlers && handlers.onSolo) handlers.onSolo();
+  });
+
+  row.appendChild(retryBtn);
+  row.appendChild(soloBtn);
+  panel.appendChild(row);
+  overlay.appendChild(panel);
+}
+
 function init() {
   const M = window.Module;
   if (!M || !M.FS) return;
@@ -354,6 +422,7 @@ window.ysfwPacks = {
   list: readIndex,
   start,
   refresh,
+  showJoinFailure,
 };
 window.ysfwPacksInit = init;
 

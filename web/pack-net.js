@@ -279,7 +279,7 @@ export function startPackHost(gameRoom, opts) {
 // opts: { signalUrl, iceServers?, installFromBytes(bytes)->Promise<{id}>, uninstall(id)?, corrupt?, log? }
 // Resolves to { installed:[ids], failed:[{id,reason}] }.
 export function joinPackHost(gameRoom, wantedIds, opts) {
-  const { signalUrl, iceServers = DEFAULT_ICE, installFromBytes, uninstall, corrupt = false, log = () => {} } = opts;
+  const { signalUrl, iceServers = DEFAULT_ICE, installFromBytes, uninstall, corrupt = false, timeoutMs = 30000, log = () => {} } = opts;
   const room = derivePackRoom(gameRoom);
   return new Promise((resolve) => {
     const ws = openSignal(signalUrl);
@@ -288,15 +288,28 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
     const iceQ = [];
     const installed = [], failed = [];
     const want = wantedIds.slice();
-    let current = null, chunks = [], received = 0, done = false;
+    let current = null, chunks = [], received = 0, done = false, guard = null;
 
     const finish = () => {
       if (done) return;
       done = true;
+      if (guard) { clearTimeout(guard); guard = null; }
       try { ws.close(); } catch (e) {}
       try { if (pc) pc.close(); } catch (e) {}
       resolve({ installed, failed });
     };
+    // Overall safety timeout: STUN-only with no TURN, an unreachable peer never
+    // completes the ICE handshake and the transfer would hang forever.  Mark the
+    // outstanding wants failed (so a missing REQUIRED field surfaces in the
+    // obtain-failure UX rather than a silent hang) and resolve.  Per design,
+    // TURN is out of scope; this makes the unreachable case visible (M7).
+    guard = setTimeout(() => {
+      log('transfer timed out after ' + timeoutMs + 'ms');
+      if (current !== null) { failed.push({ id: current, reason: 'timeout' }); current = null; }
+      for (const id of want) failed.push({ id, reason: 'timeout' });
+      want.length = 0;
+      finish();
+    }, timeoutMs);
     const requestNext = () => {
       if (current !== null) return;
       if (want.length === 0) { finish(); return; }
@@ -319,8 +332,13 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
           // still match, and a "corrupt" transfer would wrongly pass.
           if (corrupt && zip.length) zip[(zip.length / 2) | 0] ^= 0xff;
           const wanted = current;
+          // Release `current` synchronously BEFORE the async install so a guard
+          // timeout firing mid-install can't see it as outstanding and double-count
+          // it into both installed and failed.
+          current = null;
           try {
             const res = await installFromBytes(zip);
+            if (done) return; // the guard timeout already resolved us — leave the result arrays alone
             if (res && res.id === wanted) { installed.push(wanted); log('installed ' + wanted); }
             else {
               // A mismatched id means installFromBytes already persisted the bytes
@@ -330,9 +348,10 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
               failed.push({ id: wanted, reason: 'id-mismatch:' + (res && res.id) });
             }
           } catch (e) {
+            if (done) return;
             failed.push({ id: wanted, reason: String((e && e.message) || e) });
           }
-          current = null; requestNext();
+          requestNext();
         }
       } else {
         const u = data instanceof Uint8Array ? data : new Uint8Array(data);
@@ -393,25 +412,98 @@ export function fetchHostManifest(gameRoom, opts) {
   });
 }
 
+// JOINER (Option B, M7): self-fetch one pack's bytes from its advertised
+// sourceUrl instead of pulling them P2P from the host — this offloads the host
+// when the pack lives at a stable URL.  Integrity is still gated by
+// content-addressing: the recomputed id must equal the wanted id, otherwise the
+// bytes are rolled back and we return false so the caller falls back to Option A
+// (host push).  Pure aside from the injected fetch/install/uninstall, so it is
+// unit-testable under Node.
+//   opts: { fetchImpl?, installFromBytes(bytes)->Promise<{id}>, uninstall(id)?,
+//           urlTimeoutMs?, log? }
+// Resolves true on a verified install, false otherwise (never throws).
+export async function fetchPackFromUrl(pack, opts) {
+  const {
+    fetchImpl = (typeof fetch !== 'undefined' ? fetch : null),
+    installFromBytes, uninstall, urlTimeoutMs = 15000, log = () => {},
+  } = opts;
+  if (!pack || !pack.sourceUrl || !fetchImpl || !installFromBytes) return false;
+  const wanted = pack.id;
+  let controller = null, timer = null;
+  try {
+    if (typeof AbortController !== 'undefined') {
+      controller = new AbortController();
+      timer = setTimeout(() => { try { controller.abort(); } catch (e) {} }, urlTimeoutMs);
+    }
+    const resp = await fetchImpl(pack.sourceUrl, controller ? { signal: controller.signal } : {});
+    if (!resp || !resp.ok) { log('url fetch ' + wanted + ' failed: HTTP ' + (resp && resp.status)); return false; }
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    // Record the origin URL on the install so a joiner that later HOSTS can
+    // re-advertise it and offload ITS joiners via Option B too (the chain would
+    // otherwise break after one hop).  Harmless for the id (sourceUrl lives only
+    // in manifest.json, which is excluded from the content-hash).
+    const res = await installFromBytes(bytes, undefined, pack.sourceUrl);
+    if (res && res.id === wanted) { log('installed ' + wanted + ' via URL'); return true; }
+    // Wrong id => the URL served forged/stale bytes; installFromBytes persisted
+    // them under the recomputed id, so roll that back (same guard as the P2P path).
+    if (res && res.id && uninstall) { try { await uninstall(res.id); } catch (e) {} }
+    log('url fetch ' + wanted + ' id-mismatch: ' + (res && res.id));
+    return false;
+  } catch (e) {
+    log('url fetch ' + wanted + ' error: ' + ((e && e.message) || e));
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // JOINER (pre-boot): full pack sync from the host before main().  Reads the host
-// manifest, diffs it against the locally installed packs, and pulls the missing
-// ones (fields first — a missing field is fatal in the engine) over P2P so the
-// engine's one-time template scan finds them with no reload.
+// manifest, diffs it against the locally installed packs, and obtains the missing
+// ones (fields first — a missing field is fatal in the engine) so the engine's
+// one-time template scan finds them with no reload.  Each pack is obtained via
+// Option B (self-fetch its sourceUrl) when advertised, falling back to Option A
+// (host P2P push) on any B failure; packs with no URL go straight to A.
 // opts: { signalUrl, iceServers?, list()->Promise<index>, installFromBytes(),
-//         uninstall(id)?, log? }
-// Resolves to { installed, failed, missing, conflicts }.
+//         uninstall(id)?, fetchImpl?, log? }
+// Resolves to { installed, failed, missing, conflicts, requiredFailed } where
+// requiredFailed lists the REQUIRED (field/scenery) packs neither path obtained —
+// the caller must NOT boot silently into the session when it is non-empty (M7).
 export async function syncPacksAsJoiner(gameRoom, opts) {
   const { list, log = () => {} } = opts;
   const manifest = await fetchHostManifest(gameRoom, opts);
-  if (!manifest || manifest.length === 0) return { installed: [], failed: [], missing: 0, conflicts: [] };
+  if (!manifest || manifest.length === 0) return { installed: [], failed: [], missing: 0, conflicts: [], requiredFailed: [] };
   const localIndex = (await list()) || [];
   const { missing, conflicts } = diffManifest(manifest, localIndex);
-  if (missing.length === 0) { log('all host packs already present'); return { installed: [], failed: [], missing: 0, conflicts }; }
+  if (missing.length === 0) { log('all host packs already present'); return { installed: [], failed: [], missing: 0, conflicts, requiredFailed: [] }; }
   const { required, bestEffort } = prioritizeMissing(missing);
-  const order = [...required, ...bestEffort].map((p) => p.id);
-  log('pulling ' + order.length + ' missing pack(s) (' + required.length + ' required-first)');
-  const res = await joinPackHost(gameRoom, order, opts);
-  return { installed: res.installed, failed: res.failed, missing: order.length, conflicts };
+  const ordered = [...required, ...bestEffort]; // fields first
+  const requiredIds = new Set(required.map((p) => p.id));
+  log('obtaining ' + ordered.length + ' pack(s) (' + required.length + ' required-first)');
+
+  const installed = [];
+  const failed = [];
+  const needP2P = [];
+  // Option B first: any pack advertising a sourceUrl is self-fetched (offloads the
+  // host).  Any B failure (network/404/integrity) falls through to Option A.
+  for (const p of ordered) {
+    if (p.sourceUrl) {
+      const ok = await fetchPackFromUrl(p, opts);
+      if (ok) { installed.push(p.id); continue; }
+      log('Option B failed for ' + p.id + ' — falling back to host push (Option A)');
+    }
+    needP2P.push(p);
+  }
+  // Option A (M5 transport): pull whatever Option B did not satisfy.
+  if (needP2P.length) {
+    const res = await joinPackHost(gameRoom, needP2P.map((p) => p.id), opts);
+    for (const id of res.installed) installed.push(id);
+    for (const f of res.failed) failed.push(f);
+  }
+  const got = new Set(installed);
+  const requiredFailed = ordered
+    .filter((p) => requiredIds.has(p.id) && !got.has(p.id))
+    .map((p) => ({ id: p.id, name: p.name, categories: p.categories || [] }));
+  return { installed, failed, missing: ordered.length, conflicts, requiredFailed };
 }
 
 // Browser wiring: host/join that pull deps from the page (Module.FS,
@@ -453,8 +545,11 @@ if (typeof window !== 'undefined') {
         signalUrl: signalUrlOf(),
         iceServers: iceOf(),
         list: () => window.ysfwPacks.list(),
-        installFromBytes: (bytes) => window.ysfwPacks.installFromBytes(bytes),
+        // Forward sourceUrl so an Option-B self-fetch records the pack's origin
+        // (P2P pulls pass it undefined -> no URL recorded, which is correct).
+        installFromBytes: (bytes, name, sourceUrl) => window.ysfwPacks.installFromBytes(bytes, name, sourceUrl),
         uninstall: (id) => window.ysfwPacks.uninstall(id),
+        corrupt: !!window.__ysfwPackCorrupt, // test hook: corrupt the P2P transfer
         log: (s) => console.log('[pack-net join] ' + s),
       });
     },
