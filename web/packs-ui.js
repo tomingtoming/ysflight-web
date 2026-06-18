@@ -336,9 +336,10 @@ function init() {
   FS = M.FS;
   adapter = makeFsAdapter(FS, M.__ysfwUserDir || USER_DIR_DEFAULT);
   window.ysfwPacks.fsReady = true;
-  // Only graft the management panel when the gate is held (a deliberate launch);
-  // ?join / ?freeflight auto-launch flows skip it.
-  if (M.__ysfwGateHeld) {
+  // Graft the management panel only for a deliberate manual launch.  ?freeflight
+  // boots straight in (no gate); ?join holds the gate too (M6) but drives the
+  // pre-boot pack sync via pack-net instead of the panel.
+  if (M.__ysfwGateHeld && !M.__ysfwJoinSync) {
     renderPanel();
     M.__ysfwPanelShown = true;
   }

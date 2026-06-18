@@ -164,6 +164,16 @@ function walkPackFiles(FS, userDir, id) {
   return out;
 }
 
+// Read packs/<id>/manifest.json from the Emscripten FS as an object (browser).
+function readPackManifestJson(FS, userDir, id) {
+  try {
+    const raw = FS.readFile(userDir + '/packs/' + id + '/manifest.json', { encoding: 'binary' });
+    return JSON.parse(new TextDecoder().decode(raw));
+  } catch (e) {
+    return null;
+  }
+}
+
 function openSignal(url) {
   const ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
@@ -188,9 +198,10 @@ async function sendZipChunked(ch, id, zip) {
 }
 
 // HOST: claim the derived pack-room and serve installed packs to joiners.
-// opts: { signalUrl, iceServers?, listPackFiles(id)->Promise<{relPath:bytes}>, log? }
+// opts: { signalUrl, iceServers?, listPackFiles(id)->Promise<{relPath:bytes}>,
+//         buildManifest()->Promise<manifest>?, log? }
 export function startPackHost(gameRoom, opts) {
-  const { signalUrl, iceServers = DEFAULT_ICE, listPackFiles, log = () => {} } = opts;
+  const { signalUrl, iceServers = DEFAULT_ICE, listPackFiles, buildManifest, log = () => {} } = opts;
   const room = derivePackRoom(gameRoom);
   const peers = new Map(); // peerId -> { pc, remoteSet, iceQ }
   const ws = openSignal(signalUrl);
@@ -211,7 +222,14 @@ export function startPackHost(gameRoom, opts) {
     }
   }
 
-  ws.addEventListener('open', () => sig({ t: 'host', room }));
+  ws.addEventListener('open', async () => {
+    // Publish the pack manifest alongside the host claim so a joiner can read it
+    // from join-ok (§5.5) and diff BEFORE booting — only control metadata flows
+    // through the signaling hub; pack bytes still go P2P.
+    let manifest;
+    try { manifest = buildManifest ? await buildManifest() : undefined; } catch (e) {}
+    sig({ t: 'host', room, manifest });
+  });
   ws.addEventListener('message', async (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.t === 'host-ok') { log('hosting ' + room); return; }
@@ -354,6 +372,48 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
   });
 }
 
+// JOINER (pre-boot, step 1): read the host's advertised manifest for the derived
+// pack-room WITHOUT pulling bytes — a control-only join that returns the manifest
+// the host published (§5.5), then closes.  Resolves to the manifest array, or
+// null when there is no host / no manifest / it times out.
+export function fetchHostManifest(gameRoom, opts) {
+  const { signalUrl, timeoutMs = 8000, log = () => {} } = opts;
+  const room = derivePackRoom(gameRoom);
+  return new Promise((resolve) => {
+    const ws = openSignal(signalUrl);
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; try { ws.close(); } catch (e) {} resolve(v); };
+    ws.addEventListener('open', () => { try { ws.send(JSON.stringify({ t: 'join', room })); } catch (e) {} });
+    ws.addEventListener('message', (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.t === 'join-ok') { const mf = m.manifest || []; log('manifest: ' + mf.length + ' pack(s)'); finish(mf); }
+      else if (m.t === 'no-room') { log('no pack host for room'); finish(null); }
+    });
+    setTimeout(() => finish(null), timeoutMs);
+  });
+}
+
+// JOINER (pre-boot): full pack sync from the host before main().  Reads the host
+// manifest, diffs it against the locally installed packs, and pulls the missing
+// ones (fields first — a missing field is fatal in the engine) over P2P so the
+// engine's one-time template scan finds them with no reload.
+// opts: { signalUrl, iceServers?, list()->Promise<index>, installFromBytes(),
+//         uninstall(id)?, log? }
+// Resolves to { installed, failed, missing, conflicts }.
+export async function syncPacksAsJoiner(gameRoom, opts) {
+  const { list, log = () => {} } = opts;
+  const manifest = await fetchHostManifest(gameRoom, opts);
+  if (!manifest || manifest.length === 0) return { installed: [], failed: [], missing: 0, conflicts: [] };
+  const localIndex = (await list()) || [];
+  const { missing, conflicts } = diffManifest(manifest, localIndex);
+  if (missing.length === 0) { log('all host packs already present'); return { installed: [], failed: [], missing: 0, conflicts }; }
+  const { required, bestEffort } = prioritizeMissing(missing);
+  const order = [...required, ...bestEffort].map((p) => p.id);
+  log('pulling ' + order.length + ' missing pack(s) (' + required.length + ' required-first)');
+  const res = await joinPackHost(gameRoom, order, opts);
+  return { installed: res.installed, failed: res.failed, missing: order.length, conflicts };
+}
+
 // Browser wiring: host/join that pull deps from the page (Module.FS,
 // window.ysfwPacks, Module.ysfwSignalUrl).  Guarded so Node import stays safe.
 if (typeof window !== 'undefined') {
@@ -369,6 +429,10 @@ if (typeof window !== 'undefined') {
         signalUrl: signalUrlOf(),
         iceServers: iceOf(),
         listPackFiles: async (id) => walkPackFiles(window.Module.FS, userDirOf(), id),
+        buildManifest: () => buildRoomManifest({
+          list: () => window.ysfwPacks.list(),
+          readManifestJson: (id) => readPackManifestJson(window.Module.FS, userDirOf(), id),
+        }),
         log: (s) => console.log('[pack-net host] ' + s),
       });
     },
@@ -379,6 +443,18 @@ if (typeof window !== 'undefined') {
         installFromBytes: (bytes) => window.ysfwPacks.installFromBytes(bytes),
         uninstall: (id) => window.ysfwPacks.uninstall(id),
         corrupt: !!window.__ysfwPackCorrupt,
+        log: (s) => console.log('[pack-net join] ' + s),
+      });
+    },
+    // Pre-boot join sync (M6): read the host manifest, diff, pull the missing
+    // packs, install — the boot gate releases when this resolves.
+    syncAsJoiner(gameRoom) {
+      return syncPacksAsJoiner(gameRoom, {
+        signalUrl: signalUrlOf(),
+        iceServers: iceOf(),
+        list: () => window.ysfwPacks.list(),
+        installFromBytes: (bytes) => window.ysfwPacks.installFromBytes(bytes),
+        uninstall: (id) => window.ysfwPacks.uninstall(id),
         log: (s) => console.log('[pack-net join] ' + s),
       });
     },
