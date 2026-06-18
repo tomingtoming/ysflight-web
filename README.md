@@ -102,19 +102,27 @@ Cloudflare の build image には Emscripten が入っていないため、`scri
 ### PR プレビュー URL
 
 非production ブランチ（PR）のビルドは `wrangler versions upload` で**プレビュー版**
-を作ります。**クリックできるプレビュー URL を出すには、Worker 側で Preview URLs を
-有効化**してください（dashboard → Workers & Pages → `ysflight-web` → Settings →
-Domains & Routes（UI 版により Triggers 配下）→ **Preview URLs**。`*.workers.dev`
-サブドメインも要有効）。有効化すると `wrangler versions upload` の出力に
+を作り、各バージョンに次の形のプレビュー URL が割り当たります：
 
 ```
-Version Preview URL: https://<version>-ysflight-web.<subdomain>.workers.dev
+https://<version-prefix>-ysflight-web.<subdomain>.workers.dev
 ```
 
-が出ます（未有効だと `Worker Version ID:` は出るが Preview URL 行が出ない＝症状）。
-なお **Workers Builds は Pages と違い、この URL を PR にコメントしません**——URL は
-ビルドログ／ダッシュボードで確認します。GitHub の PR に付くのは pass/fail の
-「Workers Builds」チェック1個のみ。
+（`<version-prefix>` はバージョン ID の先頭 8 桁。**前提**＝Worker の Preview URLs が
+有効。dashboard → Workers & Pages → `ysflight-web` → Settings → Domains & Routes
+（UI 版により Triggers 配下）→ **Preview URLs**、`*.workers.dev` サブドメインも有効。）
+
+**URL の探し方**——**Workers Builds は Pages と違い、このURLを PR にコメントしません**。
+次のどちらかで確認します：
+
+- ビルドログ末尾の `Version Preview URL:` 行（Workers Builds のチェックのリンク先）
+- dashboard の **デプロイ（Deployments）タブ** → 各バージョンのプレビュー URL リンク
+
+GitHub の PR に付くのは pass/fail の「Workers Builds」チェック1個だけです。
+
+> 注意: プレビュー URL が割り当たるのは **Preview URLs を有効化した後**にアップした
+> バージョンだけ。有効化前のビルドのプレビュー URL は 404 になります（その場合は再ビルド
+> すれば付きます）。
 
 GitHub Pages は repository settings の Pages で無効化してください。
 
