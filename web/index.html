@@ -7,6 +7,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <script type="module" src="packs-ui.js"></script>
+<script type="module" src="pack-net.js"></script>
 <title>YSFLIGHT web</title>
 <style>
   html, body {
@@ -136,34 +137,104 @@
       FS.mount(IDBFS, {}, '/home/web_user/Documents');
       Module.addRunDependency('idbfs-load');
       FS.syncfs(true, function () {
-        // Pre-boot add-on pack management.  Hold a run dependency so the
-        // engine's one-time template scan (a few frames into main) only runs
-        // after the user has chosen their packs — no reload needed.  Skipped
-        // for auto-launch flows (?join / ?freeflight), which boot straight in.
-        // packs-ui.js renders the panel and releases the gate on "play".
-        try {
-          var q = new URLSearchParams(location.search);
-          var auto = !!(Module.ysfwJoinRoom || q.get('freeflight'));
-          Module.__ysfwUserDir = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
-          try { FS.mkdirTree(Module.__ysfwUserDir); } catch (e) {}
-          if (!auto) {
-            Module.addRunDependency('ysfw-packs');
-            Module.__ysfwGateHeld = true;
-            // Safety net: if packs-ui.js failed to load, never hang the boot.
-            setTimeout(function () {
-              if (Module.__ysfwGateHeld && !Module.__ysfwPanelShown) {
-                Module.removeRunDependency('ysfw-packs');
-                Module.__ysfwGateHeld = false;
-              }
-            }, 5000);
-          }
-          window.__ysfwFsReady = true;
-          if (window.ysfwPacksInit) window.ysfwPacksInit();
-        } catch (e) {
+        // Pre-boot add-on pack management.  Hold a run dependency so the engine's
+        // one-time template scan (a few frames into main) runs only after packs
+        // are in place — no reload needed.  Three flows:
+        //   manual launch -> hold the gate, show the pack panel, release on play
+        //   ?join=<room>  -> hold the gate, sync the host's packs P2P, release (M6)
+        //   ?freeflight   -> boot straight in (no host to sync from)
+        var gateReleased = false;
+        function releaseGate() {
+          if (gateReleased) return;
           if (Module.__ysfwGateHeld) {
             Module.removeRunDependency('ysfw-packs');
             Module.__ysfwGateHeld = false;
           }
+          gateReleased = true;
+        }
+        try {
+          var q = new URLSearchParams(location.search);
+          var joinRoom = Module.ysfwJoinRoom;
+          var freeflight = q.get('freeflight');
+          Module.__ysfwUserDir = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
+          try { FS.mkdirTree(Module.__ysfwUserDir); } catch (e) {}
+          if (joinRoom) {
+            // M6/M7: hold the gate and OBTAIN the host's enabled packs before
+            // main() — Option B (self-fetch each pack's advertised URL) with a
+            // fallback to Option A (host P2P push).  A missing REQUIRED field is
+            // fatal in the engine, so on failure we show an explicit panel
+            // (Retry / play Solo) instead of booting silently into a broken join.
+            Module.addRunDependency('ysfw-packs');
+            Module.__ysfwGateHeld = true;
+            Module.__ysfwJoinSync = true;
+            window.__ysfwFsReady = true;
+            if (window.ysfwPacksInit) window.ysfwPacksInit();
+            // Solo = abandon the join: drop the -client args (set by the join IIFE
+            // below) so the engine boots single-player rather than connecting to a
+            // host whose required field we could not obtain, then release the gate.
+            // Safe to mutate Module.arguments here: main() has not run (gate held).
+            function bootSolo() {
+              try {
+                var ci = Module.arguments.indexOf('-client');
+                if (ci >= 0) Module.arguments = Module.arguments.slice(0, ci);
+              } catch (e) {}
+              releaseGate();
+            }
+            // Re-runnable so the obtain-failure panel's "Retry" can try again (M7).
+            function runJoinSync() {
+              var doSync = (window.ysfwPackNet && window.ysfwPackNet.syncAsJoiner)
+                ? window.ysfwPackNet.syncAsJoiner(joinRoom)
+                : Promise.resolve(null);
+              return doSync.then(function (r) {
+                // If the gate already went (backstop fired, or the user chose Solo
+                // on a prior attempt), a late-resolving sync must not pop a panel
+                // over an already-booting engine.
+                if (gateReleased) return;
+                if (r) console.log('[pack-net join] pre-boot sync: ' + JSON.stringify(r));
+                if (r && r.requiredFailed && r.requiredFailed.length &&
+                    window.ysfwPacks && window.ysfwPacks.showJoinFailure) {
+                  window.ysfwPacks.showJoinFailure(r.requiredFailed, { onRetry: runJoinSync, onSolo: bootSolo });
+                  return;
+                }
+                releaseGate();
+              }, function (e) {
+                if (gateReleased) return;
+                console.warn('[pack-net join] pre-boot sync failed: ' + (e && e.message ? e.message : e));
+                // An unexpected error is still an obtain failure — surface the UX,
+                // never hang the boot silently.
+                if (window.ysfwPacks && window.ysfwPacks.showJoinFailure) {
+                  window.ysfwPacks.showJoinFailure([{ id: '', name: '(同期エラー)', categories: [] }], { onRetry: runJoinSync, onSolo: bootSolo });
+                } else {
+                  releaseGate();
+                }
+              });
+            }
+            // Absolute backstop: every sync leg has its own timeout, but if the
+            // machinery somehow never resolves AND no decision panel is up, boot
+            // SOLO rather than hang forever — never silently enter a -client join
+            // whose pack sync never finished (when the panel is up, the user drives
+            // it, so this stays a no-op then).
+            setTimeout(function () {
+              if (!gateReleased && !Module.__ysfwJoinFailureShown) bootSolo();
+            }, 90000);
+            runJoinSync();
+          } else if (!freeflight) {
+            // Manual launch: show the pack panel; packs-ui.js releases on "play".
+            Module.addRunDependency('ysfw-packs');
+            Module.__ysfwGateHeld = true;
+            // Safety net: if packs-ui.js failed to load, never hang the boot.
+            setTimeout(function () {
+              if (Module.__ysfwGateHeld && !Module.__ysfwPanelShown) releaseGate();
+            }, 5000);
+            window.__ysfwFsReady = true;
+            if (window.ysfwPacksInit) window.ysfwPacksInit();
+          } else {
+            // freeflight: boot straight in.
+            window.__ysfwFsReady = true;
+            if (window.ysfwPacksInit) window.ysfwPacksInit();
+          }
+        } catch (e) {
+          releaseGate();
         }
         // Release idbfs-load LAST so the run-dependency count never transiently
         // hits 0 above — otherwise a cached/instant .data preload lets Emscripten
@@ -366,6 +437,29 @@
         if (badge) badge.style.display = 'none';
         if (chip) chip.style.display = 'none';
         if (roomEl) roomEl.style.display = 'none';
+      }
+    }, 800);
+  })();
+
+  // Host-side pack advertising (M6): once this browser is hosting a game, start
+  // the shell-owned pack host on the derived pack-room so joiners can pull the
+  // host's enabled packs P2P before they boot.  Keyed on globalThis.ysfwRtc.host
+  // (set by the engine while hosting); independent of the engine's game peer
+  // connection.  startPackHost publishes the manifest with its room claim.
+  (function () {
+    var startedRoom = null, handle = null;
+    setInterval(function () {
+      var R = globalThis.ysfwRtc;
+      var room = (R && R.host && !R.host.failed) ? R.host.room : null;
+      if (room && startedRoom !== room) {
+        try {
+          if (handle && handle.stop) handle.stop();
+          handle = (window.ysfwPackNet && window.ysfwPackNet.host) ? window.ysfwPackNet.host(room) : null;
+          startedRoom = room;
+        } catch (e) { console.warn('[pack-net host] start failed: ' + e); }
+      } else if (!room && startedRoom) {
+        try { if (handle && handle.stop) handle.stop(); } catch (e) {}
+        handle = null; startedRoom = null;
       }
     }, 800);
   })();

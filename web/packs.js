@@ -261,6 +261,7 @@ export async function installPack(zipBytes, opts) {
     sha256,
     name,
     source = 'user-supplied',
+    sourceUrl,
     now = Date.now(),
     maxFileBytes = 64 * 1024 * 1024,
     maxPackBytes = 256 * 1024 * 1024,
@@ -307,6 +308,12 @@ export async function installPack(zipBytes, opts) {
     files: hashed,
     lists: generated.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
   };
+  // Remember where a pack came from so a HOST can re-advertise that URL and let
+  // joiners self-fetch it (Option B, M7) instead of pulling the bytes P2P.  Kept
+  // out of the pack-id hash: the id is computed over the archive files only, and
+  // manifest.json is excluded from both the id and the P2P-transferred zip, so a
+  // URL-imported pack and a P2P-pulled one share the same content-addressed id.
+  if (sourceUrl) manifest.sourceUrl = sourceUrl;
 
   // Stage the payload (+ manifest) and commit it atomically, unless an
   // identical pack id is already present.
