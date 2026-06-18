@@ -81,16 +81,40 @@ google-chrome)。CI では `default` のみ実行されます。
 
 ## デプロイ / Deploy
 
-Cloudflare Pages の Git integration で repository を接続し、Build settings を
-以下にしてください。
+本番は **Cloudflare Workers**（設定は `wrangler.jsonc`）。Worker 本体は
+`worker/signal.js`（`/signal` の WebRTC シグナリング＝Durable Object `SignalHub`）で、
+ゲーム本体（`dist/`）は同じ Worker から **Workers Static Assets**
+（`assets.directory: ./dist`）として配信されます。**Pages ではありません**
+（旧 Pages 運用からの移行済み）。
+
+**Workers Builds**（Worker の Git integration）で repository を接続し、Build
+settings を以下に：
 
 - Build command: `scripts/build.sh`
-- Build output directory: `dist`
+- Deploy command（production ブランチ）: `npx wrangler deploy`
+- Deploy command（非production ブランチ＝プレビュー）: `npx wrangler versions upload`
 
-Cloudflare Pages の build image には Emscripten が入っていないため、
-`scripts/build.sh` は `emcmake` が見つからない場合に `emsdk` を
-`$HOME/opt/emsdk` へ自動インストールします。固定したい場合は環境変数
-`EMSDK_VERSION` を設定してください (既定: `6.0.0`)。
+Cloudflare の build image には Emscripten が入っていないため、`scripts/build.sh`
+は `emcmake` が見つからない場合に `emsdk` を `$HOME/opt/emsdk` へ自動インストール
+します（CMake も同様に自前取得）。固定したい場合は環境変数 `EMSDK_VERSION`
+（既定: `6.0.0`）。YSFLIGHT を wasm にフルコンパイルするのでビルドは数分かかります。
+
+### PR プレビュー URL
+
+非production ブランチ（PR）のビルドは `wrangler versions upload` で**プレビュー版**
+を作ります。**クリックできるプレビュー URL を出すには、Worker 側で Preview URLs を
+有効化**してください（dashboard → Workers & Pages → `ysflight-web` → Settings →
+Domains & Routes（UI 版により Triggers 配下）→ **Preview URLs**。`*.workers.dev`
+サブドメインも要有効）。有効化すると `wrangler versions upload` の出力に
+
+```
+Version Preview URL: https://<version>-ysflight-web.<subdomain>.workers.dev
+```
+
+が出ます（未有効だと `Worker Version ID:` は出るが Preview URL 行が出ない＝症状）。
+なお **Workers Builds は Pages と違い、この URL を PR にコメントしません**——URL は
+ビルドログ／ダッシュボードで確認します。GitHub の PR に付くのは pass/fail の
+「Workers Builds」チェック1個のみ。
 
 GitHub Pages は repository settings の Pages で無効化してください。
 
