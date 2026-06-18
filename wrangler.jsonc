@@ -17,6 +17,12 @@
   // SharedArrayBuffer / COOP+COEP.
   "name": "ysflight-web",
   "compatibility_date": "2025-06-01",
+  // Preview URLs (per-version <VERSION_PREFIX>-ysflight-web.<subdomain>.workers.dev)
+  // for `wrangler versions upload`.  Defaults to `workers_dev` (true here, since
+  // no custom routes), so this is mostly explicit intent -- but without it a
+  // dashboard toggle would silently flip the value on the next deploy.  Requires
+  // a workers.dev subdomain registered on the account.
+  "preview_urls": true,
   "main": "worker/signal.js",
   "assets": {
     "directory": "./dist",

@@ -309,6 +309,36 @@ CMakeLists.txt:606）。**標準フローでは boot 前 join により両方と
 - ネイティブ鯖ブリッジ復活の予定有無（あると配信前提が変わる）
 - C shim export（登録フォールバック b）は標準フローでは不要。残余フォールバック用に入れるかは保留
 
+## 9. v2 実装計画（マルチプレイ配信・確定 2026-06-18）
+
+v1（M1〜M3＋起動fix）は main マージ済み。v2＝「ホストが有効化したパックを参加者へ自動配信」。実コード調査の上で確定した計画。
+
+### アーキ決定: エンジンと別の **シェル所有 WebRTC 接続**（M4〜M7は wasm rebuild 不要）
+
+パック転送は、エンジンのゲーム用 peer 接続とは**別の**シェル所有 `RTCPeerConnection` ＋ `'ysf-pack'` DataChannel で行う。決め手は **pre-boot 同期要件**：パック同期は `main()` 前（run-dependency ゲート中）に終える必要があるが、エンジンの peer 接続は `main()` 後にしか生成されない。よって「engine の pc に2本目チャネルを足す」案は**パックが要る時点で接続が存在せず成立しない**＝シェル所有の別接続が必然（結果として C++ 改変ゼロ）。同じ Cloudflare ハブを**派生 room**（`derivePackRoom`＝ゲーム room＋`~p`、≤16字）で再利用、受信は既存 `window.ysfwPacks.installFromBytes`。バイトは P2P でホストpush、Worker は manifest（小さな制御メタ）だけ中継＝「ゲームデータは Worker を通らない」不変条件は維持。
+
+### マイルストーン
+
+| ID | 内容 | rebuild | 検証 |
+|---|---|---|---|
+| **M4** | ホスト manifest 契約＋Worker 通過（制御のみ・転送なし）。`pack-net.js` のコア（`derivePackRoom`/`buildRoomManifest`/`diffManifest`/`prioritizeMissing`）＋ `signal.js` の manifest passthrough（≤64KB） | 不要 | node 単体（本PR・14/14） |
+| **M5** | `'ysf-pack'` チャンク/背圧つき DataChannel（**Option A：ホストpush**）。長さプレフィックス枠・≤64KiB・`bufferedamountlow`・per-peer 直列 | 不要 | **2ブラウザ Playwright**（pack無しjoiner→P2P受領→sha256検証→install） |
+| **M6** | **pre-boot join 統合**：`?join` でゲートを保持し、ゲート内で manifest 受領→差分→取得→install→syncfs→解放（無リロード）。手動 Room-ID もシェル前段に集約 | 不要 | 2ブラウザ（招待リンクjoin→パック入りで起動・機体ロード確認） |
+| **M7** | **Option B（URL自己取得）** ＋ **フィールド最優先**（必須・ゲート停止）＋ 取得失敗UX（無言切断の前に明示パネル＋Retry/ソロ） | 不要 | Playwright 3ケース（B成功 / B→A fallback / フィールド取得失敗UX） |
+| **M8** | エンジン内メニューの client 接続を閉じる（pre-boot 一本化）。chat/server-port 無効化（commit 30d3083）と同種の upstream submodule 改変 | **必要** | 全スモーク（rebuild後の回帰） |
+
+**Option A を先**（持ち込みパックはURL無しが普通＝必須経路、かつ難所のチャンク/背圧を先に潰す）、B は後から重ねる最適化（A が恒久フォールバック）。
+
+### 確定した分岐（2026-06-18）
+
+- **M8 はやる**（完全ハードニング・v2で1回 rebuild）。pre-boot join を唯一の経路にし、pack 同期を飛ばす抜け道を塞ぐ
+- **同名・別ハッシュの競合＝セッション中はホスト版を優先**（`packs/<host-id>/` 名前空間＋セッション限定 `.lst`。`diffManifest` が `conflicts` を返す → M6 の install で処理）
+- **TURN はスコープ外・既知の制限**。STUN一本のまま、到達不能ペアは取得失敗UXで可視化（無言ハングにしない）
+
+### 残りの細部（実装時に既定値で進める）
+
+同意UXの粒度（ホスト単位/セッション単位）・派生room命名（`~p`採用）・best-effort パックの背景DL（次セッション用にIDBFS保存）・content/version desync（ホスト配信分はcontent-hashでバイト一致保証、既存ローカル同名は競合ポリシで上書き）。
+
 ## 参考: 主要コード参照
 
 エンジン (`upstream/YSFLIGHT`, emscripten):
