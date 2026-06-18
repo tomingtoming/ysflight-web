@@ -5,7 +5,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { derivePackRoom, buildRoomManifest, diffManifest, prioritizeMissing, zipPackFiles, _internals } from '../web/pack-net.js';
+import { derivePackRoom, buildRoomManifest, diffManifest, prioritizeMissing, zipPackFiles, fetchPackFromUrl, _internals } from '../web/pack-net.js';
+
+// A minimal fetch Response stand-in for the Option-B unit tests below.
+const resp = (ok, bytes, status = ok ? 200 : 404) => ({
+  ok, status, arrayBuffer: async () => (bytes || new Uint8Array()).buffer,
+});
 
 test('derivePackRoom: distinct from the game room and within 16 chars', () => {
   assert.equal(derivePackRoom('12345678'), '12345678~p'); // typical 8-digit web room
@@ -87,4 +92,63 @@ test('prioritizeMissing: field/scenery packs are required-first, others best-eff
   const { required, bestEffort } = prioritizeMissing(missing);
   assert.deepEqual(required.map((p) => p.id), ['fld1']);
   assert.deepEqual(bestEffort.map((p) => p.id).sort(), ['air1', 'gnd1']);
+});
+
+// --- Option B (URL self-fetch), M7 -----------------------------------------
+
+test('fetchPackFromUrl: verified install from URL returns true (no P2P needed)', async () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  let fetched = null, installedWith = null;
+  const ok = await fetchPackFromUrl(
+    { id: 'pk1', sourceUrl: 'https://e/pk1.zip' },
+    {
+      fetchImpl: async (u) => { fetched = u; return resp(true, bytes); },
+      installFromBytes: async (b) => { installedWith = b; return { id: 'pk1' }; },
+    },
+  );
+  assert.equal(ok, true);
+  assert.equal(fetched, 'https://e/pk1.zip');
+  assert.deepEqual([...installedWith], [1, 2, 3]);
+});
+
+test('fetchPackFromUrl: no sourceUrl -> false and never fetches (caller uses Option A)', async () => {
+  let fetchCalls = 0;
+  const ok = await fetchPackFromUrl(
+    { id: 'pk1' },
+    { fetchImpl: async () => { fetchCalls++; return resp(true); }, installFromBytes: async () => ({ id: 'pk1' }) },
+  );
+  assert.equal(ok, false);
+  assert.equal(fetchCalls, 0);
+});
+
+test('fetchPackFromUrl: HTTP error -> false, nothing installed', async () => {
+  let installCalls = 0;
+  const ok = await fetchPackFromUrl(
+    { id: 'pk1', sourceUrl: 'https://e/404.zip' },
+    { fetchImpl: async () => resp(false, null, 404), installFromBytes: async () => { installCalls++; return { id: 'pk1' }; } },
+  );
+  assert.equal(ok, false);
+  assert.equal(installCalls, 0);
+});
+
+test('fetchPackFromUrl: id-mismatch (forged/stale bytes) -> false and rolls the bogus pack back', async () => {
+  const rolledBack = [];
+  const ok = await fetchPackFromUrl(
+    { id: 'wanted', sourceUrl: 'https://e/forged.zip' },
+    {
+      fetchImpl: async () => resp(true, new Uint8Array([9])),
+      installFromBytes: async () => ({ id: 'other' }), // recomputed id != wanted
+      uninstall: async (id) => rolledBack.push(id),
+    },
+  );
+  assert.equal(ok, false);
+  assert.deepEqual(rolledBack, ['other']); // the wrongly-persisted pack is removed
+});
+
+test('fetchPackFromUrl: fetch throws -> false (caller falls back to Option A)', async () => {
+  const ok = await fetchPackFromUrl(
+    { id: 'pk1', sourceUrl: 'https://e/boom.zip' },
+    { fetchImpl: async () => { throw new Error('network down'); }, installFromBytes: async () => ({ id: 'pk1' }) },
+  );
+  assert.equal(ok, false);
 });
