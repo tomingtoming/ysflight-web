@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { derivePackRoom, buildRoomManifest, diffManifest, prioritizeMissing } from '../web/pack-net.js';
+import { derivePackRoom, buildRoomManifest, diffManifest, prioritizeMissing, zipPackFiles, _internals } from '../web/pack-net.js';
 
 test('derivePackRoom: distinct from the game room and within 16 chars', () => {
   assert.equal(derivePackRoom('12345678'), '12345678~p'); // typical 8-digit web room
@@ -57,6 +57,25 @@ test('diffManifest: identical sets -> nothing missing', () => {
   assert.equal(missing.length, 0);
   assert.deepEqual(present, ['A']);
   assert.equal(conflicts.length, 0);
+});
+
+test('zipPackFiles: round-trips the pack tree and drops manifest.json', async () => {
+  const { unzipSync } = await import('../web/vendor/fflate.js');
+  const enc = new TextEncoder();
+  const files = {
+    'aircraft/air_x.lst': enc.encode('user/x/a.dat user/x/a.dnm user/x/a.srf\n'),
+    'user/x/a.dnm': new Uint8Array([1, 2, 3, 4]),
+    'manifest.json': enc.encode('{"should":"be dropped"}'),
+  };
+  const out = unzipSync(zipPackFiles(files));
+  assert.ok(out['aircraft/air_x.lst'], 'list file present');
+  assert.deepEqual([...out['user/x/a.dnm']], [1, 2, 3, 4], 'binary file round-trips');
+  assert.equal(out['manifest.json'], undefined, 'manifest.json excluded to keep the content-hash id stable');
+});
+
+test('concatChunks: reassembles binary chunks in order', () => {
+  const out = _internals.concatChunks([new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5])], 5);
+  assert.deepEqual([...out], [1, 2, 3, 4, 5]);
 });
 
 test('prioritizeMissing: field/scenery packs are required-first, others best-effort', () => {
