@@ -82,7 +82,7 @@
   <div id="status">loading...</div>
   <div id="note">
     YS FLIGHT SIMULATOR (c) Soji Yamakawa (CaptainYS) — WebAssembly port.<br>
-    元データ・ソースコード: <a href="https://github.com/captainys/YSFLIGHT" style="color:#4da3ff">captainys/YSFLIGHT</a>
+    <span id="note-src">元データ・ソースコード: </span><a href="https://github.com/captainys/YSFLIGHT" style="color:#4da3ff">captainys/YSFLIGHT</a>
   </div>
 </div>
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
@@ -94,6 +94,70 @@
   var bar = document.getElementById('bar');
   var statusEl = document.getElementById('status');
   var booted = false;
+
+  // Shell UI locale.  Mirrors the engine's own ja/en selection (?lang, else the
+  // browser locale): the wasm UI already localizes, this localizes the pre-boot
+  // shell (loading note, connection badge, Room chip, join forms, pack panel).
+  // Exposed on window so packs-ui.js shares the same choice.
+  window.ysfwLang = (function () {
+    var q = new URLSearchParams(location.search).get('lang');
+    var l = String(q || navigator.language || 'en').toLowerCase();
+    return l.indexOf('ja') === 0 ? 'ja' : 'en';
+  })();
+  var TXT = ({
+    ja: {
+      note: '元データ・ソースコード: ',
+      chipCopyTitle: 'クリックで招待リンクをコピー',
+      chipCopied: '✓ 招待リンクをコピーしました',
+      connecting: '（接続中…）',
+      badgeTitle: '対戦の接続性チェック（クリックで再確認）',
+      badgeChecking: '接続を確認中…',
+      badgeCheckingTitle: '対戦の接続性をチェックしています',
+      badgeOffline: '🟠 接続を確認できません',
+      badgeOfflineTitle: 'STUN サーバに到達できませんでした。ネットワーク／ファイアウォール、またはオフラインの可能性があります（TURN の TLS/443 経由なら繋がる場合もあります）。クリックで再確認。',
+      badgeRelay: '🟡 TURN 中継で接続',
+      badgeRelayTitle: 'この回線は通信タイプが厳しめ（対称NAT）で直結できないことがありますが、TURN リレー経由で接続できます。直結よりわずかに遅延が増えます。クリックで再確認。',
+      badgeSymmetric: '🟡 一部の相手と繋がらないかも',
+      badgeSymmetricTitle: 'この回線は通信タイプが厳しめ（対称NAT）です。TURN 中継が未設定のため、相手も同じタイプだと直接つながらないことがあります。クリックで再確認。',
+      badgeDirect: '🟢 マルチプレイOK',
+      badgeDirectTitle: 'この回線は対戦に適しています（多くの相手と直接つながります）。クリックで再確認。',
+      joinLabel: 'Room ID で参加',
+      joinNamePlaceholder: '名前（任意）',
+      joinBtn: 'ルームに参加',
+      errRoomEmpty: 'Room ID を入力してください',
+      errRoomInvalid: 'Room ID は英数字・- ・_（14文字以内）で入力してください',
+      inviteNameLabel: function (room) { return 'Room ' + room + ' に参加 — 名前を入力'; },
+      inviteJoinBtn: '参加する',
+      syncError: '(同期エラー)',
+    },
+    en: {
+      note: 'Source & assets: ',
+      chipCopyTitle: 'Click to copy the invite link',
+      chipCopied: '✓ Invite link copied',
+      connecting: ' (connecting…)',
+      badgeTitle: 'Multiplayer connectivity check (click to re-check)',
+      badgeChecking: 'Checking connection…',
+      badgeCheckingTitle: 'Checking multiplayer connectivity',
+      badgeOffline: '🟠 Can’t check connection',
+      badgeOfflineTitle: 'Could not reach a STUN server — you may be offline or behind a firewall (TURN over TLS/443 may still connect). Click to re-check.',
+      badgeRelay: '🟡 Connects via TURN relay',
+      badgeRelayTitle: 'This network is restrictive (symmetric NAT) so direct P2P may fail, but you can still connect through the TURN relay. Slightly higher latency than a direct connection. Click to re-check.',
+      badgeSymmetric: '🟡 Some peers may not connect',
+      badgeSymmetricTitle: 'This network is restrictive (symmetric NAT). No TURN relay is configured, so peers on the same kind of network may not connect directly. Click to re-check.',
+      badgeDirect: '🟢 Multiplayer OK',
+      badgeDirectTitle: 'This network is good for multiplayer (direct connection to most peers). Click to re-check.',
+      joinLabel: 'Join by Room ID',
+      joinNamePlaceholder: 'Name (optional)',
+      joinBtn: 'Join room',
+      errRoomEmpty: 'Enter a Room ID',
+      errRoomInvalid: 'Room ID: letters, digits, - and _ only (max 14 chars)',
+      inviteNameLabel: function (room) { return 'Joining Room ' + room + ' — enter your name'; },
+      inviteJoinBtn: 'Join',
+      syncError: '(sync error)',
+    },
+  })[window.ysfwLang];
+  document.documentElement.lang = window.ysfwLang;
+  (function () { var n = document.getElementById('note-src'); if (n) n.textContent = TXT.note; })();
 
   var Module = {
     canvas: document.getElementById('canvas'),
@@ -203,7 +267,7 @@
                 // An unexpected error is still an obtain failure — surface the UX,
                 // never hang the boot silently.
                 if (window.ysfwPacks && window.ysfwPacks.showJoinFailure) {
-                  window.ysfwPacks.showJoinFailure([{ id: '', name: '(同期エラー)', categories: [] }], { onRetry: runJoinSync, onSolo: bootSolo });
+                  window.ysfwPacks.showJoinFailure([{ id: '', name: TXT.syncError, categories: [] }], { onRetry: runJoinSync, onSolo: bootSolo });
                 } else {
                   releaseGate();
                 }
@@ -345,7 +409,7 @@
       chip = document.createElement('div');
       chip.id = 'ysfw-room-chip';
       chip.style.cssText = 'position:fixed;top:8px;right:8px;z-index:31;background:rgba(10,14,20,.85);color:#cfd8e3;padding:8px 14px;border-radius:6px;font:14px monospace;cursor:pointer;user-select:none;display:none';
-      chip.title = 'クリックで招待リンクをコピー';
+      chip.title = TXT.chipCopyTitle;
       chip.onclick = function () {
         var R = globalThis.ysfwRtc;
         var code = (R && R.host && R.host.room) || Module.ysfwRoomCode;
@@ -353,7 +417,7 @@
         var url = location.origin + '/?join=' + code;
         var done = function () {
           chip._copied = true;
-          chip.textContent = '✓ 招待リンクをコピーしました';
+          chip.textContent = TXT.chipCopied;
           setTimeout(function () { chip._copied = false; }, 1600);
         };
         if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -371,7 +435,7 @@
     function renderChip(code, connecting) {
       var c = ensureChip();
       if (c._copied) return;  // keep the "copied" confirmation visible briefly
-      c.textContent = 'Room: ' + code + (connecting ? '（接続中…）📋' : '  📋');
+      c.textContent = 'Room: ' + code + (connecting ? TXT.connecting + '📋' : '  📋');
     }
 
     // Connection badge: a one-shot STUN probe hinting whether direct P2P is
@@ -384,7 +448,7 @@
       badge.id = 'ysfw-conn-badge';
       // Menu-only (invite button is hidden then), so it takes the top slot.
       badge.style.cssText = 'position:fixed;right:8px;top:8px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
-      badge.title = '対戦の接続性チェック（クリックで再確認）';
+      badge.title = TXT.badgeTitle;
       badge.onclick = function () { if (checkState !== 'running') runCheck(); };
       document.body.appendChild(badge);
       return badge;
@@ -411,23 +475,30 @@
         setTimeout(function () { finish(null); }, timeoutMs || 4000);
       });
     }
+    // Is a TURN relay actually available?  The /turn fetch (top of this file)
+    // populates Module.ysfwIceServers / window.ysfwPackIce with the Cloudflare
+    // iceServers; a turn: URL there means even a symmetric-NAT line can relay.
+    function turnAvailable() {
+      var ice = (window.Module && window.Module.ysfwIceServers) || window.ysfwPackIce;
+      return Array.isArray(ice) && JSON.stringify(ice).indexOf('turn:') !== -1;
+    }
     function runCheck() {
       checkState = 'running';
-      setBadge('接続を確認中…', '対戦の接続性をチェックしています');
+      setBadge(TXT.badgeChecking, TXT.badgeCheckingTitle);
       Promise.all([
         srflxPort('stun:stun.l.google.com:19302'),
         srflxPort('stun:stun1.l.google.com:19302')
       ]).then(function (ports) {
         checkState = 'done';
         if (!ports[0] && !ports[1]) {
-          setBadge('🟠 接続を確認できません',
-            'STUN サーバに到達できませんでした。ネットワーク／ファイアウォール、またはオフラインの可能性があります。クリックで再確認。');
+          setBadge(TXT.badgeOffline, TXT.badgeOfflineTitle);
         } else if (ports[0] && ports[1] && ports[0] !== ports[1]) {
-          setBadge('🟡 一部の相手と繋がらないかも',
-            'この回線は通信タイプが厳しめ（いわゆる対称NAT）です。相手も同じタイプだと直接つながらないことがありますが、多くの相手とは対戦できます。クリックで再確認。');
+          // Symmetric NAT: with TURN configured the relay carries it (informational);
+          // without TURN it is the old "may not connect to some peers" warning.
+          if (turnAvailable()) setBadge(TXT.badgeRelay, TXT.badgeRelayTitle);
+          else setBadge(TXT.badgeSymmetric, TXT.badgeSymmetricTitle);
         } else {
-          setBadge('🟢 マルチプレイOK',
-            'この回線は対戦に適しています（直接つながります）。クリックで再確認。');
+          setBadge(TXT.badgeDirect, TXT.badgeDirectTitle);
         }
       });
     }
@@ -514,7 +585,7 @@
       wrap.style.cssText = 'margin-top:20px;display:flex;flex-direction:column;align-items:center;gap:8px';
       var label = document.createElement('div');
       label.style.cssText = 'font-size:14px;color:#cfd8e3';
-      label.textContent = 'Room ID で参加';
+      label.textContent = TXT.joinLabel;
       var inputCss = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
       var roomIn = document.createElement('input');
       roomIn.type = 'text';
@@ -525,21 +596,21 @@
       var nameIn = document.createElement('input');
       nameIn.type = 'text';
       nameIn.maxLength = 200;
-      nameIn.placeholder = '名前（任意）';
+      nameIn.placeholder = TXT.joinNamePlaceholder;
       nameIn.style.cssText = inputCss;
       var err = document.createElement('div');
       err.style.cssText = 'font-size:12px;color:#c75d6a;min-height:1em';
       var btn = document.createElement('button');
-      btn.textContent = 'ルームに参加';
+      btn.textContent = TXT.joinBtn;
       btn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
       var go = function () {
         var room = (roomIn.value || '').trim();
-        if (!room) { err.textContent = 'Room ID を入力してください'; return; }
+        if (!room) { err.textContent = TXT.errRoomEmpty; return; }
         // Keep within the signaling room-key limit (<=16) AND the derived pack
         // room's base budget (base + "~p" <= 16, so base <= 14): see
         // pack-net.js derivePackRoom and worker/signal.js.  Restrict the charset
         // so a pasted invite URL or stray "~" can't desync the derived pack room.
-        if (!/^[A-Za-z0-9_-]{1,14}$/.test(room)) { err.textContent = 'Room ID は英数字・- ・_（14文字以内）で入力してください'; return; }
+        if (!/^[A-Za-z0-9_-]{1,14}$/.test(room)) { err.textContent = TXT.errRoomInvalid; return; }
         var name = (nameIn.value || '').trim();
         location.href = location.origin + '/?join=' + encodeURIComponent(room) +
           (name ? '&name=' + encodeURIComponent(name) : '');
@@ -561,14 +632,14 @@
       form.style.cssText = 'margin-top:18px;display:flex;flex-direction:column;align-items:center;gap:10px';
       var label = document.createElement('div');
       label.style.cssText = 'font-size:14px;color:#cfd8e3';
-      label.textContent = 'Room ' + joinRoom + ' に参加 — 名前を入力';
+      label.textContent = TXT.inviteNameLabel(joinRoom);
       var input = document.createElement('input');
       input.type = 'text';
       input.maxLength = 200;
       input.placeholder = 'Pilot';
       input.style.cssText = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
       var goBtn = document.createElement('button');
-      goBtn.textContent = '参加する';
+      goBtn.textContent = TXT.inviteJoinBtn;
       goBtn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
       var go = function () { form.remove(); statusEl.textContent = 'loading...'; startJoin(input.value); };
       goBtn.addEventListener('click', go);
