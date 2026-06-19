@@ -17,8 +17,10 @@
 // are transferred P2P over a separate 'ysf-pack' DataChannel (see pack-net.js).
 //
 // Game traffic never touches this Worker -- after signaling it flows P2P over
-// WebRTC DataChannels (public STUN; no TURN for now).  Everything else (the
-// static game in dist/) is served by Workers Static Assets.
+// WebRTC DataChannels.  ICE servers are minted by the /turn endpoint below
+// (Cloudflare Realtime TURN: STUN + a TURN relay fallback for NAT-blocked pairs);
+// the client falls back to public STUN if /turn is unconfigured.  Everything else
+// (the static game in dist/) is served by Workers Static Assets.
 //
 // The hub DO keeps connections in memory (no Hibernation): it stays resident
 // only while signaling WebSockets are open, and a single global hub fits the
@@ -34,10 +36,50 @@ export default {
       const id = env.SIGNAL.idFromName('hub'); // single global signaling hub
       return env.SIGNAL.get(id).fetch(request);
     }
+    if (url.pathname === '/turn') {
+      return turnCredentials(env);
+    }
     // Non-signaling paths: serve the static game assets (dist/).
     return env.ASSETS.fetch(request);
   }
 };
+
+// Mint short-lived TURN credentials (Cloudflare Realtime TURN) for the WebRTC
+// peers.  Direct P2P over public STUN cannot traverse symmetric-NAT/CGNAT pairs
+// (mobile, Starlink, many home routers), so a joiner never receives the host's
+// game-state and the aircraft list stays empty; a TURN relay is the fix.  The
+// client (web/index.html) POSTs /turn at load and feeds the returned iceServers
+// to BOTH the engine game channel (Module.ysfwIceServers, see yssocket) and the
+// pack channel (window.ysfwPackIce, see pack-net.js).
+//
+// Requires two Worker secrets:  wrangler secret put TURN_KEY_ID
+//                               wrangler secret put TURN_API_TOKEN
+// (the Realtime TURN key id and that key's API token).  When either is unset we
+// return 204 so the client cleanly falls back to STUN-only.
+async function turnCredentials(env) {
+  const keyId = env.TURN_KEY_ID;
+  const apiToken = env.TURN_API_TOKEN;
+  if (!keyId || !apiToken) return new Response(null, { status: 204 });
+  try {
+    const resp = await fetch(
+      'https://rtc.live.cloudflare.com/v1/turn/keys/' + keyId + '/credentials/generate-ice-servers',
+      {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + apiToken, 'Content-Type': 'application/json' },
+        // TTL comfortably exceeds a play session; creds are minted once per load.
+        body: JSON.stringify({ ttl: 86400 }),
+      },
+    );
+    if (!resp.ok) return new Response(null, { status: 502 });
+    const body = await resp.text(); // { "iceServers": [ {urls}, {urls,username,credential} ] }
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+    });
+  } catch (e) {
+    return new Response(null, { status: 502 });
+  }
+}
 
 export class SignalHub {
   constructor(state, env) {

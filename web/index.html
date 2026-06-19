@@ -286,6 +286,30 @@
     })()
   };
 
+  // TURN: fetch short-lived ICE servers (Cloudflare Realtime TURN, minted by the
+  // Worker's /turn endpoint) so peers behind symmetric NAT / CGNAT can relay when
+  // direct P2P fails — otherwise a cross-machine joiner never receives the host's
+  // game state and the aircraft list is empty.  Fired at load so the creds are
+  // ready before the user hosts/joins.  The engine game channel reads
+  // Module.ysfwIceServers (yssocket) and the pack channel reads window.ysfwPackIce
+  // (pack-net.js); both fall back to public STUN if /turn is unconfigured (204) or
+  // unreachable.  ?turn=0 forces STUN-only (to reproduce the no-TURN behaviour).
+  (function () {
+    if (new URLSearchParams(location.search).get('turn') === '0') return;
+    try {
+      fetch('/turn', { method: 'POST' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (d && Array.isArray(d.iceServers) && d.iceServers.length) {
+            Module.ysfwIceServers = d.iceServers;
+            window.ysfwPackIce = d.iceServers;
+            console.log('[turn] ICE relay ready (' + d.iceServers.length + ' server group(s))');
+          }
+        })
+        .catch(function () { /* STUN-only fallback */ });
+    } catch (e) {}
+  })();
+
   window.addEventListener('error', function (e) {
     if (!booted) statusEl.textContent = 'Error: ' + e.message;
   });

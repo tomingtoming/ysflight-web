@@ -144,8 +144,9 @@ standardマッピングのD-padはPOVハットとして扱われます。
 (画面右上に `Room: 12345678` の 8 桁数字を表示)、他の参加者は招待リンク
 (`?join=12345678`) を開いて名前を入力すれば自動参加、またはネットワーク→
 クライアントの「Room ID」欄に 8 桁を入力して参加。ゲームデータは WebRTC
-DataChannel の P2P で直結し、公開 STUN (Google) で NAT を越えます。ホストの
-ブラウザがサーバ権威です (web 版はチャット・ポート設定なし、P2P/Room ID のみ)。
+DataChannel の P2P で直結し、NAT 越えは Cloudflare Realtime TURN
+(STUN + 直結不可ペア向けの TURN リレー) を Worker の `/turn` から配信します。
+ホストのブラウザがサーバ権威です (web 版はチャット・ポート設定なし、P2P/Room ID のみ)。
 
 シグナリング (SDP/ICE 交換のみ。ゲームデータは流れない) は、サイト自身の
 `/signal` エンドポイント = **Cloudflare Worker + Durable Object**
@@ -155,11 +156,12 @@ DataChannel の P2P で直結し、公開 STUN (Google) で NAT を越えます�
 
 詳細は [docs/multiplayer.md](docs/multiplayer.md)。
 
-> **NAT 越え / 接続性**: 多くの家庭回線同士なら公開 STUN だけで直結します。両者が
-> ともにモバイル / CGNAT / 対称NAT (例: Starlink の IPv4) だと直結できず TURN 中継が
-> 必要ですが、TURN は意図的に未導入 (保留) です。メニューの接続バッジで自分側が直結
-> 可能かを事前確認できます。両者が IPv6 なら直結できることが多いです。導入時のコストは
-> [docs/multiplayer.md](docs/multiplayer.md) を参照。
+> **NAT 越え / 接続性**: 多くの家庭回線同士なら STUN だけで直結します。両者が
+> ともにモバイル / CGNAT / 対称NAT (例: Starlink の IPv4) で直結できない場合は
+> **Cloudflare Realtime TURN** リレー経由で接続します (Worker の `/turn` が短命
+> クレデンシャルを配信。未設定時は STUN 一本にフォールバック)。メニューの接続バッジで
+> 自分側が直結可能かを事前確認できます。両者が IPv6 なら直結できることが多いです。
+> 設定・コストは [docs/multiplayer.md](docs/multiplayer.md) を参照。
 
 ## 既知の制限 / Known limitations
 

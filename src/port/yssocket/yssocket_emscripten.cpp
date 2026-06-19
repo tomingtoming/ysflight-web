@@ -48,7 +48,17 @@ typedef struct sockaddr SOCKADDR;
 EM_JS(void, jsRtcInit, (), {
 	if (globalThis.ysfwRtc) return;
 	globalThis.ysfwRtc = {
-		cfg: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] },
+		// ICE servers for every game-channel RTCPeerConnection.  Read lazily at
+		// pc-creation time so the shell's /turn fetch (web/index.html sets
+		// Module.ysfwIceServers = Cloudflare Realtime TURN) is picked up even if it
+		// resolves slightly after jsRtcInit.  STUN-only cannot traverse symmetric
+		// NAT/CGNAT, so without a TURN relay a cross-machine join never receives the
+		// host's game state.  Falls back to public STUN when TURN is unconfigured.
+		iceServers: function () {
+			return (typeof Module !== 'undefined' && Module.ysfwIceServers && Module.ysfwIceServers.length)
+				? Module.ysfwIceServers
+				: [{ urls: 'stun:stun.l.google.com:19302' }];
+		},
 		signalUrl: function () {
 			return Module.ysfwSignalUrl ||
 				((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.hostname + ':7917');
@@ -156,7 +166,7 @@ EM_JS(int, jsHostStart, (int maxClients), {
 				if (!H.slots[i]) { slot = i; break; }
 			}
 			if (slot < 0) return;
-			var pc = new RTCPeerConnection(R.cfg);
+			var pc = new RTCPeerConnection({ iceServers: R.iceServers() });
 			var ch = pc.createDataChannel('ysf', { ordered: true });
 			ch.binaryType = 'arraybuffer';
 			var S = { pc: pc, ch: ch, open: false, closed: false, q: R.makeQueue(), iceQ: [], remoteSet: false };
@@ -280,8 +290,23 @@ EM_JS(void, jsHostStop, (), {
 EM_JS(void, jsCliConnect, (const char *roomPtr), {
 	var R = globalThis.ysfwRtc;
 	var room = UTF8ToString(roomPtr);
-	var C = { state: 0, q: R.makeQueue(), pending: [], pc: null, ch: null, ws: null, ping: null, iceQ: [], remoteSet: false };  // state: 0=connecting 1=open 2=closed
+	var C = { state: 0, q: R.makeQueue(), pending: [], pc: null, ch: null, ws: null, ping: null, iceQ: [], remoteSet: false, connectTimer: null };  // state: 0=connecting 1=open 2=closed
 	R.cli = C;
+
+	// Connection-establishment timeout.  With STUN-only (no TURN) a symmetric-NAT
+	// pair never completes ICE: the DataChannel onopen never fires and the engine
+	// would sit forever on an empty join (the host's LOGON/aircraft list never
+	// arrives).  Flip to closed so YSFLIGHT surfaces "connection closed by server"
+	// instead of a silent empty aircraft list.  Cleared on a successful onopen and
+	// on jsCliClose.
+	C.connectTimer = setTimeout(function () {
+		if (C.state === 0) {
+			C.state = 2;
+			R.overlay('ホストに接続できませんでした（NAT 越えに失敗した可能性）');
+			console.error('ysflight-web: WebRTC connection to host timed out — ICE did not complete ' +
+				'(symmetric NAT/CGNAT without TURN?).  Check the /turn relay or network connectivity.');
+		}
+	}, 20000);
 
 	if (R.mixedContent(R.signalUrl())) {
 		C.state = 2;
@@ -304,13 +329,14 @@ EM_JS(void, jsCliConnect, (const char *roomPtr), {
 		if (m.t === 'no-room') {
 			C.state = 2;
 		} else if (m.t === 'sdp') {
-			var pc = new RTCPeerConnection(R.cfg);
+			var pc = new RTCPeerConnection({ iceServers: R.iceServers() });
 			C.pc = pc;
 			pc.ondatachannel = function (e) {
 				var ch = e.channel;
 				ch.binaryType = 'arraybuffer';
 				C.ch = ch;
 				ch.onopen = function () {
+					if (C.connectTimer) { clearTimeout(C.connectTimer); C.connectTimer = null; }
 					C.state = 1;
 					for (var i = 0; i < C.pending.length; ++i) ch.send(C.pending[i]);
 					C.pending = [];
@@ -368,6 +394,7 @@ EM_JS(void, jsCliClose, (), {
 	var C = R && R.cli;
 	if (!C) return;
 	if (C.ping) { clearInterval(C.ping); C.ping = null; }
+	if (C.connectTimer) { clearTimeout(C.connectTimer); C.connectTimer = null; }
 	try { if (C.ch) C.ch.close(); } catch (e) {}
 	try { if (C.pc) C.pc.close(); } catch (e) {}
 	try { if (C.ws) C.ws.close(); } catch (e) {}
