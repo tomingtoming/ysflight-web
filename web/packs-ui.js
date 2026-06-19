@@ -16,6 +16,55 @@ import { installPack, setEnabled as pkSetEnabled, uninstall as pkUninstall } fro
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
 const ACCENT = '#4da3ff';
 
+// Shell UI locale.  Shares index.html's choice (window.ysfwLang); recomputed here
+// as a fallback so the module localizes even if loaded standalone (smoke test).
+const LANG = (typeof window !== 'undefined' && window.ysfwLang) || (function () {
+  try {
+    const l = String((new URLSearchParams(location.search).get('lang')) || navigator.language || 'en').toLowerCase();
+    return l.indexOf('ja') === 0 ? 'ja' : 'en';
+  } catch (e) { return 'en'; }
+})();
+const S = ({
+  ja: {
+    emptyList: '（追加パックなし — そのままプレイできます）',
+    enabled: '有効', disabled: '無効',
+    enableTitle: 'クリックで有効化', disableTitle: 'クリックで無効化',
+    errorPrefix: 'エラー: ',
+    uninstallTitle: 'アンインストール',
+    confirmDelete: (n) => '「' + n + '」を削除しますか？',
+    storage: (u, q, p) => '使用容量 ' + u + (q ? ' / ' + q : '') + ' ・ 永続化 ' + (p ? 'ON' : 'OFF'),
+    installing: '取り込み中: ',
+    notZip: '(.zip ではないのでスキップ)',
+    panelTitle: '追加パック',
+    dropZone: 'パック (.zip) をドロップ / クリックして選択',
+    playBtn: '▶ プレイ開始',
+    joinFailTitle: '⚠ 必須パックを取得できませんでした',
+    joinFailDesc: (names) => 'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
+      'を取得できませんでした。このまま参加すると正しく飛べません。再試行するか、ソロ（シングルプレイ）で開始してください。',
+    retryBtn: '↻ 再試行',
+    soloBtn: 'ソロでプレイ',
+  },
+  en: {
+    emptyList: '(No add-on packs — you can play as-is)',
+    enabled: 'On', disabled: 'Off',
+    enableTitle: 'Click to enable', disableTitle: 'Click to disable',
+    errorPrefix: 'Error: ',
+    uninstallTitle: 'Uninstall',
+    confirmDelete: (n) => 'Delete “' + n + '”?',
+    storage: (u, q, p) => 'Storage ' + u + (q ? ' / ' + q : '') + ' · Persisted ' + (p ? 'ON' : 'OFF'),
+    installing: 'Installing: ',
+    notZip: '(skipped: not a .zip)',
+    panelTitle: 'Add-on packs',
+    dropZone: 'Drop a pack (.zip) / click to choose',
+    playBtn: '▶ Play',
+    joinFailTitle: '⚠ Couldn’t obtain required packs',
+    joinFailDesc: (names) => 'Couldn’t obtain the host’s required field' + (names.length ? ' “' + names.join(', ') + '”' : '') +
+      '. Joining now would not fly correctly. Retry, or start in solo (single-player).',
+    retryBtn: '↻ Retry',
+    soloBtn: 'Play solo',
+  },
+})[LANG];
+
 let FS = null;
 let adapter = null;
 let listEl = null;
@@ -126,7 +175,7 @@ async function refresh() {
   listEl.innerHTML = '';
   if (packs.length === 0) {
     const empty = document.createElement('div');
-    empty.textContent = '（追加パックなし — そのままプレイできます）';
+    empty.textContent = S.emptyList;
     empty.style.cssText = 'color:#5d7290;font-size:13px;padding:6px 0';
     listEl.appendChild(empty);
   } else {
@@ -151,8 +200,8 @@ async function refresh() {
       const ctl = document.createElement('div');
       ctl.style.cssText = 'flex:none;display:flex;gap:6px;align-items:center';
       const toggle = document.createElement('button');
-      toggle.textContent = enabled ? '有効' : '無効';
-      toggle.title = enabled ? 'クリックで無効化' : 'クリックで有効化';
+      toggle.textContent = enabled ? S.enabled : S.disabled;
+      toggle.title = enabled ? S.disableTitle : S.enableTitle;
       toggle.style.cssText =
         'font-size:12px;padding:4px 9px;border-radius:5px;cursor:pointer;border:1px solid ' +
         (enabled
@@ -160,7 +209,7 @@ async function refresh() {
           : '#2a3647;background:#0d141d;color:#8fa3bb');
       const setErr = (e) => {
         const s = document.getElementById('ysfw-pack-status');
-        if (s) s.textContent = 'エラー: ' + (e && e.message ? e.message : e);
+        if (s) s.textContent = S.errorPrefix + (e && e.message ? e.message : e);
       };
       toggle.addEventListener('click', async () => {
         toggle.disabled = true;
@@ -172,11 +221,11 @@ async function refresh() {
       });
       const del = document.createElement('button');
       del.textContent = '🗑';
-      del.title = 'アンインストール';
+      del.title = S.uninstallTitle;
       del.style.cssText =
         'font-size:12px;padding:4px 8px;border-radius:5px;border:1px solid #2a3647;background:#0d141d;color:#c75d6a;cursor:pointer';
       del.addEventListener('click', async () => {
-        if (!self.confirm('「' + (p.name || p.id) + '」を削除しますか？')) return;
+        if (!self.confirm(S.confirmDelete(p.name || p.id))) return;
         del.disabled = true;
         try {
           await window.ysfwPacks.uninstall(p.id);
@@ -194,9 +243,7 @@ async function refresh() {
   }
   if (storageEl) {
     const s = await storageInfo();
-    storageEl.textContent =
-      '使用容量 ' + fmtBytes(s.usage) + (s.quota ? ' / ' + fmtBytes(s.quota) : '') +
-      ' ・ 永続化 ' + (s.persisted ? 'ON' : 'OFF');
+    storageEl.textContent = S.storage(fmtBytes(s.usage), s.quota ? fmtBytes(s.quota) : '', s.persisted);
   }
 }
 
@@ -243,19 +290,26 @@ function start() {
 
 async function handleFiles(fileList) {
   const status = document.getElementById('ysfw-pack-status');
+  // One result line per file, accumulated and each prefixed with the file name,
+  // so a BATCH upload makes clear WHICH file an error (e.g. "no YSFLIGHT list
+  // found") is about.  ✓ installed · ✗ failed · — skipped.
+  const lines = [];
+  const show = (pending) => { if (status) status.textContent = (pending ? lines.concat(pending) : lines).join('\n'); };
   for (const file of fileList) {
-    if (!/\.zip$/i.test(file.name)) continue;
+    if (!/\.zip$/i.test(file.name)) {
+      lines.push('— ' + file.name + ' ' + S.notZip);
+      show();
+      continue;
+    }
+    show(S.installing + file.name + ' …');
     try {
-      if (status) status.textContent = '取り込み中: ' + file.name + ' …';
       const bytes = new Uint8Array(await file.arrayBuffer());
       const res = await installFromBytes(bytes, file.name.replace(/\.zip$/i, ''));
-      if (status) {
-        status.textContent =
-          '追加: ' + res.name + '（' + res.categories.join('/') + '・' + res.templates + '件）';
-      }
+      lines.push('✓ ' + file.name + ' → ' + res.name + ' (' + res.categories.join('/') + ' · ' + res.templates + ')');
     } catch (e) {
-      if (status) status.textContent = 'エラー: ' + (e && e.message ? e.message : e);
+      lines.push('✗ ' + file.name + ': ' + (e && e.message ? e.message : e));
     }
+    show();
   }
 }
 
@@ -270,7 +324,7 @@ function renderPanel() {
     'border-radius:10px;padding:16px 16px 14px;text-align:left;box-shadow:0 8px 30px rgba(0,0,0,.4)';
 
   const title = document.createElement('div');
-  title.textContent = '追加パック';
+  title.textContent = S.panelTitle;
   title.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:10px';
   panel.appendChild(title);
 
@@ -283,7 +337,7 @@ function renderPanel() {
   drop.style.cssText =
     'display:block;margin-top:8px;padding:14px;border:1px dashed #2a3647;border-radius:8px;' +
     'color:#8fa3bb;font-size:13px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s';
-  drop.textContent = 'パック (.zip) をドロップ / クリックして選択';
+  drop.textContent = S.dropZone;
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.zip';
@@ -312,7 +366,7 @@ function renderPanel() {
 
   const status = document.createElement('div');
   status.id = 'ysfw-pack-status';
-  status.style.cssText = 'color:#8fa3bb;font-size:12px;min-height:1.2em;margin-top:8px';
+  status.style.cssText = 'color:#8fa3bb;font-size:12px;min-height:1.2em;margin-top:8px;white-space:pre-line;max-height:7.5em;overflow:auto';
   panel.appendChild(status);
 
   storageEl = document.createElement('div');
@@ -321,7 +375,7 @@ function renderPanel() {
 
   const playBtn = document.createElement('button');
   playBtn.id = 'ysfw-pack-play';
-  playBtn.textContent = '▶ プレイ開始';
+  playBtn.textContent = S.playBtn;
   playBtn.style.cssText =
     'margin-top:14px;width:100%;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';' +
     'color:#04101f;font-size:15px;font-weight:700;cursor:pointer';
@@ -355,16 +409,14 @@ function showJoinFailure(failed, handlers) {
     'border-radius:10px;padding:16px 16px 14px;text-align:left;box-shadow:0 8px 30px rgba(0,0,0,.4)';
 
   const title = document.createElement('div');
-  title.textContent = '⚠ 必須パックを取得できませんでした';
+  title.textContent = S.joinFailTitle;
   title.style.cssText = 'color:#f0c0c0;font-size:14px;font-weight:600;letter-spacing:.03em;margin-bottom:8px';
   panel.appendChild(title);
 
   const names = (failed || []).map((f) => f && (f.name || f.id)).filter(Boolean);
   const desc = document.createElement('div');
   desc.style.cssText = 'color:#cbb;font-size:12px;line-height:1.6;margin-bottom:12px';
-  desc.textContent =
-    'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
-    'を取得できませんでした。このまま参加すると正しく飛べません。再試行するか、ソロ（シングルプレイ）で開始してください。';
+  desc.textContent = S.joinFailDesc(names);
   panel.appendChild(desc);
 
   const row = document.createElement('div');
@@ -372,7 +424,7 @@ function showJoinFailure(failed, handlers) {
 
   const retryBtn = document.createElement('button');
   retryBtn.id = 'ysfw-join-retry';
-  retryBtn.textContent = '↻ 再試行';
+  retryBtn.textContent = S.retryBtn;
   retryBtn.style.cssText =
     'flex:1;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';color:#04101f;font-size:14px;font-weight:700;cursor:pointer';
   retryBtn.addEventListener('click', () => {
@@ -383,7 +435,7 @@ function showJoinFailure(failed, handlers) {
 
   const soloBtn = document.createElement('button');
   soloBtn.id = 'ysfw-join-solo';
-  soloBtn.textContent = 'ソロでプレイ';
+  soloBtn.textContent = S.soloBtn;
   soloBtn.style.cssText =
     'flex:1;padding:11px;border:1px solid #2a3647;border-radius:8px;background:#0d141d;color:#cfd8e3;font-size:14px;cursor:pointer';
   soloBtn.addEventListener('click', () => {
