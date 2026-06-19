@@ -470,11 +470,65 @@
     var q = new URLSearchParams(location.search);
     var joinRoom = q.get('join');
     var presetName = q.get('name');
+    var freeflight = q.get('freeflight');
 
     function startJoin(name) {
       var nm = (name && name.trim()) || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
       Module.arguments = Module.arguments.concat(['-client', nm, joinRoom]);
       loadEngine();
+    }
+
+    // Manual launch: let the user JOIN by typing a Room ID (no invite link).
+    // Submitting just navigates to /?join=<room>(&name=<name>), so the whole
+    // tested invite-link path runs verbatim — pre-boot pack sync holds the boot
+    // gate (preRun reads ysfwJoinRoom from the URL) and the engine boots -client.
+    // Reusing that path means no new join/gate logic and no preRun ordering hazard.
+    function renderManualJoinForm() {
+      if (document.getElementById('ysfw-manual-join')) return;
+      var wrap = document.createElement('div');
+      wrap.id = 'ysfw-manual-join';
+      wrap.style.cssText = 'margin-top:20px;display:flex;flex-direction:column;align-items:center;gap:8px';
+      var label = document.createElement('div');
+      label.style.cssText = 'font-size:14px;color:#cfd8e3';
+      label.textContent = 'Room ID で参加';
+      var inputCss = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
+      var roomIn = document.createElement('input');
+      roomIn.type = 'text';
+      roomIn.inputMode = 'numeric';
+      roomIn.maxLength = 14;
+      roomIn.placeholder = 'Room ID';
+      roomIn.style.cssText = inputCss;
+      var nameIn = document.createElement('input');
+      nameIn.type = 'text';
+      nameIn.maxLength = 200;
+      nameIn.placeholder = '名前（任意）';
+      nameIn.style.cssText = inputCss;
+      var err = document.createElement('div');
+      err.style.cssText = 'font-size:12px;color:#c75d6a;min-height:1em';
+      var btn = document.createElement('button');
+      btn.textContent = 'ルームに参加';
+      btn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
+      var go = function () {
+        var room = (roomIn.value || '').trim();
+        if (!room) { err.textContent = 'Room ID を入力してください'; return; }
+        // Keep within the signaling room-key limit (<=16) AND the derived pack
+        // room's base budget (base + "~p" <= 16, so base <= 14): see
+        // pack-net.js derivePackRoom and worker/signal.js.  Restrict the charset
+        // so a pasted invite URL or stray "~" can't desync the derived pack room.
+        if (!/^[A-Za-z0-9_-]{1,14}$/.test(room)) { err.textContent = 'Room ID は英数字・- ・_（14文字以内）で入力してください'; return; }
+        var name = (nameIn.value || '').trim();
+        location.href = location.origin + '/?join=' + encodeURIComponent(room) +
+          (name ? '&name=' + encodeURIComponent(name) : '');
+      };
+      btn.addEventListener('click', go);
+      roomIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+      nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+      wrap.appendChild(label);
+      wrap.appendChild(roomIn);
+      wrap.appendChild(nameIn);
+      wrap.appendChild(err);
+      wrap.appendChild(btn);
+      overlay.appendChild(wrap);
     }
 
     if (joinRoom && !presetName) {
@@ -501,6 +555,12 @@
     } else {
       if (joinRoom && presetName) {
         Module.arguments = Module.arguments.concat(['-client', presetName, joinRoom]);
+      } else if (!freeflight) {
+        // No invite link and not a freeflight deep-link: a deliberate manual
+        // launch.  Offer "join by Room ID" next to the pack panel; the engine
+        // still loads (for solo / hosting), but submitting the form navigates
+        // away to the invite-link join flow before main() matters.
+        renderManualJoinForm();
       }
       loadEngine();
     }
