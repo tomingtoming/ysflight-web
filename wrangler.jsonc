@@ -4,8 +4,13 @@
   // - Static game assets (dist/) are served by Workers Static Assets.
   // - worker/signal.js adds a tiny WebRTC signaling Worker at /signal, backed by
   //   a single Durable Object hub (SignalHub).  It replaces the old self-hosted
-  //   server/signal.mjs.  Game traffic stays P2P (WebRTC DataChannel, public
-  //   STUN); only SDP/ICE setup messages pass through here.
+  //   server/signal.mjs.  Game traffic stays P2P (WebRTC DataChannel); only
+  //   SDP/ICE setup messages pass through here.
+  // - /turn mints short-lived Cloudflare Realtime TURN credentials (STUN + a TURN
+  //   relay for NAT-blocked pairs).  It needs two secrets (NOT stored in this file):
+  //     wrangler secret put TURN_KEY_ID       (Realtime TURN key id)
+  //     wrangler secret put TURN_API_TOKEN    (that key's API token)
+  //   Unconfigured -> /turn returns 204 and clients fall back to STUN-only.
   //
   // The DO is declared as a SQLite-backed class (new_sqlite_classes), which is
   // available on the Workers Free plan.  It uses no storage (in-memory room

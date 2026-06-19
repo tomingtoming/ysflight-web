@@ -61,10 +61,16 @@ ICE・切断通知のみに使われる。
 
 ## NAT 越え / STUN・TURN
 
-- 既定の ICE 設定は公開 STUN (`stun:stun.l.google.com:19302`) のみ。
+- ICE 設定は Worker の `/turn` が配る **Cloudflare Realtime TURN** の iceServers
+  (STUN + TURN リレー)。`/turn` が未設定/到達不能なら公開 STUN
+  (`stun:stun.l.google.com:19302`) 一本にフォールバックする。
 - 多くの家庭回線 (cone NAT) 同士、または両者 IPv6 なら STUN だけで直結できる。
-- 両者がモバイル / CGNAT / 対称NAT (例: Starlink の IPv4) の場合は直結できず
-  **TURN** が必要になるが、**現状 TURN は未導入** (将来対応)。
+- 両者がモバイル / CGNAT / 対称NAT (例: Starlink の IPv4) で直結できない場合は
+  **TURN リレー経由**で接続する (直結できるペアは従来どおり P2P 直結のまま)。
+- ゲーム channel (`yssocket`) とパック同期 channel (`pack-net.js`) の両方に同じ
+  iceServers を流す。`web/index.html` が起動時に `/turn` を取得し、
+  `Module.ysfwIceServers` (engine) と `window.ysfwPackIce` (pack) にセットする。
+- `?turn=0` で STUN 一本に強制できる (TURN 無し時の挙動の再現用)。
 - 接続が中継 (relay) になったかは `RTCPeerConnection.getStats()` の選択候補ペアの
   `candidateType` で判定できる (将来 UI 表示予定)。
 
@@ -91,26 +97,29 @@ ICE・切断通知のみに使われる。
 web 版ではチャットとサーバポート設定は無効化されている (P2P / Room ID のみ)。
 互換性のため NET-VERSION は `20260617` に更新済み (旧来のネイティブ版とは接続不可)。
 
-### NAT 越えと TURN (現状: 保留)
+### NAT 越えと TURN (Cloudflare Realtime TURN)
 
-ゲーム接続は公開 STUN (Google) のみで TURN 中継は使っていない。多くの家庭回線
-同士なら STUN だけで直結する。両者がともに「対称NAT」(携帯回線 / CGNAT /
-Starlink の IPv4 など、宛先ごとに送信ポートが変わる型) の場合だけ直結できず、
-本来は TURN 中継が必要になる。メニューの接続バッジが「🟡 一部の相手と繋がらない
-かも」のときが自分側の対称NAT。
+直結できないペア (対称NAT / CGNAT / モバイル同士など) のフォールバックとして
+**Cloudflare Realtime TURN** を導入済み。直結できるペアは従来どおり P2P 直結で、
+TURN は繋がらないときだけ中継に使われる。メニューの接続バッジが「🟡 一部の相手と
+繋がらないかも」のときが自分側の対称NAT。
 
-TURN は意図的に保留している (公開 STUN マルチプレイに一本化)。導入する場合:
-
-- **実装**: WebRTC の iceServers に TURN を 1 つ足すだけ
-  (`src/port/yssocket/yssocket_emscripten.cpp` の `cfg.iceServers`)。例:
-  `{ urls: 'turn:HOST:3478', username: 'U', credential: 'P' }`。クレデンシャルは
-  短期トークン化が望ましい (恒久値の直書きは避ける)。
-- **運用/金銭**: TURN は実トラフィックを中継するため帯域課金が発生する。
-  (a) coturn を自前運用 (VPS 代＋帯域)、(b) マネージド (Cloudflare Calls TURN /
-  Twilio / metered.ca 等、GB 単価) のいずれか。P2P と違い「サーバ経由」になり
-  遅延・コストが増えるので、常用ではなく直結できないペアのフォールバックに限定する
-  のが定石。
-- **着手の目安**: 実際に「🟡 同士で繋がらない」事例が出てから。それまでは STUN 一本。
+- **配信**: Worker の `/turn` (`worker/signal.js`) が Cloudflare の
+  `POST /v1/turn/keys/{KEY_ID}/credentials/generate-ice-servers` を叩いて短命
+  (TTL 24h) の iceServers を返す。長期クレデンシャルは配らない。
+- **クライアント**: `web/index.html` が起動時に `/turn` を取得し、engine
+  (`Module.ysfwIceServers` → `yssocket` の `R.iceServers()`) とパック同期
+  (`window.ysfwPackIce` → `pack-net.js`) の両 channel に流す。
+- **セットアップ (要 Cloudflare アカウント設定)**:
+  1. ダッシュボード → Realtime → TURN で TURN key を作成し、KEY ID と API トークンを取得
+  2. Worker に secret を登録:
+     `wrangler secret put TURN_KEY_ID` / `wrangler secret put TURN_API_TOKEN`
+  3. 未設定時は `/turn` が 204 を返し、クライアントは自動で STUN 一本に戻る
+- **運用/金銭**: TURN は実トラフィックを中継するため帯域課金が発生する
+  (Cloudflare Realtime TURN の GB 単価)。直結できるペアは中継しないので、課金は
+  直結不可ペアのフォールバック分のみ。
+- **接続タイムアウト**: `jsCliConnect` は 20s で ICE 未確立なら接続失敗を可視化する
+  (旧来の「機体リスト空のまま無言ハング」を解消)。
 
 ### ローカル
 
@@ -125,8 +134,8 @@ localhost の ws:// を許可する)。
 
 ## 今後
 
-- **TURN 連携**: モバイル / CGNAT / 対称NAT 同士でも繋がるように。Cloudflare
-  Realtime TURN か coturn を外部に置き、Worker で短命クレデンシャルを発行する形
-  (静的な長期クレデンシャルは配らない)。
+- ~~**TURN 連携**~~ 導入済み: Cloudflare Realtime TURN を Worker の `/turn` から
+  短命クレデンシャルで配信し、直結できないペアのフォールバックにする。上の
+  「NAT 越えと TURN」を参照。
 - **接続診断**: 事前に STUN で直結可否を推定 (cone/symmetric・IPv6 有無)、接続後は
   `getStats()` で「直接 / 中継経由」をバッジ表示。
