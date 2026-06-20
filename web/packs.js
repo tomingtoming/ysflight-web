@@ -348,6 +348,15 @@ export async function analyzePack(zipBytes, opts) {
   const rawFiles = readArchive(zipBytes);
   if (rawFiles.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
 
+  // Reject path traversal on the ORIGINAL (pre-reroot) paths -- this MUST mirror
+  // analyzePackStreaming, which checks pre-reroot paths.  candidatePrefixes can
+  // strip a ".." wrapper dir, so checking only post-reroot paths would let a
+  // "../aircraft/..." pack through analyzePack while the streaming (UI) path
+  // rejects it: same bytes, opposite accept/reject.
+  for (const f of rawFiles) {
+    if (f.path.split('/').includes('..')) throw new Error(`unsafe path in pack: ${f.path}`);
+  }
+
   // Choose the re-rooting that exposes a usable list (wrapper folders + non-standard
   // list locations), rejecting packs whose references don't resolve.
   const layout = chooseLayout(rawFiles);
@@ -357,10 +366,9 @@ export async function analyzePack(zipBytes, opts) {
   const files = layout.files;
   const lists = layout.lists;
 
-  // Reject path traversal and enforce size limits before any storage.
+  // Enforce size limits before any storage.
   let total = 0;
   for (const f of files) {
-    if (f.path.split('/').includes('..')) throw new Error(`unsafe path in pack: ${f.path}`);
     if (f.bytes.length > maxFileBytes) throw new Error(`file exceeds ${maxFileBytes} bytes: ${f.path}`);
     total += f.bytes.length;
   }

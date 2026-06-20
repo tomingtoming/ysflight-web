@@ -322,14 +322,31 @@ async function installCore(bytes, name, sourceUrl) {
   // content-addressed in OPFS (on disk, deduped), then materialize it into the
   // engine FS -- payload into the MEMFS-mounted packs/ (excluded from IDBFS sync)
   // and the tiny generated lists into the IDBFS user dir.
-  const a = await analyzePackStreaming(buf, {
-    sha256: webSha256, putBlob: opfs.putBlob, name, sourceUrl, maxPackBytes: MAX_PACK_BYTES,
-  });
-  await opfs.putRecordFromAnalysis(a, { enabled: true });
-  await opfs.materialize(await opfs.getRecord(a.id), adapter);
-  // Keep the in-memory list in sync (sync section, no await -> safe vs. the
-  // concurrent bulk-import workers) so the panel never has to re-enumerate OPFS.
-  cacheUpsert({ id: a.id, name: a.name, enabled: true, bytes: a.total, categories: a.categories });
+  // maxFileBytes is forwarded = the whole-pack budget: with only maxPackBytes set,
+  // analyzePackStreaming falls back to its 64MB per-file default and would reject a
+  // sub-1.5GB pack that holds one large file (e.g. a big scenery .fld), contradicting
+  // the lifted pack budget.
+  let a = null, recordWritten = false;
+  try {
+    a = await analyzePackStreaming(buf, {
+      sha256: webSha256, putBlob: opfs.putBlob, name, sourceUrl,
+      maxPackBytes: MAX_PACK_BYTES, maxFileBytes: MAX_PACK_BYTES,
+    });
+    await opfs.putRecordFromAnalysis(a, { enabled: true });
+    recordWritten = true;
+    await opfs.materialize(await opfs.getRecord(a.id), adapter);
+    // Keep the in-memory list in sync (sync section, no await -> safe vs. the
+    // concurrent bulk-import workers) so the panel never has to re-enumerate OPFS.
+    cacheUpsert({ id: a.id, name: a.name, enabled: true, bytes: a.total, categories: a.categories });
+  } catch (e) {
+    // A failed import must leave NO record behind: materializeEnabled enumerates
+    // OPFS records at boot, so a record written before a materialize failure would
+    // resurrect as a phantom pack on the next reload.  Orphan payload blobs are
+    // reclaimed by the caller's gc() (reference-counted, so a blob shared with a
+    // sibling pack that DID install survives).
+    if (recordWritten && a) { try { await opfs.removeRecord(a.id); } catch (_) {} }
+    throw e;
+  }
   return {
     id: a.id, name: a.name, categories: a.categories, bytes: a.total,
     templates: a.generated.reduce((n, g) => n + g.entries, 0), lists: a.generated.map((g) => g.file),
@@ -340,7 +357,13 @@ async function installCore(bytes, name, sourceUrl) {
 // the syncfs + refresh itself.
 async function installFromBytes(bytes, name, sourceUrl) {
   if (!adapter) throw new Error('pack layer not ready');
-  const res = await installCore(bytes, name, sourceUrl);
+  let res;
+  try {
+    res = await installCore(bytes, name, sourceUrl);
+  } catch (e) {
+    try { await opfs.gc(); } catch (_) {} // reclaim blobs the rejected pack streamed in
+    throw e;
+  }
   await sync(); // persist the tiny lists (payload lives in OPFS + the MEMFS mount)
   await refresh();
   return res;
@@ -425,6 +448,13 @@ async function handleFiles(fileList) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(4, zips.length || 1) }, worker));
+
+  // Every rejected pack (chooseLayout miss, size cap, ...) streamed its payload
+  // blobs into OPFS before it threw; with rejection a DESIGNED, common outcome
+  // (~13 of the 223-pack corpus), reclaim those orphans in ONE reference-counted
+  // pass.  gc keeps blobs any installed pack still references, so it is safe to
+  // run after the whole batch; skip it entirely when nothing failed.
+  if (failed.length) { try { await opfs.gc(); } catch (_) {} }
 
   await sync(); // one IDBFS sync for the whole batch (not per pack)
   // Re-render the list ONCE, from the in-memory `cache` (which each installCore

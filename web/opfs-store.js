@@ -48,22 +48,37 @@ export async function hasBlob(hash) {
   } catch (e) { return false; }
 }
 
+// In-flight writes keyed by hash, so concurrent writers of the SAME hash in this
+// realm (the bulk import runs a worker pool, and YSFLIGHT packs share models) are
+// SERIALISED rather than racing on a half-written 0-byte file: the second caller
+// awaits the first and then re-checks, instead of seeing the first writer's
+// freshly-created-but-not-yet-flushed entry and mistaking it for a dedup hit.
+const inflight = new Map();
+
 // Returns true if the blob was newly written, false if it was already present
-// (the dedup signal).  Tolerant of a concurrent writer of the SAME hash (two
-// packs in a bulk import sharing a file): createWritable takes an exclusive lock,
-// so if it throws we re-check -- if the other writer produced the blob, that is a
-// dedup success, not an error.
+// (the dedup signal).
 export async function putBlob(hash, bytes) {
   assertOPFS();
+  // If another writer of this exact hash is mid-flight, wait for it to settle
+  // before deciding -- success means a real dedup hit; failure means we write.
+  const pending = inflight.get(hash);
+  if (pending) { try { await pending; } catch (e) { /* writer failed; we retry below */ } }
+
   if (await hasBlob(hash)) return false;
-  try {
+  const p = (async () => {
     const fh = await (await blobShard(await root(), hash, true)).getFileHandle(hash, { create: true });
     const w = await fh.createWritable();
     try { await w.write(bytes); } finally { await w.close(); }
+  })();
+  inflight.set(hash, p);
+  try {
+    await p;
     return true;
   } catch (e) {
-    if (await hasBlob(hash)) return false; // a concurrent writer won the race
+    if (await hasBlob(hash)) return false; // a concurrent writer (e.g. another tab) won
     throw e;
+  } finally {
+    if (inflight.get(hash) === p) inflight.delete(hash);
   }
 }
 
