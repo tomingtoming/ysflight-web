@@ -157,7 +157,7 @@
           ['矢印キー', '視点の向き'],
         ],
       },
-      touch: { fire: '発射', gear: 'ギア', thr: '推力', wsel: '武器切替', view: '視点', nudge: 'お試し版 — PC / タブレットだと全機能で快適です' },
+      touch: { fire: '発射', gear: 'ギア', thr: '推力', wsel: '武器切替', view: '視点', rudder: 'ラダー', flap: 'フラップ', radar: 'レーダー', ap: '自動操縦', nudge: 'お試し版 — PC / タブレットだと全機能で快適です' },
     },
     en: {
       note: 'Source & assets: ',
@@ -205,7 +205,7 @@
           ['Arrow keys', 'Look around'],
         ],
       },
-      touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust', wsel: 'Weapon', view: 'View', nudge: 'Taster — best with all controls on PC / tablet' },
+      touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust', wsel: 'Weapon', view: 'View', rudder: 'Rudder', flap: 'Flaps', radar: 'Radar', ap: 'A/P', nudge: 'Taster — best with all controls on PC / tablet' },
     },
   })[window.ysfwLang];
   document.documentElement.lang = window.ysfwLang;
@@ -868,8 +868,44 @@
 
     wrap.appendChild(thrLbl); wrap.appendChild(thrUp); wrap.appendChild(thrDn);
     wrap.appendChild(fire); wrap.appendChild(wsel); wrap.appendChild(view); wrap.appendChild(gear);
-    // TODO(tablet rails): when tier === 'tablet', also add rudder (Z/C, auto-center),
-    // flaps (R/F), radar (Digit3) and autopilot-menu (Backspace) along the edges.
+
+    // Tablet rail: the bigger screen has room for the fuller control set without
+    // covering the (larger) HUD, so add the controls a phone deliberately omits.
+    // Left, above view/gear = flaps (R/F, calm).  Right-top (empty in flight) =
+    // radar (Digit3) + autopilot-menu (Backspace).  Bottom inboard of the stick
+    // and right cluster = a rudder rocker (Z/C, held; taps KeyX to re-center on
+    // release, like the stick's auto-center).  The HUD's bottom-centre stays clear.
+    if (tier === 'tablet') {
+      var flapLbl = document.createElement('div');
+      flapLbl.textContent = T.flap;
+      flapLbl.style.cssText = 'position:absolute;left:14px;bottom:256px;width:130px;text-align:center;color:#8fa3bb;font-size:10px;pointer-events:none';
+      var flapUp = mkBtn('▲', 'position:absolute;left:14px;bottom:210px;width:60px;height:44px');
+      flapUp.addEventListener('touchstart', function (e) { e.preventDefault(); tap('KeyR'); wake(); }, { passive: false });
+      var flapDn = mkBtn('▼', 'position:absolute;left:84px;bottom:210px;width:60px;height:44px');
+      flapDn.addEventListener('touchstart', function (e) { e.preventDefault(); tap('KeyF'); wake(); }, { passive: false });
+
+      var radar = mkBtn(T.radar, 'position:absolute;right:14px;top:48px;width:88px;height:40px;font-size:12px');
+      radar.addEventListener('touchstart', function (e) { e.preventDefault(); tap('Digit3'); wake(); }, { passive: false });
+      var ap = mkBtn(T.ap, 'position:absolute;right:14px;top:96px;width:88px;height:40px;font-size:12px');
+      ap.addEventListener('touchstart', function (e) { e.preventDefault(); tap('Backspace'); wake(); }, { passive: false });
+
+      function rudderBind(btn, code) {
+        var iv = null;
+        btn.addEventListener('touchstart', function (e) { e.preventDefault(); tap(code); wake(); if (iv) clearInterval(iv); iv = setInterval(function () { tap(code); }, 120); }, { passive: false });
+        var stop = function () { if (iv) { clearInterval(iv); iv = null; } tap('KeyX'); }; // re-center
+        btn.addEventListener('touchend', stop); btn.addEventListener('touchcancel', stop);
+      }
+      var rudLbl = document.createElement('div');
+      rudLbl.textContent = T.rudder;
+      rudLbl.style.cssText = 'position:absolute;left:190px;bottom:62px;width:70px;text-align:center;color:#8fa3bb;font-size:10px;pointer-events:none';
+      var rudL = mkBtn('◀', 'position:absolute;left:190px;bottom:14px;width:70px;height:46px');
+      var rudR = mkBtn('▶', 'position:absolute;right:190px;bottom:14px;width:70px;height:46px');
+      rudderBind(rudL, 'KeyZ'); rudderBind(rudR, 'KeyC');
+
+      wrap.appendChild(flapLbl); wrap.appendChild(flapUp); wrap.appendChild(flapDn);
+      wrap.appendChild(radar); wrap.appendChild(ap);
+      wrap.appendChild(rudLbl); wrap.appendChild(rudL); wrap.appendChild(rudR);
+    }
 
     // Phone is a taster: the first time flight starts on a phone, nudge toward the
     // full experience on PC/tablet.  Shown once (localStorage), auto-dismisses.
