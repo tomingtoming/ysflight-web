@@ -536,6 +536,39 @@
     }, 800);
   })();
 
+  // Fullscreen via keyboard only (no on-screen control): F11 and Ctrl+Cmd+F
+  // toggle the documentElement in/out of fullscreen.  We fullscreen the
+  // documentElement (not just the canvas) so the overlay, Room chip and badge
+  // stay visible inside fullscreen.  The listener is on the CAPTURE phase so it
+  // beats the engine's SDL key handler; we only swallow these two combos and
+  // pass every other key through, so gameplay keys are untouched.  F11 has no
+  // default engine action and Ctrl+Cmd+F is not an engine binding, so claiming
+  // them here is safe.  Browsers grant fullscreen only from a user gesture — a
+  // keydown qualifies; preventDefault on F11 suppresses the browser's own native
+  // fullscreen so we don't double-toggle.  Where the Fullscreen API is
+  // unavailable (e.g. iOS Safari) the keys simply do nothing.
+  (function () {
+    var docEl = document.documentElement;
+    var req = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
+    var exit = document.exitFullscreen || document.webkitExitFullscreen;
+    function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement; }
+    if (!req || !exit) return;  // API unsupported -> keys are no-ops
+    function toggle() {
+      try {
+        if (fsElement()) exit.call(document);
+        else req.call(docEl);
+      } catch (e) {}
+    }
+    window.addEventListener('keydown', function (e) {
+      var isF11 = e.key === 'F11' || e.keyCode === 122;
+      var isCmdCtrlF = (e.key === 'f' || e.key === 'F' || e.keyCode === 70) && e.ctrlKey && e.metaKey;
+      if (!isF11 && !isCmdCtrlF) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();  // keep the engine's key handler from also seeing it
+      toggle();
+    }, true);
+  })();
+
   // Host-side pack advertising (M6): once this browser is hosting a game, start
   // the shell-owned pack host on the derived pack-room so joiners can pull the
   // host's enabled packs P2P before they boot.  Keyed on globalThis.ysfwRtc.host
