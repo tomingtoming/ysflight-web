@@ -110,17 +110,10 @@ export async function setEnabled(id, enabled) {
 
 // --- install / materialize / gc --------------------------------------------
 
-// Store an analyzed pack (the object analyzePack() returns): write its file blobs
-// content-addressed (dedup makes re-used files free) and a record carrying the
-// manifest, enabled flag, and the small generated-list text (so we can
-// materialize later without re-reading the archive).
-export async function storeAnalyzedPack(analysis, { enabled = true } = {}) {
-  assertOPFS();
-  const bytesByPath = new Map(analysis.files.map((f) => [f.path, f.bytes]));
-  let newBlobs = 0;
-  for (const h of analysis.hashed) {
-    if (await putBlob(h.sha256, bytesByPath.get(h.path))) newBlobs++;
-  }
+// A pack record from an analysis: the manifest essentials + enabled flag + the
+// small generated-list text (so we can materialize later without re-reading the
+// archive).  Blob storage is separate (streaming vs in-memory).
+function recordFromAnalysis(analysis, enabled) {
   const record = {
     id: analysis.id,
     name: analysis.name,
@@ -133,8 +126,30 @@ export async function storeAnalyzedPack(analysis, { enabled = true } = {}) {
     generated: analysis.generated.map((g) => ({ category: g.category, file: g.file, text: g.text, entries: g.entries })),
   };
   if (analysis.manifest && analysis.manifest.sourceUrl) record.sourceUrl = analysis.manifest.sourceUrl;
-  await putRecord(record);
-  return { id: record.id, newBlobs, files: record.files.length };
+  return record;
+}
+
+// Write the record for an analysis whose blobs are ALREADY stored -- the streaming
+// install path (analyzePackStreaming persists each blob via the injected putBlob
+// as it decompresses, so the whole archive is never held in memory).
+export async function putRecordFromAnalysis(analysis, { enabled = true } = {}) {
+  assertOPFS();
+  await putRecord(recordFromAnalysis(analysis, enabled));
+  return { id: analysis.id };
+}
+
+// Store an analyzed pack whose file BYTES are in memory (analysis.files[].bytes):
+// write its blobs content-addressed (dedup makes re-used files free), then the
+// record.  Used by tests / non-streaming callers; the live install streams.
+export async function storeAnalyzedPack(analysis, { enabled = true } = {}) {
+  assertOPFS();
+  const bytesByPath = new Map(analysis.files.map((f) => [f.path, f.bytes]));
+  let newBlobs = 0;
+  for (const h of analysis.hashed) {
+    if (await putBlob(h.sha256, bytesByPath.get(h.path))) newBlobs++;
+  }
+  await putRecord(recordFromAnalysis(analysis, enabled));
+  return { id: analysis.id, newBlobs, files: analysis.hashed.length };
 }
 
 // Materialize a stored pack into the engine FS at the paths its generated lists

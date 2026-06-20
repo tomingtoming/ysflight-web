@@ -11,7 +11,7 @@
 // held).  The smoke test (scripts/smoke-pack.mjs) drives window.ysfwPacks
 // directly.  Install/list only here; enable-disable + uninstall land in M3.
 
-import { analyzePack } from './packs.js';
+import { analyzePackStreaming } from './packs.js';
 import * as opfs from './opfs-store.js';
 
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
@@ -265,8 +265,10 @@ async function installFromBytes(bytes, name, sourceUrl) {
   // (on disk, deduped), then materialize it into the engine FS -- payload into the
   // MEMFS-mounted packs/ (excluded from IDBFS sync) and the tiny generated lists
   // into the IDBFS user dir.  sourceUrl is kept for Option-B re-advertising.
-  const a = await analyzePack(buf, { sha256: webSha256, name, sourceUrl, maxPackBytes: MAX_PACK_BYTES });
-  await opfs.storeAnalyzedPack(a, { enabled: true });
+  const a = await analyzePackStreaming(buf, {
+    sha256: webSha256, putBlob: opfs.putBlob, name, sourceUrl, maxPackBytes: MAX_PACK_BYTES,
+  });
+  await opfs.putRecordFromAnalysis(a, { enabled: true });
   await opfs.materialize(await opfs.getRecord(a.id), adapter);
   await sync(); // persist the tiny lists (payload lives in OPFS + the MEMFS mount)
   await refresh();
