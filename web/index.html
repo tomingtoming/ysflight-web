@@ -135,6 +135,26 @@
       inviteNameLabel: function (room) { return 'Room ' + room + ' に参加 — 名前を入力'; },
       inviteJoinBtn: '参加する',
       syncError: '(同期エラー)',
+      help: {
+        title: '操作 / Controls',
+        toggleTitle: '操作ガイド（? キーで開閉）',
+        openHint: '? 操作',
+        close: '閉じる',
+        intro: 'ジョイスティック未接続なら マウスが操縦桿 です。',
+        rows: [
+          ['マウス移動', '操縦桿（上下＝ピッチ / 左右＝ロール）'],
+          ['左クリック / Space', '武器発射'],
+          ['Q / A', 'スロットル ＋ / −'],
+          ['Z / X / C', 'ラダー 左 / 中央 / 右'],
+          ['Tab', 'アフターバーナー'],
+          ['G', '降着装置（ギア）'],
+          ['B', 'スポイラー＆ブレーキ'],
+          ['R / F', 'フラップ 上げ / 下げ'],
+          ['F1〜F4', '視点（コックピット / 外部 / 相手機 / 兵装）'],
+          ['ホイール', 'ズーム'],
+          ['矢印キー', '視点の向き'],
+        ],
+      },
     },
     en: {
       note: 'Source & assets: ',
@@ -160,6 +180,26 @@
       inviteNameLabel: function (room) { return 'Joining Room ' + room + ' — enter your name'; },
       inviteJoinBtn: 'Join',
       syncError: '(sync error)',
+      help: {
+        title: 'Controls',
+        toggleTitle: 'Controls guide (press ? to toggle)',
+        openHint: '? Help',
+        close: 'Close',
+        intro: 'With no joystick, your mouse is the control stick.',
+        rows: [
+          ['Move mouse', 'Control stick (up/down = pitch, left/right = roll)'],
+          ['Left click / Space', 'Fire weapon'],
+          ['Q / A', 'Throttle + / −'],
+          ['Z / X / C', 'Rudder left / center / right'],
+          ['Tab', 'Afterburner'],
+          ['G', 'Landing gear'],
+          ['B', 'Spoiler & brake'],
+          ['R / F', 'Flaps up / down'],
+          ['F1–F4', 'View (cockpit / outside / target / weapon)'],
+          ['Wheel', 'Zoom'],
+          ['Arrow keys', 'Look around'],
+        ],
+      },
     },
   })[window.ysfwLang];
   document.documentElement.lang = window.ysfwLang;
@@ -192,7 +232,10 @@
       var ff = q.get('freeflight');
       if (ff) {
         var p = ff.split(',');
-        a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH3000');
+        // Default start position: NORTH10000_01 is an airborne start that exists in
+        // every bundled field's .stp (verified).  The old default 'NORTH3000' is in
+        // NO .stp, so a bare ?freeflight=AIRCRAFT silently failed to spawn.
+        a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH10000_01');
       }
       return a;
     })(),
@@ -583,6 +626,77 @@
       e.preventDefault();
       e.stopImmediatePropagation();  // keep the engine's key handler from also seeing it
       toggle();
+    }, true);
+  })();
+
+  // ---- Controls legend overlay ---------------------------------------------
+  // A floating "?" button (always visible) and the "?" key toggle a panel that
+  // lists the DEFAULT controls.  Critical for onboarding: with no joystick the
+  // engine falls back to MOUSE-as-stick (VerifyAndFixJoystickAxisAssignment in
+  // fscontrol.cpp), which is non-obvious.  Pure DOM, engine-agnostic.  The key
+  // listener is on the CAPTURE phase so it beats the engine's SDL handler, and it
+  // ignores keystrokes typed into form fields (Room ID / name / pack URL).
+  (function () {
+    var H = TXT.help;
+    var panel = null, open = false;
+    function build() {
+      if (panel) return panel;
+      panel = document.createElement('div');
+      panel.id = 'ysfw-help';
+      panel.style.cssText = 'position:fixed;inset:0;z-index:100000;display:none;align-items:center;justify-content:center;background:rgba(4,8,14,.62)';
+      var card = document.createElement('div');
+      card.style.cssText = 'max-height:84vh;overflow:auto;width:min(440px,90vw);background:#0b121b;border:1px solid #1d2633;border-radius:10px;padding:18px 18px 14px;box-shadow:0 8px 30px rgba(0,0,0,.5)';
+      var h = document.createElement('div');
+      h.textContent = H.title;
+      h.style.cssText = 'color:#e6edf3;font-size:15px;font-weight:700;letter-spacing:.04em;margin-bottom:6px';
+      card.appendChild(h);
+      var intro = document.createElement('div');
+      intro.textContent = H.intro;
+      intro.style.cssText = 'color:#9db4d0;font-size:12.5px;margin-bottom:12px';
+      card.appendChild(intro);
+      H.rows.forEach(function (r) {
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:12px;padding:5px 0;border-bottom:1px solid #141d28';
+        var k = document.createElement('div');
+        k.textContent = r[0];
+        k.style.cssText = 'flex:0 0 38%;color:#cfe0f5;font:13px/1.4 monospace';
+        var a = document.createElement('div');
+        a.textContent = r[1];
+        a.style.cssText = 'flex:1;color:#9fb2c8;font-size:13px';
+        row.appendChild(k); row.appendChild(a); card.appendChild(row);
+      });
+      var close = document.createElement('button');
+      close.textContent = H.close;
+      close.style.cssText = 'margin-top:14px;width:100%;padding:9px;border:0;border-radius:8px;background:#1b2735;color:#cfd8e3;font-size:13px;cursor:pointer';
+      close.onclick = function () { toggle(false); };
+      card.appendChild(close);
+      panel.appendChild(card);
+      panel.addEventListener('click', function (e) { if (e.target === panel) toggle(false); });
+      document.body.appendChild(panel);
+      return panel;
+    }
+    function toggle(force) {
+      open = (typeof force === 'boolean') ? force : !open;
+      build().style.display = open ? 'flex' : 'none';
+    }
+    // Floating "?" button so touch / no-keyboard users can open it too.  Bottom-left
+    // to stay clear of the top-right connection badge / Room chip.
+    var btn = document.createElement('button');
+    btn.id = 'ysfw-help-btn';
+    btn.textContent = H.openHint;
+    btn.title = H.toggleTitle;
+    btn.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
+    btn.onclick = function () { toggle(); };
+    document.body.appendChild(btn);
+    function typing() {
+      var el = document.activeElement;
+      if (!el) return false;
+      var t = (el.tagName || '').toLowerCase();
+      return t === 'input' || t === 'textarea' || t === 'select' || el.isContentEditable;
+    }
+    window.addEventListener('keydown', function (e) {
+      if (e.key === '?' && !typing()) { e.preventDefault(); e.stopImmediatePropagation(); toggle(); }
+      else if (e.key === 'Escape' && open) { e.preventDefault(); e.stopImmediatePropagation(); toggle(false); }
     }, true);
   })();
 

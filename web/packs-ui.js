@@ -43,6 +43,13 @@ const S = ({
     bulkDone: (ok, fail) => '✓ ' + ok + ' 件取り込み' + (fail ? '  ／  ⚠ ' + fail + ' 件失敗（下記）' : ''),
     notZip: '(.zip ではないのでスキップ)',
     panelTitle: '追加パック',
+    quickTitle: '🛫 今すぐ飛ぶ',
+    quickHint: 'クリックでそのまま離陸（追加パック不要）',
+    urlAdd: 'URL から追加',
+    urlPlaceholder: 'パック .zip の URL',
+    urlBtn: '追加',
+    urlFetching: 'URL から取得中…',
+    urlFail: '直接取得できませんでした（CORS 等）。zip をDLしてドロップしてください',
     dropZone: 'パック (.zip) をドロップ / クリックして選択',
     playBtn: '▶ プレイ開始',
     joinFailTitle: '⚠ 必須パックを取得できませんでした',
@@ -64,6 +71,13 @@ const S = ({
     bulkDone: (ok, fail) => '✓ ' + ok + ' imported' + (fail ? '  /  ⚠ ' + fail + ' failed (below)' : ''),
     notZip: '(skipped: not a .zip)',
     panelTitle: 'Add-on packs',
+    quickTitle: '🛫 Quick flight',
+    quickHint: 'Click to take off right away (no add-on needed)',
+    urlAdd: 'Add from URL',
+    urlPlaceholder: 'URL of a pack .zip',
+    urlBtn: 'Add',
+    urlFetching: 'Fetching from URL…',
+    urlFail: 'Could not fetch directly (CORS etc.). Download the zip and drop it here',
     dropZone: 'Drop a pack (.zip) / click to choose',
     playBtn: '▶ Play',
     joinFailTitle: '⚠ Couldn’t obtain required packs',
@@ -476,6 +490,48 @@ function renderPanel() {
     'margin-top:22px;width:min(460px,86vw);background:#0b121b;border:1px solid #1d2633;' +
     'border-radius:10px;padding:16px 16px 14px;text-align:left;box-shadow:0 8px 30px rgba(0,0,0,.4)';
 
+  // Quick Flight: one-click presets that deep-link into ?freeflight=AIRCRAFT,FIELD,
+  // STARTPOS.  Every triple is VERIFIED to ship in the base bundle (so it works
+  // offline on first load) and to reference a real .stp start position.  The most
+  // prominent thing in the panel -- a new player flies immediately, no install.
+  const quickWrap = document.createElement('div');
+  quickWrap.style.cssText = 'margin-bottom:14px';
+  const qTitle = document.createElement('div');
+  qTitle.textContent = S.quickTitle;
+  qTitle.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:2px';
+  quickWrap.appendChild(qTitle);
+  const qHint = document.createElement('div');
+  qHint.textContent = S.quickHint;
+  qHint.style.cssText = 'color:#5d7290;font-size:11px;margin-bottom:8px';
+  quickWrap.appendChild(qHint);
+  const qGrid = document.createElement('div');
+  qGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
+  const PRESETS = [
+    { name: 'Cessna 172', sub: 'Small Map', ff: 'CESSNA_172R,SMALL_MAP,RW36_01' },
+    { name: 'F/A-18 Hornet', sub: '厚木 / Atsugi', ff: 'F-18C_HORNET,ATSUGI_AIRBASE,RW01_01' },
+    { name: 'F-15J Eagle', sub: 'Hawaii ✈ 空中', ff: 'F-15J_EAGLE,HAWAII,NORTH10000_01' },
+    { name: 'Boeing 747', sub: 'Heathrow', ff: 'B747,HEATHROW,RW27R' },
+  ];
+  const curLang = new URLSearchParams(location.search).get('lang');
+  for (const p of PRESETS) {
+    const card = document.createElement('button');
+    card.style.cssText = 'text-align:left;padding:9px 11px;border:1px solid #243244;border-radius:8px;background:#0d141d;cursor:pointer';
+    const nm = document.createElement('div');
+    nm.textContent = '▶ ' + p.name;
+    nm.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600';
+    const sub = document.createElement('div');
+    sub.textContent = p.sub;
+    sub.style.cssText = 'color:#8fa3bb;font-size:11px;margin-top:1px';
+    card.appendChild(nm);
+    card.appendChild(sub);
+    card.addEventListener('click', () => {
+      location.assign(location.origin + location.pathname + '?freeflight=' + p.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
+    });
+    qGrid.appendChild(card);
+  }
+  quickWrap.appendChild(qGrid);
+  panel.appendChild(quickWrap);
+
   const title = document.createElement('div');
   title.textContent = S.panelTitle;
   title.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:10px';
@@ -519,6 +575,43 @@ function renderPanel() {
     if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
   });
   panel.appendChild(drop);
+
+  // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
+  // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
+  // URL is recorded as sourceUrl so a host can later re-advertise it (Option B).
+  const urlRow = document.createElement('div');
+  urlRow.style.cssText = 'display:flex;gap:6px;margin-top:8px';
+  const urlIn = document.createElement('input');
+  urlIn.type = 'url';
+  urlIn.placeholder = S.urlPlaceholder;
+  urlIn.style.cssText = 'flex:1;min-width:0;padding:8px 10px;border:1px solid #2a3647;border-radius:6px;background:#0d141d;color:#e6edf3;font-size:12px';
+  const urlBtn = document.createElement('button');
+  urlBtn.textContent = S.urlBtn;
+  urlBtn.title = S.urlAdd;
+  urlBtn.style.cssText = 'flex:none;padding:8px 14px;border:1px solid ' + ACCENT + ';border-radius:6px;background:rgba(77,163,255,.12);color:' + ACCENT + ';font-size:12px;cursor:pointer';
+  const doUrl = async () => {
+    const url = urlIn.value.trim();
+    if (!url) return;
+    urlBtn.disabled = true;
+    if (status) status.textContent = S.urlFetching;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const name = (url.split('?')[0].split('/').pop() || 'pack').replace(/\.zip$/i, '') || 'pack';
+      await installFromBytes(bytes, name, url); // does sync + refresh; records sourceUrl
+      urlIn.value = '';
+    } catch (e) {
+      if (status) status.textContent = S.urlFail + ': ' + url;
+    } finally {
+      urlBtn.disabled = false;
+    }
+  };
+  urlBtn.addEventListener('click', doUrl);
+  urlIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doUrl(); } });
+  urlRow.appendChild(urlIn);
+  urlRow.appendChild(urlBtn);
+  panel.appendChild(urlRow);
 
   const status = document.createElement('div');
   status.id = 'ysfw-pack-status';
