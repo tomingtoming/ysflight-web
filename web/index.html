@@ -140,6 +140,8 @@
         toggleTitle: '操作ガイド（? キーで開閉）',
         openHint: '? 操作',
         close: '閉じる',
+        fsOpen: '⛶ 全画面',
+        fsTitle: '全画面切替（F11 / ⌃⌘F）',
         intro: 'ジョイスティック未接続なら マウスが操縦桿 です。',
         rows: [
           ['マウス移動', '操縦桿（上下＝ピッチ / 左右＝ロール）'],
@@ -185,6 +187,8 @@
         toggleTitle: 'Controls guide (press ? to toggle)',
         openHint: '? Help',
         close: 'Close',
+        fsOpen: '⛶ Fullscreen',
+        fsTitle: 'Toggle fullscreen (F11 / ⌃⌘F)',
         intro: 'With no joystick, your mouse is the control stick.',
         rows: [
           ['Move mouse', 'Control stick (up/down = pitch, left/right = roll)'],
@@ -627,6 +631,15 @@
       e.stopImmediatePropagation();  // keep the engine's key handler from also seeing it
       toggle();
     }, true);
+    // On-screen button so touch / no-keyboard users can toggle too.  Bottom-RIGHT
+    // mirrors the controls-legend button (bottom-left) with the same 8px margin.
+    var fsBtn = document.createElement('button');
+    fsBtn.id = 'ysfw-fs-btn';
+    fsBtn.textContent = TXT.help.fsOpen;
+    fsBtn.title = TXT.help.fsTitle;
+    fsBtn.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
+    fsBtn.onclick = function () { toggle(); };
+    document.body.appendChild(fsBtn);
   })();
 
   // ---- Controls legend overlay ---------------------------------------------
