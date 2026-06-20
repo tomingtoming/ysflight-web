@@ -2668,3 +2668,42 @@ export function unzipSync(data, opts) {
     }
     return files;
 }
+// --- ysflight-web local addition (MIT, same as fflate) -----------------------
+// Streaming variant of unzipSync: decompress ONE entry at a time and `await
+// onEntry(name, bytes)` for it, so the caller (the OPFS content-addressed pack
+// store) can hash + persist + free each file without ever holding the whole
+// decompressed archive in memory.  Mirrors unzipSync's central-directory parse
+// (ZIP64 included); only the per-entry handling differs.
+export async function unzipEachAsync(data, onEntry) {
+    var e = data.length - 22;
+    for (; b4(data, e) != 0x6054B50; --e) {
+        if (!e || data.length - e > 65558)
+            err(13);
+    }
+    var c = b2(data, e + 8);
+    if (!c)
+        return;
+    var o = b4(data, e + 16);
+    var z = o == 4294967295 || c == 65535;
+    if (z) {
+        var ze = b4(data, e - 12);
+        z = b4(data, ze) == 0x6064B50;
+        if (z) {
+            c = b4(data, ze + 32);
+            o = b4(data, ze + 48);
+        }
+    }
+    for (var i = 0; i < c; ++i) {
+        var _a = zh(data, o, z), c_2 = _a[0], sc = _a[1], su = _a[2], fn = _a[3], no = _a[4], off = _a[5], b = slzh(data, off);
+        o = no;
+        var bytes = void 0;
+        if (!c_2)
+            bytes = slc(data, b, b + sc);
+        else if (c_2 == 8)
+            bytes = inflateSync(data.subarray(b, b + sc), { out: new u8(su) });
+        else
+            err(14, 'unknown compression type ' + c_2);
+        await onEntry(fn, bytes);
+        bytes = null;
+    }
+}

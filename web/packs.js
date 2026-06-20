@@ -36,7 +36,7 @@
 //   rename(from, to)        -> move (creates dest parent)
 //   rmrf(path)              -> recursive remove, no error if absent
 
-import { unzipSync } from './vendor/fflate.js';
+import { unzipSync, unzipEachAsync } from './vendor/fflate.js';
 
 // The three list globs YSFLIGHT scans from each root, and how each list's lines
 // are shaped.  'files' = every token is a file path (aircraft, ground).
@@ -82,6 +82,11 @@ function listFilesForCategory(id, categoryKey) {
 }
 
 const listRe = (c) => new RegExp(`^${c.dir}/${c.prefix}[^/]*\\.lst$`, 'i');
+// Same lists but at ANY depth -- used by the streaming path to decide which file
+// contents to keep before the wrapper prefix is known (a wrapped list at
+// "<wrapper>/aircraft/air*.lst" must be retained so it becomes a root list after
+// detectStripPrefix re-roots it).
+const listAnywhereRe = /(^|\/)(aircraft\/air|scenery\/sce|ground\/gro)[^/]*\.lst$/i;
 
 function join(...parts) {
   return parts.filter((p) => p !== '' && p != null).join('/').replace(/\/{2,}/g, '/');
@@ -252,6 +257,29 @@ function buildGeneratedLists(lists, resolve, id) {
   return generated;
 }
 
+// Real-world community packs are usually zipped inside one (sometimes nested)
+// wrapper directory, so the YSFLIGHT lists sit at "<wrapper>/aircraft/air*.lst"
+// instead of the root the engine globs.  If there is no root-level list but the
+// whole archive shares a single top-level directory whose removal exposes one,
+// return the prefix to strip (peels single- AND multi-level *single* wrappers).
+// Conservative on purpose: only one common top dir per level -- multi-folder
+// archives and non-standard list locations are left for a later pass.  `paths`
+// must already exclude archive cruft (__MACOSX, ._*, dir entries).
+function detectStripPrefix(paths) {
+  const hasRootList = (ps) => ps.some((p) => CATEGORIES.some((c) => listRe(c).test(p)));
+  let prefix = '';
+  let cur = paths;
+  for (let depth = 0; depth < 8; depth++) {
+    if (hasRootList(cur)) return prefix;
+    const tops = new Set(cur.map((p) => { const i = p.indexOf('/'); return i < 0 ? '' : p.slice(0, i); }));
+    if (tops.size !== 1 || tops.has('')) return ''; // not a single wrapper at this level
+    const top = [...tops][0] + '/';
+    prefix += top;
+    cur = cur.map((p) => p.slice(top.length));
+  }
+  return '';
+}
+
 // Analyze a pack archive WITHOUT touching any filesystem: unzip, validate,
 // content-hash every file, derive the (Merkle-ish) pack id, and build the
 // regenerated lists.  This is the pure core shared by installPack (writes the
@@ -275,6 +303,11 @@ export async function analyzePack(zipBytes, opts) {
 
   const files = readArchive(zipBytes);
   if (files.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
+
+  // Strip a common wrapper directory so a "<wrapper>/aircraft/air*.lst" pack
+  // installs as if its lists were at the root.
+  const strip = detectStripPrefix(files.map((f) => f.path));
+  if (strip) for (const f of files) f.path = f.path.slice(strip.length);
 
   // Reject path traversal and enforce size limits before any storage.
   let total = 0;
@@ -319,6 +352,75 @@ export async function analyzePack(zipBytes, opts) {
   if (sourceUrl) manifest.sourceUrl = sourceUrl;
 
   return { id, name: packName, categories: manifest.categories, total, files, hashed, generated, manifest, source, now };
+}
+
+// Streaming analyze: decompress + hash + persist ONE file at a time so the whole
+// decompressed archive is never held in memory (the fix for the install-time
+// memory peak on the largest packs).  `putBlob(sha256hex, bytes)` is injected by
+// the OPFS store and persists each file's content-addressed blob; this keeps only
+// per-file metadata + the tiny .lst contents.  Produces the SAME id, blobs, and
+// generated lists as analyzePack (verified), so a pack is identical either way.
+// Returns the analyzePack shape minus the in-memory `files` bytes.
+export async function analyzePackStreaming(zipBytes, opts) {
+  const {
+    sha256,
+    putBlob,
+    name,
+    source = 'user-supplied',
+    sourceUrl,
+    now = Date.now(),
+    maxFileBytes = 64 * 1024 * 1024,
+    maxPackBytes = 256 * 1024 * 1024,
+  } = opts;
+  if (!sha256 || !putBlob) throw new Error('analyzePackStreaming requires { sha256, putBlob }');
+  const buf = zipBytes instanceof Uint8Array ? zipBytes : new Uint8Array(zipBytes);
+
+  const hashed = [];          // {path, size, sha256} for every payload file
+  const listEntries = [];     // {path, bytes} for the .lst files only (kept for list generation)
+  let total = 0;
+  await unzipEachAsync(buf, async (rawPath, bytes) => {
+    if (isCruft(rawPath)) return;
+    const path = normPath(rawPath);
+    if (!path || path.endsWith('/')) return;
+    if (path.split('/').includes('..')) throw new Error(`unsafe path in pack: ${path}`);
+    if (bytes.length > maxFileBytes) throw new Error(`file exceeds ${maxFileBytes} bytes: ${path}`);
+    total += bytes.length;
+    if (total > maxPackBytes) throw new Error(`pack exceeds ${maxPackBytes} bytes (${total})`);
+    const sha = await sha256(bytes);
+    await putBlob(sha, bytes);                 // persist content-addressed; bytes freed after this entry
+    hashed.push({ path, size: bytes.length, sha256: sha });
+    if (listAnywhereRe.test(path)) listEntries.push({ path, bytes }); // keep lists at any depth (pre-reroot)
+  });
+  if (hashed.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
+
+  // Strip a common wrapper directory (see detectStripPrefix).  Blobs are already
+  // stored content-addressed by hash, so only the path metadata is rewritten.
+  const strip = detectStripPrefix(hashed.map((h) => h.path));
+  if (strip) {
+    for (const h of hashed) h.path = h.path.slice(strip.length);
+    for (const le of listEntries) le.path = le.path.slice(strip.length);
+  }
+
+  const lists = findLists(listEntries);
+  if (lists.length === 0) {
+    throw new Error('no YSFLIGHT list found (expected aircraft/air*.lst, scenery/sce*.lst, or ground/gro*.lst)');
+  }
+  hashed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const id = (await sha256(strToBytes(hashed.map((h) => `${h.path}\0${h.sha256}`).join('\n')))).slice(0, 16);
+
+  const resolve = buildResolver(hashed); // buildResolver only reads .path
+  const generated = buildGeneratedLists(lists, resolve, id);
+  if (generated.length === 0) throw new Error('pack lists contained no usable entries');
+
+  const packName = name || deriveName(lists);
+  const manifest = {
+    schema: 1, id, name: packName, source, installedAt: now,
+    categories: generated.map((g) => g.category), bytes: total, files: hashed,
+    lists: generated.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
+  };
+  if (sourceUrl) manifest.sourceUrl = sourceUrl;
+
+  return { id, name: packName, categories: manifest.categories, total, hashed, generated, manifest, source, now };
 }
 
 // Install a pack archive into the user dir via the adapter.  Idempotent:
@@ -428,4 +530,5 @@ export const _internals = {
   findLists,
   deriveName,
   buildGeneratedLists,
+  detectStripPrefix,
 };
