@@ -826,11 +826,14 @@
       return b;
     }
     // Throttle (hold to repeat Q/A) on the right, above fire/gear.
-    var thrUp = mkBtn('▲', 'position:absolute;right:96px;bottom:96px;width:52px;height:48px');
-    var thrDn = mkBtn('▼', 'position:absolute;right:96px;bottom:14px;width:52px;height:48px');
+    // NOTE: the right-bottom corner (right:8,bottom:8) is occupied by the always-on
+    // fullscreen button (#ysfw-fs-btn).  Keep every right-side control at bottom>=54
+    // so nothing overlaps it.
+    var thrUp = mkBtn('▲', 'position:absolute;right:96px;bottom:122px;width:52px;height:48px');
+    var thrDn = mkBtn('▼', 'position:absolute;right:96px;bottom:54px;width:52px;height:48px');
     var thrLbl = document.createElement('div');
     thrLbl.textContent = T.thr;
-    thrLbl.style.cssText = 'position:absolute;right:96px;bottom:66px;width:52px;text-align:center;color:#8fa3bb;font-size:10px;pointer-events:none';
+    thrLbl.style.cssText = 'position:absolute;right:96px;bottom:106px;width:52px;text-align:center;color:#8fa3bb;font-size:10px;pointer-events:none';
     function holdRepeat(btn, code) {
       var iv = null;
       btn.addEventListener('touchstart', function (e) { e.preventDefault(); tap(code); wake(); if (iv) clearInterval(iv); iv = setInterval(function () { tap(code); }, 130); }, { passive: false });
@@ -839,11 +842,11 @@
     }
     holdRepeat(thrUp, 'KeyQ'); holdRepeat(thrDn, 'KeyA');
     // Fire (hold) + gear (tap).
-    var fire = mkBtn(T.fire, 'position:absolute;right:14px;bottom:78px;width:72px;height:60px;background:rgba(199,93,106,.35);border-color:rgba(199,93,106,.8)');
+    var fire = mkBtn(T.fire, 'position:absolute;right:14px;bottom:54px;width:72px;height:60px;background:rgba(199,93,106,.35);border-color:rgba(199,93,106,.8)');
     fire.addEventListener('touchstart', function (e) { e.preventDefault(); key('Space', true); wake(); }, { passive: false });
     fire.addEventListener('touchend', function () { key('Space', false); });
     fire.addEventListener('touchcancel', function () { key('Space', false); });
-    var gear = mkBtn(T.gear, 'position:absolute;right:14px;bottom:14px;width:72px;height:52px');
+    var gear = mkBtn(T.gear, 'position:absolute;right:14px;bottom:122px;width:72px;height:52px');
     gear.addEventListener('touchstart', function (e) { e.preventDefault(); tap('KeyG'); wake(); }, { passive: false });
     wrap.appendChild(thrLbl); wrap.appendChild(thrUp); wrap.appendChild(thrDn); wrap.appendChild(fire); wrap.appendChild(gear);
 
