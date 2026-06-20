@@ -222,6 +222,17 @@
           var freeflight = q.get('freeflight');
           Module.__ysfwUserDir = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
           try { FS.mkdirTree(Module.__ysfwUserDir); } catch (e) {}
+          // Path A pack storage: payload lives in OPFS (on disk, deduped).  Mount
+          // MEMFS on the user dir's packs/ so materialized payload is ephemeral and
+          // is NOT written to IndexedDB by the periodic syncfs.  Then materialize
+          // every enabled pack from OPFS before main()'s template scan, gated by a
+          // run dependency so the engine waits for the payload to be in place.
+          try { FS.mkdirTree(Module.__ysfwUserDir + '/packs'); } catch (e) {}
+          try { FS.mount(FS.filesystems.MEMFS, {}, Module.__ysfwUserDir + '/packs'); } catch (e) {}
+          Module.addRunDependency('ysfw-materialize');
+          Promise.resolve(window.ysfwPacks && window.ysfwPacks.materializeEnabled && window.ysfwPacks.materializeEnabled())
+            .catch(function (e) { console.warn('[packs] pre-boot materialize: ' + (e && e.message ? e.message : e)); })
+            .then(function () { Module.removeRunDependency('ysfw-materialize'); });
           if (joinRoom) {
             // M6/M7: hold the gate and OBTAIN the host's enabled packs before
             // main() — Option B (self-fetch each pack's advertised URL) with a
