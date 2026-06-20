@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { installPack, setEnabled, uninstall, _internals } from '../web/packs.js';
+import { installPack, setEnabled, uninstall, analyzePack, analyzePackStreaming, _internals } from '../web/packs.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = readFileSync(join(here, 'fixtures', 'testpack.zip'));
@@ -223,4 +223,72 @@ test('ground line: every token rewritten case-insensitively', () => {
   const out = _internals.rewriteFilesLine('Ground/Tower.dat Ground/Tower.srf Ground/Tower.srf', resolve, 'packs/p');
   assert.equal(out.line, 'packs/p/ground/tower.dat packs/p/ground/tower.srf packs/p/ground/tower.srf');
   assert.equal(out.missing, 0);
+});
+
+// --- analyzePack / analyzePackStreaming parity -------------------------------
+// The live UI installs via analyzePackStreaming (packs-ui.js installCore); the
+// node corpus regression and installPack use analyzePack.  They are two separate
+// implementations sharing chooseLayout/buildGeneratedLists, so a future edit could
+// silently desync the content-addressed pack-id between them -- which would break
+// OPFS dedup, multiplayer manifest matching, and idempotent re-install.  These
+// tests pin them together.
+
+const E = (s) => new TextEncoder().encode(s);
+function memPutBlob() {
+  const blobs = new Map();
+  return async (hash, bytes) => { if (blobs.has(hash)) return false; blobs.set(hash, bytes); return true; };
+}
+async function assertParity(label, zip) {
+  const p = await analyzePack(zip, { sha256, name: label, now: 1700000000000 });
+  const s = await analyzePackStreaming(zip, { sha256, putBlob: memPutBlob(), name: label, now: 1700000000000 });
+  assert.equal(s.id, p.id, `${label}: same content-addressed id`);
+  assert.deepEqual(s.categories, p.categories, `${label}: same categories`);
+  assert.deepEqual(s.hashed.map((h) => h.path), p.hashed.map((h) => h.path), `${label}: same (rerooted) paths`);
+  assert.equal(s.total, p.total, `${label}: same total bytes`);
+  assert.deepEqual(
+    s.generated.map((g) => [g.category, g.file, g.text]),
+    p.generated.map((g) => [g.category, g.file, g.text]),
+    `${label}: same generated lists`,
+  );
+}
+
+test('analyzePack and analyzePackStreaming produce identical results (parity)', async () => {
+  const { zipSync } = await import('../web/vendor/fflate.js');
+  // the real community fixture (wrapper-ish layout, wrong-case refs, CRLF, cruft)
+  await assertParity('testpack.zip', FIXTURE);
+  // standard aircraft layout
+  await assertParity('standard', zipSync({
+    'aircraft/air_x.lst': E('aircraft/x.dnm aircraft/x.srf aircraft/x.dat\n'),
+    'aircraft/x.dnm': E('DNM'), 'aircraft/x.srf': E('SRF'), 'aircraft/x.dat': E('DAT'),
+  }));
+  // single wrapper folder (Phase 1 reroot)
+  await assertParity('wrapper', zipSync({
+    'MyPack/aircraft/air_x.lst': E('aircraft/x.dnm aircraft/x.srf aircraft/x.dat\n'),
+    'MyPack/aircraft/x.dnm': E('DNM'), 'MyPack/aircraft/x.srf': E('SRF'), 'MyPack/aircraft/x.dat': E('DAT'),
+  }));
+  // non-standard list location detected by filename (Phase 2 reroot + resolution gate)
+  await assertParity('nonstd-list', zipSync({
+    'air_x.lst': E('x.dnm x.srf x.dat\n'),
+    'x.dnm': E('DNM'), 'x.srf': E('SRF'), 'x.dat': E('DAT'),
+  }));
+});
+
+test('both analyze paths reject a ".." wrapper identically (traversal parity)', async () => {
+  const { zipSync } = await import('../web/vendor/fflate.js');
+  // Every file sits under a ".." top dir.  candidatePrefixes can strip that wrapper,
+  // so a check on POST-reroot paths alone (the old analyzePack behaviour) accepted
+  // this while the streaming UI path rejected it -- same bytes, opposite outcome.
+  const zip = zipSync({
+    '../aircraft/air_x.lst': E('aircraft/x.dnm aircraft/x.srf aircraft/x.dat\n'),
+    '../aircraft/x.dnm': E('DNM'), '../aircraft/x.srf': E('SRF'), '../aircraft/x.dat': E('DAT'),
+  });
+  await assert.rejects(() => analyzePack(zip, { sha256, name: 'dotdot' }), /unsafe path/);
+  await assert.rejects(() => analyzePackStreaming(zip, { sha256, putBlob: memPutBlob(), name: 'dotdot' }), /unsafe path/);
+});
+
+test('both analyze paths reject a no-list archive identically', async () => {
+  const { zipSync } = await import('../web/vendor/fflate.js');
+  const zip = zipSync({ 'readme.txt': E('hello') });
+  await assert.rejects(() => analyzePack(zip, { sha256, name: 'x' }), /no YSFLIGHT list/);
+  await assert.rejects(() => analyzePackStreaming(zip, { sha256, putBlob: memPutBlob(), name: 'x' }), /no YSFLIGHT list/);
 });
