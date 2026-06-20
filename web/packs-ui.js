@@ -11,10 +11,15 @@
 // held).  The smoke test (scripts/smoke-pack.mjs) drives window.ysfwPacks
 // directly.  Install/list only here; enable-disable + uninstall land in M3.
 
-import { installPack, setEnabled as pkSetEnabled, uninstall as pkUninstall } from './packs.js';
+import { analyzePack } from './packs.js';
+import * as opfs from './opfs-store.js';
 
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
 const ACCENT = '#4da3ff';
+// Payload lives in OPFS (on disk), so the old MEMFS-bound 256MB cap is lifted.
+// NOTE: install still unzips the whole archive in memory (fflate unzipSync); a
+// streaming unzip is a follow-up before the very largest (~1GB) packs are smooth.
+const MAX_PACK_BYTES = 1536 * 1024 * 1024;
 
 // Shell UI locale.  Shares index.html's choice (window.ysfwLang); recomputed here
 // as a fallback so the module localizes even if loaded standalone (smoke test).
@@ -133,11 +138,13 @@ function makeFsAdapter(fs, root) {
   };
 }
 
+// The installed-pack index now lives in OPFS (the content-addressed store is the
+// source of truth); map its records to the shape the panel + pack-net expect.
 async function readIndex() {
   try {
-    const raw = await adapter.readFile('packs/index.json');
-    const arr = JSON.parse(new TextDecoder().decode(raw));
-    return Array.isArray(arr) ? arr : [];
+    return (await opfs.listRecords()).map((r) => ({
+      id: r.id, name: r.name, enabled: r.enabled !== false, bytes: r.bytes, categories: r.categories,
+    }));
   } catch (e) {
     return [];
   }
@@ -254,28 +261,43 @@ async function sync() {
 async function installFromBytes(bytes, name, sourceUrl) {
   if (!adapter) throw new Error('pack layer not ready');
   const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  // sourceUrl (optional): records where the pack came from so a HOST can
-  // re-advertise that URL and let joiners self-fetch it (Option B, M7).
-  const res = await installPack(buf, { fs: adapter, sha256: webSha256, name, sourceUrl });
-  await sync();
+  // Path A: analyze (no FS writes), store the payload content-addressed in OPFS
+  // (on disk, deduped), then materialize it into the engine FS -- payload into the
+  // MEMFS-mounted packs/ (excluded from IDBFS sync) and the tiny generated lists
+  // into the IDBFS user dir.  sourceUrl is kept for Option-B re-advertising.
+  const a = await analyzePack(buf, { sha256: webSha256, name, sourceUrl, maxPackBytes: MAX_PACK_BYTES });
+  await opfs.storeAnalyzedPack(a, { enabled: true });
+  await opfs.materialize(await opfs.getRecord(a.id), adapter);
+  await sync(); // persist the tiny lists (payload lives in OPFS + the MEMFS mount)
   await refresh();
-  return res;
+  return {
+    id: a.id, name: a.name, categories: a.categories, bytes: a.total,
+    templates: a.generated.reduce((n, g) => n + g.entries, 0), lists: a.generated.map((g) => g.file),
+  };
 }
 
 async function setEnabled(id, enabled) {
   if (!adapter) throw new Error('pack layer not ready');
-  const res = await pkSetEnabled(id, enabled, { fs: adapter });
+  const rec = await opfs.setEnabled(id, enabled);
+  if (enabled) await opfs.materialize(rec, adapter);              // write payload + generated lists
+  else for (const g of rec.generated) await adapter.rmrf(g.file); // drop lists -> engine won't scan it
   await sync();
   await refresh();
-  return res;
+  return { id, enabled: !!enabled };
 }
 
 async function uninstall(id) {
   if (!adapter) throw new Error('pack layer not ready');
-  const res = await pkUninstall(id, { fs: adapter });
+  const rec = await opfs.getRecord(id);
+  if (rec) {
+    for (const g of rec.generated) await adapter.rmrf(g.file); // remove generated lists (IDBFS)
+    await adapter.rmrf('packs/' + id);                          // remove materialized payload (MEMFS)
+    await opfs.removeRecord(id);
+    await opfs.gc();                                            // reclaim now-unreferenced blobs
+  }
   await sync();
   await refresh();
-  return res;
+  return { id, removed: true };
 }
 
 function start() {
@@ -450,12 +472,36 @@ function showJoinFailure(failed, handlers) {
   overlay.appendChild(panel);
 }
 
+// Bind the FS adapter.  Called early in preRun (before the launch-mode logic) so
+// materializeEnabled() and installs have a working adapter regardless of mode.
+function setupFS() {
+  const M = window.Module;
+  if (!M || !M.FS) return false;
+  if (!adapter) {
+    FS = M.FS;
+    adapter = makeFsAdapter(FS, M.__ysfwUserDir || USER_DIR_DEFAULT);
+  }
+  window.ysfwPacks.fsReady = true;
+  return true;
+}
+
+// Materialize every ENABLED pack from OPFS into the engine FS before the engine's
+// one-time template scan: payload into the MEMFS-mounted packs/ (ephemeral,
+// regenerated each boot from OPFS) and the tiny generated lists into the IDBFS
+// user dir.  index.html holds a run dependency across this so main() does not scan
+// until the packs are in place.
+async function materializeEnabled() {
+  if (!adapter && !setupFS()) return;
+  for (const rec of await opfs.listRecords()) {
+    if (rec.enabled === false) continue;
+    try { await opfs.materialize(rec, adapter); }
+    catch (e) { console.warn('[packs] materialize failed for ' + rec.id + ': ' + (e && e.message ? e.message : e)); }
+  }
+}
+
 function init() {
   const M = window.Module;
-  if (!M || !M.FS) return;
-  FS = M.FS;
-  adapter = makeFsAdapter(FS, M.__ysfwUserDir || USER_DIR_DEFAULT);
-  window.ysfwPacks.fsReady = true;
+  if (!setupFS()) return;
   // Graft the management panel only for a deliberate manual launch.  ?freeflight
   // boots straight in (no gate); ?join holds the gate too (M6) but drives the
   // pre-boot pack sync via pack-net instead of the panel.
@@ -475,6 +521,8 @@ window.ysfwPacks = {
   start,
   refresh,
   showJoinFailure,
+  setupFS,
+  materializeEnabled,
 };
 window.ysfwPacksInit = init;
 

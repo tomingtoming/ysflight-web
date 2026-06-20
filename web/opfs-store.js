@@ -138,12 +138,13 @@ export async function storeAnalyzedPack(analysis, { enabled = true } = {}) {
 }
 
 // Materialize a stored pack into the engine FS at the paths its generated lists
-// reference: copy each file's blob to packs/<id>/<path> and write the generated
-// lists into the scanned dirs.  `fsAdapter` is the packs.js-style adapter
-// (mkdirp/writeFile) rooted at the YSFLIGHT user dir.  `enabledOnly` writes the
-// generated lists only when the pack is enabled (a disabled pack's payload may
-// still be materialized, but the engine won't scan it).
-export async function materialize(record, fsAdapter, { withLists = true } = {}) {
+// reference: copy each file's blob to packs/<id>/<path> (the MEMFS-mounted,
+// IDBFS-excluded payload area) and -- when the pack is enabled -- write the
+// generated lists into the scanned dirs so the engine's glob finds them.  A
+// disabled pack's payload may still be materialized, but with no list the engine
+// does not scan it.  `fsAdapter` is the packs.js-style adapter rooted at the
+// YSFLIGHT user dir; `withLists` defaults to the record's enabled flag.
+export async function materialize(record, fsAdapter, { withLists = record.enabled !== false } = {}) {
   assertOPFS();
   for (const f of record.files) {
     const dest = 'packs/' + record.id + '/' + f.path;
