@@ -30,7 +30,13 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    /* `safe` so that when the content (e.g. a tall pack panel) is taller than the
+       viewport it falls back to top-alignment and the overflow stays scrollable
+       instead of being clipped off the top of a centered flex container. */
+    justify-content: safe center;
+    overflow-y: auto;
+    padding: 16px 0;
+    box-sizing: border-box;
     background: #0a0e14;
     color: #cfd8e3;
     font-family: system-ui, sans-serif;
