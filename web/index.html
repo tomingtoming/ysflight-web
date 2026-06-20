@@ -617,6 +617,19 @@
     var exit = document.exitFullscreen || document.webkitExitFullscreen;
     function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement; }
     if (!req || !exit) return;  // API unsupported -> keys are no-ops
+    // Keyboard Lock (Chromium): YSFLIGHT uses Esc for menus / leaving a flight, but
+    // the browser reserves Esc to exit fullscreen.  While fullscreen, lock Esc so it
+    // reaches the engine instead; the browser then exits fullscreen only on a LONG
+    // Esc press.  No-op where unsupported (Firefox / Safari) -> there Esc still drops
+    // fullscreen, an unavoidable browser default.  Lock on enter, release on exit.
+    var kb = navigator.keyboard;
+    function syncEscLock() {
+      if (!kb || !kb.lock) return;
+      if (fsElement()) { kb.lock(['Escape']).catch(function () {}); }
+      else { try { kb.unlock(); } catch (e) {} }
+    }
+    document.addEventListener('fullscreenchange', syncEscLock);
+    document.addEventListener('webkitfullscreenchange', syncEscLock);
     function toggle() {
       try {
         if (fsElement()) exit.call(document);
@@ -624,6 +637,12 @@
       } catch (e) {}
     }
     window.addEventListener('keydown', function (e) {
+      // While fullscreen, stop Esc from dropping fullscreen so the engine can use it.
+      // Only preventDefault — never stopPropagation — so the engine's own key handler
+      // still receives the Esc.  Pairs with the Keyboard Lock above; long-press Esc
+      // still exits fullscreen.  (On browsers without Keyboard Lock, preventDefault
+      // does not block the fullscreen-exit, so Esc there still leaves fullscreen.)
+      if (fsElement() && (e.key === 'Escape' || e.keyCode === 27)) { e.preventDefault(); return; }
       var isF11 = e.key === 'F11' || e.keyCode === 122;
       var isCmdCtrlF = (e.key === 'f' || e.key === 'F' || e.keyCode === 70) && e.ctrlKey && e.metaKey;
       if (!isF11 && !isCmdCtrlF) return;
