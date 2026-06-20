@@ -82,11 +82,12 @@ function listFilesForCategory(id, categoryKey) {
 }
 
 const listRe = (c) => new RegExp(`^${c.dir}/${c.prefix}[^/]*\\.lst$`, 'i');
-// Same lists but at ANY depth -- used by the streaming path to decide which file
-// contents to keep before the wrapper prefix is known (a wrapped list at
-// "<wrapper>/aircraft/air*.lst" must be retained so it becomes a root list after
-// detectStripPrefix re-roots it).
-const listAnywhereRe = /(^|\/)(aircraft\/air|scenery\/sce|ground\/gro)[^/]*\.lst$/i;
+// A YSFLIGHT list by FILENAME (air*/sce*/gro*.lst), regardless of directory --
+// real packs put lists in aircraft/scenery/ground/, but also in air/, User/doc/,
+// or the wrapper root.  Used to keep a candidate list's bytes during streaming
+// (before the re-root is chosen) and to detect lists in non-standard locations.
+const listFnameRe = /^(air|sce|gro)[^/]*\.lst$/i;
+const baseOf = (p) => p.slice(p.lastIndexOf('/') + 1);
 
 function join(...parts) {
   return parts.filter((p) => p !== '' && p != null).join('/').replace(/\/{2,}/g, '/');
@@ -202,16 +203,21 @@ export function readArchive(zipBytes) {
   return files;
 }
 
-// Locate the list files the engine scans, with their decoded text.
+// Locate the list files the engine scans (or that we can re-root to one), with
+// their decoded text.  STANDARD lists live in aircraft/scenery/ground/ (std:true,
+// trusted as-is); packs also ship lists elsewhere (air/, User/doc/, the wrapper
+// root), detected by the air*/sce*/gro*.lst filename (std:false) and gated on
+// reference resolution by the caller so a mislaid/dependency pack is not accepted.
 export function findLists(files) {
   const lists = [];
   for (const f of files) {
-    for (const c of CATEGORIES) {
-      if (listRe(c).test(f.path)) {
-        lists.push({ category: c, path: f.path, text: strFromBytes(f.bytes) });
-        break;
-      }
+    let category = null, std = false;
+    for (const c of CATEGORIES) if (listRe(c).test(f.path)) { category = c; std = true; break; }
+    if (!category) {
+      const base = baseOf(f.path);
+      if (listFnameRe.test(base)) for (const c of CATEGORIES) if (base.toLowerCase().startsWith(c.prefix)) { category = c; break; }
     }
+    if (category) lists.push({ category, std, path: f.path, text: strFromBytes(f.bytes) });
   }
   return lists;
 }
@@ -257,27 +263,65 @@ function buildGeneratedLists(lists, resolve, id) {
   return generated;
 }
 
-// Real-world community packs are usually zipped inside one (sometimes nested)
-// wrapper directory, so the YSFLIGHT lists sit at "<wrapper>/aircraft/air*.lst"
-// instead of the root the engine globs.  If there is no root-level list but the
-// whole archive shares a single top-level directory whose removal exposes one,
-// return the prefix to strip (peels single- AND multi-level *single* wrappers).
-// Conservative on purpose: only one common top dir per level -- multi-folder
-// archives and non-standard list locations are left for a later pass.  `paths`
-// must already exclude archive cruft (__MACOSX, ._*, dir entries).
-function detectStripPrefix(paths) {
-  const hasRootList = (ps) => ps.some((p) => CATEGORIES.some((c) => listRe(c).test(p)));
-  let prefix = '';
-  let cur = paths;
+// Re-root candidates: the original layout plus each level of a SINGLE common
+// wrapper directory peeled off (real packs are zipped inside one, sometimes
+// nested, wrapper dir).  Stops at a multi-folder level or a category dir (never
+// peels aircraft/scenery/ground/).  `paths` must exclude archive cruft.
+function candidatePrefixes(paths) {
+  const out = [''];
+  let prefix = '', cur = paths;
   for (let depth = 0; depth < 8; depth++) {
-    if (hasRootList(cur)) return prefix;
     const tops = new Set(cur.map((p) => { const i = p.indexOf('/'); return i < 0 ? '' : p.slice(0, i); }));
-    if (tops.size !== 1 || tops.has('')) return ''; // not a single wrapper at this level
-    const top = [...tops][0] + '/';
-    prefix += top;
-    cur = cur.map((p) => p.slice(top.length));
+    if (tops.size !== 1 || tops.has('')) break;
+    const top = [...tops][0];
+    if (CATEGORIES.some((c) => c.dir.toLowerCase() === top.toLowerCase())) break;
+    prefix += top + '/';
+    cur = cur.map((p) => p.slice(top.length + 1));
+    out.push(prefix);
   }
-  return '';
+  return out;
+}
+
+// How many of a candidate layout's list references actually exist in the archive
+// (id-independent).  A pack whose references don't resolve would "install" broken.
+function listResolution(lists, files) {
+  const resolve = buildResolver(files);
+  let refs = 0, res = 0;
+  for (const l of lists) {
+    for (const rawLine of l.text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#') || line.startsWith('REM ')) continue;
+      const rw = l.category.kind === 'field'
+        ? rewriteFieldLine(line, resolve, '')
+        : rewriteFilesLine(line, resolve, '');
+      if (!rw || rw.tokens < 3) continue;
+      refs += rw.resolved + rw.missing;
+      res += rw.resolved;
+    }
+  }
+  return { refs, rate: refs ? res / refs : 0 };
+}
+
+// Pick the re-rooting that exposes a usable YSFLIGHT list.  A STANDARD list (in a
+// category dir) is trusted as-is -- preserving the historical behaviour for the
+// packs that already install.  A list found only by FILENAME (non-standard
+// location) is accepted only when its references resolve (>= 50%), so a missing-
+// dependency or mislaid pack is rejected rather than installed broken.  Returns
+// { prefix, files, lists } or null.  `files` is [{path, bytes?}] (bytes only read
+// for the list files themselves).
+function chooseLayout(files) {
+  let best = null;
+  for (const prefix of candidatePrefixes(files.map((f) => f.path))) {
+    const rf = prefix ? files.map((f) => ({ path: f.path.slice(prefix.length), bytes: f.bytes })) : files;
+    const lists = findLists(rf);
+    if (lists.length === 0) continue;
+    const std = lists.some((l) => l.std);
+    const rate = listResolution(lists, rf).rate;
+    if (!(std || rate >= 0.5)) continue;
+    const score = (std ? 2 : 0) + rate;
+    if (!best || score > best.score) best = { prefix, files: rf, lists, score };
+  }
+  return best;
 }
 
 // Analyze a pack archive WITHOUT touching any filesystem: unzip, validate,
@@ -301,13 +345,17 @@ export async function analyzePack(zipBytes, opts) {
   } = opts;
   if (!sha256) throw new Error('analyzePack requires { sha256 }');
 
-  const files = readArchive(zipBytes);
-  if (files.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
+  const rawFiles = readArchive(zipBytes);
+  if (rawFiles.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
 
-  // Strip a common wrapper directory so a "<wrapper>/aircraft/air*.lst" pack
-  // installs as if its lists were at the root.
-  const strip = detectStripPrefix(files.map((f) => f.path));
-  if (strip) for (const f of files) f.path = f.path.slice(strip.length);
+  // Choose the re-rooting that exposes a usable list (wrapper folders + non-standard
+  // list locations), rejecting packs whose references don't resolve.
+  const layout = chooseLayout(rawFiles);
+  if (!layout) {
+    throw new Error('no YSFLIGHT list found (expected aircraft/air*.lst, scenery/sce*.lst, or ground/gro*.lst)');
+  }
+  const files = layout.files;
+  const lists = layout.lists;
 
   // Reject path traversal and enforce size limits before any storage.
   let total = 0;
@@ -317,11 +365,6 @@ export async function analyzePack(zipBytes, opts) {
     total += f.bytes.length;
   }
   if (total > maxPackBytes) throw new Error(`pack exceeds ${maxPackBytes} bytes (${total})`);
-
-  const lists = findLists(files);
-  if (lists.length === 0) {
-    throw new Error('no YSFLIGHT list found (expected aircraft/air*.lst, scenery/sce*.lst, or ground/gro*.lst)');
-  }
 
   // Per-file hashes (sorted) -> a stable Merkle-ish pack id.
   const hashed = [];
@@ -389,22 +432,20 @@ export async function analyzePackStreaming(zipBytes, opts) {
     const sha = await sha256(bytes);
     await putBlob(sha, bytes);                 // persist content-addressed; bytes freed after this entry
     hashed.push({ path, size: bytes.length, sha256: sha });
-    if (listAnywhereRe.test(path)) listEntries.push({ path, bytes }); // keep lists at any depth (pre-reroot)
+    if (listFnameRe.test(baseOf(path))) listEntries.push({ path, bytes }); // keep any list by filename (pre-reroot)
   });
   if (hashed.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
 
-  // Strip a common wrapper directory (see detectStripPrefix).  Blobs are already
-  // stored content-addressed by hash, so only the path metadata is rewritten.
-  const strip = detectStripPrefix(hashed.map((h) => h.path));
-  if (strip) {
-    for (const h of hashed) h.path = h.path.slice(strip.length);
-    for (const le of listEntries) le.path = le.path.slice(strip.length);
-  }
-
-  const lists = findLists(listEntries);
-  if (lists.length === 0) {
+  // Choose the re-rooting (wrapper folders + non-standard list locations).  Blobs
+  // are already stored content-addressed by hash, so only the path metadata is
+  // rewritten.  chooseLayout reads list bytes only, so non-list files pass {path}.
+  const leByPath = new Map(listEntries.map((e) => [e.path, e.bytes]));
+  const layout = chooseLayout(hashed.map((h) => ({ path: h.path, bytes: leByPath.get(h.path) })));
+  if (!layout) {
     throw new Error('no YSFLIGHT list found (expected aircraft/air*.lst, scenery/sce*.lst, or ground/gro*.lst)');
   }
+  if (layout.prefix) for (const h of hashed) h.path = h.path.slice(layout.prefix.length);
+  const lists = layout.lists;
   hashed.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const id = (await sha256(strToBytes(hashed.map((h) => `${h.path}\0${h.sha256}`).join('\n')))).slice(0, 16);
 
@@ -530,5 +571,7 @@ export const _internals = {
   findLists,
   deriveName,
   buildGeneratedLists,
-  detectStripPrefix,
+  candidatePrefixes,
+  chooseLayout,
+  listResolution,
 };
