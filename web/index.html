@@ -157,7 +157,7 @@
           ['矢印キー', '視点の向き'],
         ],
       },
-      touch: { fire: '発射', gear: 'ギア', thr: '推力' },
+      touch: { fire: '発射', gear: 'ギア', thr: '推力', wsel: '武器切替', view: '視点', nudge: 'お試し版 — PC / タブレットだと全機能で快適です' },
     },
     en: {
       note: 'Source & assets: ',
@@ -205,7 +205,7 @@
           ['Arrow keys', 'Look around'],
         ],
       },
-      touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust' },
+      touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust', wsel: 'Weapon', view: 'View', nudge: 'Taster — best with all controls on PC / tablet' },
     },
   })[window.ysfwLang];
   document.documentElement.lang = window.ysfwLang;
@@ -772,8 +772,13 @@
   // Edges only (the centre/view stays clear), semi-transparent, auto-fades when
   // idle, and only appears in flight on a touch device.
   (function () {
-    var isTouch = (navigator.maxTouchPoints > 0) || ('ontouchstart' in window);
-    if (!isTouch) return;
+    // Device tier.  PC (fine pointer, no touch) gets no on-screen pad -- it has the
+    // keyboard/mouse + the controls legend.  Phone vs tablet are distinguished by the
+    // shorter viewport edge: phone is a deliberate TASTER (a small control set + a
+    // nudge toward PC/tablet); tablet has room for the fuller rail (added later).
+    var coarse = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0 || ('ontouchstart' in window);
+    if (!coarse) return;
+    var tier = Math.min(window.innerWidth, window.innerHeight) >= 820 ? 'tablet' : 'phone';
     var T = TXT.touch;
     function canvas() { return document.getElementById('canvas') || document.querySelector('canvas'); }
     function steer(defX, defY) { // defX,defY in [-1,1]; (0,0) = neutral
@@ -841,19 +846,50 @@
       btn.addEventListener('touchend', stop); btn.addEventListener('touchcancel', stop);
     }
     holdRepeat(thrUp, 'KeyQ'); holdRepeat(thrDn, 'KeyA');
-    // Fire (hold) + gear (tap).
+    // Right inner column = the right thumb's frequent combat controls: fire (hold,
+    // lower, biggest/red) and weapon-select (tap, upper -- needed to switch to
+    // missiles before firing them).
     var fire = mkBtn(T.fire, 'position:absolute;right:14px;bottom:54px;width:72px;height:60px;background:rgba(199,93,106,.35);border-color:rgba(199,93,106,.8)');
     fire.addEventListener('touchstart', function (e) { e.preventDefault(); key('Space', true); wake(); }, { passive: false });
     fire.addEventListener('touchend', function () { key('Space', false); });
     fire.addEventListener('touchcancel', function () { key('Space', false); });
-    var gear = mkBtn(T.gear, 'position:absolute;right:14px;bottom:122px;width:72px;height:52px');
+    var wsel = mkBtn(T.wsel, 'position:absolute;right:14px;bottom:122px;width:72px;height:52px');
+    wsel.addEventListener('touchstart', function (e) { e.preventDefault(); tap('Digit2'); wake(); }, { passive: false });
+
+    // Calm-moment taps go on the LEFT, ABOVE the stick: the left thumb holds the
+    // stick almost the whole time, so only actions done when flight is settled live
+    // here -- you briefly lift off the stick to tap them.  View toggles cockpit (F1)
+    // <-> outside (F2); gear is used at takeoff/landing.
+    var view = mkBtn(T.view, 'position:absolute;left:14px;bottom:156px;width:60px;height:46px');
+    var viewFlip = 0;
+    view.addEventListener('touchstart', function (e) { e.preventDefault(); tap(viewFlip ? 'F1' : 'F2'); viewFlip = viewFlip ? 0 : 1; wake(); }, { passive: false });
+    var gear = mkBtn(T.gear, 'position:absolute;left:84px;bottom:156px;width:60px;height:46px');
     gear.addEventListener('touchstart', function (e) { e.preventDefault(); tap('KeyG'); wake(); }, { passive: false });
-    wrap.appendChild(thrLbl); wrap.appendChild(thrUp); wrap.appendChild(thrDn); wrap.appendChild(fire); wrap.appendChild(gear);
+
+    wrap.appendChild(thrLbl); wrap.appendChild(thrUp); wrap.appendChild(thrDn);
+    wrap.appendChild(fire); wrap.appendChild(wsel); wrap.appendChild(view); wrap.appendChild(gear);
+    // TODO(tablet rails): when tier === 'tablet', also add rudder (Z/C, auto-center),
+    // flaps (R/F), radar (Digit3) and autopilot-menu (Backspace) along the edges.
+
+    // Phone is a taster: the first time flight starts on a phone, nudge toward the
+    // full experience on PC/tablet.  Shown once (localStorage), auto-dismisses.
+    var nudged = false;
+    function maybeNudge() {
+      if (nudged || tier !== 'phone') return;
+      nudged = true;
+      try { if (localStorage.getItem('ysfwTasterNudge')) return; localStorage.setItem('ysfwTasterNudge', '1'); } catch (e) {}
+      var n = document.createElement('div');
+      n.textContent = T.nudge;
+      n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;max-width:90vw;background:rgba(13,20,29,.92);color:#cfe0f5;border:1px solid #2a3647;border-radius:8px;padding:8px 14px;font-size:12px;text-align:center';
+      n.onclick = function () { if (n.parentNode) n.remove(); };
+      document.body.appendChild(n);
+      setTimeout(function () { if (n.parentNode) n.remove(); }, 7000);
+    }
 
     // Visible only in flight.
     setInterval(function () {
       var show = !!globalThis.ysfwInFlight;
-      if (show && wrap.style.display === 'none') { wrap.style.display = 'block'; wake(); }
+      if (show && wrap.style.display === 'none') { wrap.style.display = 'block'; wake(); maybeNudge(); }
       else if (!show && wrap.style.display !== 'none') { wrap.style.display = 'none'; }
     }, 500);
   })();
