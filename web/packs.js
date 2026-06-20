@@ -82,6 +82,11 @@ function listFilesForCategory(id, categoryKey) {
 }
 
 const listRe = (c) => new RegExp(`^${c.dir}/${c.prefix}[^/]*\\.lst$`, 'i');
+// Same lists but at ANY depth -- used by the streaming path to decide which file
+// contents to keep before the wrapper prefix is known (a wrapped list at
+// "<wrapper>/aircraft/air*.lst" must be retained so it becomes a root list after
+// detectStripPrefix re-roots it).
+const listAnywhereRe = /(^|\/)(aircraft\/air|scenery\/sce|ground\/gro)[^/]*\.lst$/i;
 
 function join(...parts) {
   return parts.filter((p) => p !== '' && p != null).join('/').replace(/\/{2,}/g, '/');
@@ -252,6 +257,29 @@ function buildGeneratedLists(lists, resolve, id) {
   return generated;
 }
 
+// Real-world community packs are usually zipped inside one (sometimes nested)
+// wrapper directory, so the YSFLIGHT lists sit at "<wrapper>/aircraft/air*.lst"
+// instead of the root the engine globs.  If there is no root-level list but the
+// whole archive shares a single top-level directory whose removal exposes one,
+// return the prefix to strip (peels single- AND multi-level *single* wrappers).
+// Conservative on purpose: only one common top dir per level -- multi-folder
+// archives and non-standard list locations are left for a later pass.  `paths`
+// must already exclude archive cruft (__MACOSX, ._*, dir entries).
+function detectStripPrefix(paths) {
+  const hasRootList = (ps) => ps.some((p) => CATEGORIES.some((c) => listRe(c).test(p)));
+  let prefix = '';
+  let cur = paths;
+  for (let depth = 0; depth < 8; depth++) {
+    if (hasRootList(cur)) return prefix;
+    const tops = new Set(cur.map((p) => { const i = p.indexOf('/'); return i < 0 ? '' : p.slice(0, i); }));
+    if (tops.size !== 1 || tops.has('')) return ''; // not a single wrapper at this level
+    const top = [...tops][0] + '/';
+    prefix += top;
+    cur = cur.map((p) => p.slice(top.length));
+  }
+  return '';
+}
+
 // Analyze a pack archive WITHOUT touching any filesystem: unzip, validate,
 // content-hash every file, derive the (Merkle-ish) pack id, and build the
 // regenerated lists.  This is the pure core shared by installPack (writes the
@@ -275,6 +303,11 @@ export async function analyzePack(zipBytes, opts) {
 
   const files = readArchive(zipBytes);
   if (files.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
+
+  // Strip a common wrapper directory so a "<wrapper>/aircraft/air*.lst" pack
+  // installs as if its lists were at the root.
+  const strip = detectStripPrefix(files.map((f) => f.path));
+  if (strip) for (const f of files) f.path = f.path.slice(strip.length);
 
   // Reject path traversal and enforce size limits before any storage.
   let total = 0;
@@ -356,9 +389,17 @@ export async function analyzePackStreaming(zipBytes, opts) {
     const sha = await sha256(bytes);
     await putBlob(sha, bytes);                 // persist content-addressed; bytes freed after this entry
     hashed.push({ path, size: bytes.length, sha256: sha });
-    for (const c of CATEGORIES) { if (listRe(c).test(path)) { listEntries.push({ path, bytes }); break; } }
+    if (listAnywhereRe.test(path)) listEntries.push({ path, bytes }); // keep lists at any depth (pre-reroot)
   });
   if (hashed.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
+
+  // Strip a common wrapper directory (see detectStripPrefix).  Blobs are already
+  // stored content-addressed by hash, so only the path metadata is rewritten.
+  const strip = detectStripPrefix(hashed.map((h) => h.path));
+  if (strip) {
+    for (const h of hashed) h.path = h.path.slice(strip.length);
+    for (const le of listEntries) le.path = le.path.slice(strip.length);
+  }
 
   const lists = findLists(listEntries);
   if (lists.length === 0) {
@@ -489,4 +530,5 @@ export const _internals = {
   findLists,
   deriveName,
   buildGeneratedLists,
+  detectStripPrefix,
 };
