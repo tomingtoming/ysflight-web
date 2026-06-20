@@ -39,6 +39,8 @@ const S = ({
     confirmDelete: (n) => '「' + n + '」を削除しますか？',
     storage: (u, q, p) => '使用容量 ' + u + (q ? ' / ' + q : '') + ' ・ 永続化 ' + (p ? 'ON' : 'OFF'),
     installing: '取り込み中: ',
+    bulkProgress: (done, total) => '取り込み中 ' + done + '/' + total + ' …',
+    bulkDone: (ok, fail) => '✓ ' + ok + ' 件取り込み' + (fail ? '  ／  ⚠ ' + fail + ' 件失敗（下記）' : ''),
     notZip: '(.zip ではないのでスキップ)',
     panelTitle: '追加パック',
     dropZone: 'パック (.zip) をドロップ / クリックして選択',
@@ -58,6 +60,8 @@ const S = ({
     confirmDelete: (n) => 'Delete “' + n + '”?',
     storage: (u, q, p) => 'Storage ' + u + (q ? ' / ' + q : '') + ' · Persisted ' + (p ? 'ON' : 'OFF'),
     installing: 'Installing: ',
+    bulkProgress: (done, total) => 'Importing ' + done + '/' + total + '…',
+    bulkDone: (ok, fail) => '✓ ' + ok + ' imported' + (fail ? '  /  ⚠ ' + fail + ' failed (below)' : ''),
     notZip: '(skipped: not a .zip)',
     panelTitle: 'Add-on packs',
     dropZone: 'Drop a pack (.zip) / click to choose',
@@ -74,6 +78,12 @@ let FS = null;
 let adapter = null;
 let listEl = null;
 let storageEl = null;
+// In-memory source of truth for the installed-pack list shown in the panel.
+// Loaded ONCE from OPFS (ensureCache), then kept up to date in memory on
+// install/enable/uninstall.  The panel renders from this -- never from a fresh
+// OPFS directory enumeration, which can briefly under-report right after a burst
+// of writes (e.g. a bulk import).
+let cache = null;
 
 // SHA-256 over a Uint8Array via Web Crypto (secure context: https or localhost).
 async function webSha256(bytes) {
@@ -150,6 +160,40 @@ async function readIndex() {
   }
 }
 
+// Load the in-memory list once (at a quiet moment, so the OPFS read is reliable),
+// then keep it in memory.  All other reads of the list go through `cache`.
+// Memoised on a PROMISE, not on the value: concurrent callers (e.g. the panel's
+// fire-and-forget refresh racing a bulk import) must share ONE readIndex and
+// assign `cache` exactly once -- a plain `if (cache === null) cache = await ...`
+// is a check-then-act race where a late, empty readIndex clobbers a cache the
+// import workers have already filled.
+let cacheLoad = null;
+async function ensureCache() {
+  if (cache !== null) return cache;
+  if (cacheLoad === null) cacheLoad = readIndex();
+  const loaded = await cacheLoad;
+  if (cache === null) cache = loaded; // first resolver wins; never overwrite
+  return cache;
+}
+// Synchronous in-memory upsert/remove (no await between read and write, so it is
+// safe under the concurrent bulk-import workers).
+function cacheUpsert(entry) {
+  if (cache === null) return;
+  const i = cache.findIndex((p) => p.id === entry.id);
+  if (i >= 0) cache.splice(i, 1, entry); else cache.push(entry);
+}
+function cacheUpdate(id, patch) {
+  if (cache === null) return;
+  const e = cache.find((p) => p.id === id);
+  if (e) Object.assign(e, patch);
+}
+function cacheRemove(id) {
+  if (cache !== null) cache = cache.filter((p) => p.id !== id);
+}
+
+// public-surface for list() now returns the in-memory cache (loading it if needed)
+async function listInstalled() { return (await ensureCache()).slice(); }
+
 function fmtBytes(n) {
   if (!n) return '0 B';
   const u = ['B', 'KB', 'MB', 'GB'];
@@ -176,9 +220,11 @@ async function storageInfo() {
   return out;
 }
 
-async function refresh() {
+// Render the installed-pack rows for a given list (no I/O).  Used by refresh() and
+// by the bulk import (which renders from its in-memory result to avoid a flaky
+// post-bulk OPFS directory re-enumeration).
+function renderList(packs) {
   if (!listEl) return;
-  const packs = await readIndex();
   listEl.innerHTML = '';
   if (packs.length === 0) {
     const empty = document.createElement('div');
@@ -248,34 +294,56 @@ async function refresh() {
       listEl.appendChild(row);
     }
   }
-  if (storageEl) {
+}
+
+async function updateStorageLine() {
+  if (!storageEl) return;
+  try {
     const s = await storageInfo();
     storageEl.textContent = S.storage(fmtBytes(s.usage), s.quota ? fmtBytes(s.quota) : '', s.persisted);
-  }
+  } catch (e) { /* non-fatal */ }
+}
+
+async function refresh() {
+  renderList(await ensureCache());
+  await updateStorageLine();
 }
 
 async function sync() {
   await new Promise((resolve) => FS.syncfs(false, () => resolve())); // persist to IndexedDB
 }
 
-async function installFromBytes(bytes, name, sourceUrl) {
-  if (!adapter) throw new Error('pack layer not ready');
+// Install one pack WITHOUT the per-pack syncfs + panel re-render (the caller does
+// those once for a whole batch -- a per-pack full-tree syncfs and a re-render of a
+// growing list are O(n) / O(n^2) and dominate a bulk import of hundreds of packs).
+async function installCore(bytes, name, sourceUrl) {
   const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  // Path A: analyze (no FS writes), store the payload content-addressed in OPFS
-  // (on disk, deduped), then materialize it into the engine FS -- payload into the
-  // MEMFS-mounted packs/ (excluded from IDBFS sync) and the tiny generated lists
-  // into the IDBFS user dir.  sourceUrl is kept for Option-B re-advertising.
+  // Path A: analyze (streaming, no whole-archive memory peak), store the payload
+  // content-addressed in OPFS (on disk, deduped), then materialize it into the
+  // engine FS -- payload into the MEMFS-mounted packs/ (excluded from IDBFS sync)
+  // and the tiny generated lists into the IDBFS user dir.
   const a = await analyzePackStreaming(buf, {
     sha256: webSha256, putBlob: opfs.putBlob, name, sourceUrl, maxPackBytes: MAX_PACK_BYTES,
   });
   await opfs.putRecordFromAnalysis(a, { enabled: true });
   await opfs.materialize(await opfs.getRecord(a.id), adapter);
-  await sync(); // persist the tiny lists (payload lives in OPFS + the MEMFS mount)
-  await refresh();
+  // Keep the in-memory list in sync (sync section, no await -> safe vs. the
+  // concurrent bulk-import workers) so the panel never has to re-enumerate OPFS.
+  cacheUpsert({ id: a.id, name: a.name, enabled: true, bytes: a.total, categories: a.categories });
   return {
     id: a.id, name: a.name, categories: a.categories, bytes: a.total,
     templates: a.generated.reduce((n, g) => n + g.entries, 0), lists: a.generated.map((g) => g.file),
   };
+}
+
+// Single-pack install (used by the multiplayer pack sync + the smoke test): does
+// the syncfs + refresh itself.
+async function installFromBytes(bytes, name, sourceUrl) {
+  if (!adapter) throw new Error('pack layer not ready');
+  const res = await installCore(bytes, name, sourceUrl);
+  await sync(); // persist the tiny lists (payload lives in OPFS + the MEMFS mount)
+  await refresh();
+  return res;
 }
 
 async function setEnabled(id, enabled) {
@@ -283,6 +351,7 @@ async function setEnabled(id, enabled) {
   const rec = await opfs.setEnabled(id, enabled);
   if (enabled) await opfs.materialize(rec, adapter);              // write payload + generated lists
   else for (const g of rec.generated) await adapter.rmrf(g.file); // drop lists -> engine won't scan it
+  cacheUpdate(id, { enabled: !!enabled });
   await sync();
   await refresh();
   return { id, enabled: !!enabled };
@@ -297,6 +366,7 @@ async function uninstall(id) {
     await opfs.removeRecord(id);
     await opfs.gc();                                            // reclaim now-unreferenced blobs
   }
+  cacheRemove(id);
   await sync();
   await refresh();
   return { id, removed: true };
@@ -312,29 +382,58 @@ function start() {
   if (panel) panel.style.display = 'none';
 }
 
+// Import a batch of dropped/picked files.  Processing CONTINUES past failures and,
+// at the end, summarises (count) and WARNS with the list of packs that could not
+// be imported.  Speed: the old per-pack overhead -- a full-tree IDBFS syncfs and a
+// re-render of a growing list per install (O(n) / O(n^2)) -- now happens ONCE for
+// the whole batch, and a few packs are imported concurrently to overlap the
+// OPFS-write / hashing I/O (the unzip itself is CPU-bound and stays serialised).
 async function handleFiles(fileList) {
+  if (!adapter) return;
   const status = document.getElementById('ysfw-pack-status');
-  // One result line per file, accumulated and each prefixed with the file name,
-  // so a BATCH upload makes clear WHICH file an error (e.g. "no YSFLIGHT list
-  // found") is about.  ✓ installed · ✗ failed · — skipped.
-  const lines = [];
-  const show = (pending) => { if (status) status.textContent = (pending ? lines.concat(pending) : lines).join('\n'); };
-  for (const file of fileList) {
-    if (!/\.zip$/i.test(file.name)) {
-      lines.push('— ' + file.name + ' ' + S.notZip);
-      show();
-      continue;
+  const all = Array.from(fileList);
+  const zips = all.filter((f) => /\.zip$/i.test(f.name));
+  const nonZip = all.filter((f) => !/\.zip$/i.test(f.name));
+  const failed = [];          // { name, error }
+  await ensureCache();        // load the in-memory list once (reliable: nothing writing yet)
+  let okCount = 0, done = 0;
+  const total = zips.length;
+  // The tail (failure warnings + skipped non-zips) is shown under every status
+  // line.  We set the PROGRESS line during the run and the DONE summary only at
+  // the very end -- AFTER the list is rendered -- so the panel never shows
+  // "✓ done" next to an empty list.
+  const tail = () => [
+    ...failed.map((f) => '✗ ' + f.name + ': ' + f.error),
+    ...nonZip.map((f) => '— ' + f.name + ' ' + S.notZip),
+  ];
+  const setStatus = (head) => { if (status) status.textContent = [head, ...tail()].join('\n'); };
+  setStatus(S.bulkProgress(0, total));
+
+  let idx = 0;
+  const worker = async () => {
+    while (idx < zips.length) {
+      const file = zips[idx++];
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        await installCore(bytes, file.name.replace(/\.zip$/i, '')); // also upserts `cache`
+        okCount++;
+      } catch (e) {
+        failed.push({ name: file.name, error: (e && e.message) ? e.message : String(e) });
+      }
+      done++;
+      setStatus(S.bulkProgress(done, total));
     }
-    show(S.installing + file.name + ' …');
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const res = await installFromBytes(bytes, file.name.replace(/\.zip$/i, ''));
-      lines.push('✓ ' + file.name + ' → ' + res.name + ' (' + res.categories.join('/') + ' · ' + res.templates + ')');
-    } catch (e) {
-      lines.push('✗ ' + file.name + ': ' + (e && e.message ? e.message : e));
-    }
-    show();
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(4, zips.length || 1) }, worker));
+
+  await sync(); // one IDBFS sync for the whole batch (not per pack)
+  // Re-render the list ONCE, from the in-memory `cache` (which each installCore
+  // already upserted into).  We deliberately do NOT re-enumerate OPFS here: a
+  // directory listing immediately after a burst of writes can briefly under-report,
+  // and we already know exactly what we stored.
+  renderList(cache);
+  await updateStorageLine();
+  setStatus(S.bulkDone(okCount, failed.length)); // done summary LAST, after the list is shown
 }
 
 function renderPanel() {
@@ -354,6 +453,9 @@ function renderPanel() {
 
   listEl = document.createElement('div');
   listEl.id = 'ysfw-pack-list';
+  // Cap the installed-pack list and scroll it internally, so importing hundreds of
+  // packs keeps the panel (drop zone, status, Play button) within the viewport.
+  listEl.style.cssText = 'max-height:40vh;overflow-y:auto';
   panel.appendChild(listEl);
 
   // Drop zone + file picker.
@@ -519,7 +621,7 @@ window.ysfwPacks = {
   installFromBytes,
   setEnabled,
   uninstall,
-  list: readIndex,
+  list: listInstalled,
   start,
   refresh,
   showJoinFailure,

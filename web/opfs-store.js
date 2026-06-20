@@ -49,14 +49,22 @@ export async function hasBlob(hash) {
 }
 
 // Returns true if the blob was newly written, false if it was already present
-// (the dedup signal).
+// (the dedup signal).  Tolerant of a concurrent writer of the SAME hash (two
+// packs in a bulk import sharing a file): createWritable takes an exclusive lock,
+// so if it throws we re-check -- if the other writer produced the blob, that is a
+// dedup success, not an error.
 export async function putBlob(hash, bytes) {
   assertOPFS();
   if (await hasBlob(hash)) return false;
-  const fh = await (await blobShard(await root(), hash, true)).getFileHandle(hash, { create: true });
-  const w = await fh.createWritable();
-  try { await w.write(bytes); } finally { await w.close(); }
-  return true;
+  try {
+    const fh = await (await blobShard(await root(), hash, true)).getFileHandle(hash, { create: true });
+    const w = await fh.createWritable();
+    try { await w.write(bytes); } finally { await w.close(); }
+    return true;
+  } catch (e) {
+    if (await hasBlob(hash)) return false; // a concurrent writer won the race
+    throw e;
+  }
 }
 
 export async function getBlob(hash) {
