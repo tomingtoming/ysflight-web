@@ -596,6 +596,28 @@
     }, 800);
   })();
 
+  // ---- Quick Flight: return to the top (pre-boot shell) when the flight ends --
+  // Quick Flight deep-links via ?freeflight=..., booting straight into a flight.
+  // The engine reports flight state through globalThis.ysfwInFlight (set by its
+  // ChangeRunMode).  When the user exits the flight back to the engine menu,
+  // ysfwInFlight flips true -> false; we treat that edge as "flight over" and
+  // navigate to the clean URL, which IS the pre-boot shell (the top page).  Armed
+  // only for ?freeflight launches, so normal in-engine menu navigation after a
+  // manual boot is untouched.  We latch on having actually entered flight first,
+  // so the initial pre-boot false never counts as an exit.
+  (function () {
+    var q = new URLSearchParams(location.search);
+    if (!q.get('freeflight')) return;  // only Quick Flight deep-links return to top
+    var enteredFlight = false;
+    setInterval(function () {
+      if (!booted) return;
+      if (globalThis.ysfwInFlight) { enteredFlight = true; return; }
+      if (!enteredFlight) return;  // still booting into the flight; not an exit yet
+      var lang = q.get('lang');  // keep an explicit language override across the reload
+      location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
+    }, 800);
+  })();
+
   // Fullscreen via keyboard only (no on-screen control): F11 and Ctrl+Cmd+F
   // toggle the documentElement in/out of fullscreen.  We fullscreen the
   // documentElement (not just the canvas) so the overlay, Room chip and badge
