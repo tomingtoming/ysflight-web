@@ -155,6 +155,7 @@
           ['矢印キー', '視点の向き'],
         ],
       },
+      touch: { fire: '発射', gear: 'ギア', thr: '推力' },
     },
     en: {
       note: 'Source & assets: ',
@@ -200,6 +201,7 @@
           ['Arrow keys', 'Look around'],
         ],
       },
+      touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust' },
     },
   })[window.ysfwLang];
   document.documentElement.lang = window.ysfwLang;
@@ -679,13 +681,14 @@
       open = (typeof force === 'boolean') ? force : !open;
       build().style.display = open ? 'flex' : 'none';
     }
-    // Floating "?" button so touch / no-keyboard users can open it too.  Bottom-left
-    // to stay clear of the top-right connection badge / Room chip.
+    // Floating "?" button so touch / no-keyboard users can open it too.  Top-left:
+    // clear of the top-right badge/chip AND of the bottom corners, which the mobile
+    // touch controls (stick / throttle) occupy in flight.
     var btn = document.createElement('button');
     btn.id = 'ysfw-help-btn';
     btn.textContent = H.openHint;
     btn.title = H.toggleTitle;
-    btn.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
+    btn.style.cssText = 'position:fixed;left:8px;top:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
     btn.onclick = function () { toggle(); };
     document.body.appendChild(btn);
     function typing() {
@@ -698,6 +701,104 @@
       if (e.key === '?' && !typing()) { e.preventDefault(); e.stopImmediatePropagation(); toggle(); }
       else if (e.key === 'Escape' && open) { e.preventDefault(); e.stopImmediatePropagation(); toggle(false); }
     }, true);
+  })();
+
+  // ---- Mobile touch controls (touch devices, in-flight only) ---------------
+  // A minimal on-screen control set so a phone can fly without a keyboard/mouse,
+  // WITHOUT an engine rebuild: it drives the engine through synthetic events the
+  // port already listens for.
+  //   * Left stick pad -> a BUTTONLESS `mousemove` on #canvas.  The engine's
+  //     mouse-as-stick (FsPollJoystick in fsplatform_emscripten.cpp reads the
+  //     cursor position as aileron/elevator) turns position into pitch/roll;
+  //     buttonless means it never fires.  Releasing recenters (mousemove to canvas
+  //     center) so the stick returns to neutral -- which the engine's bare
+  //     touch=LBUTTONDOWN emulation cannot do.
+  //   * Throttle / fire / gear -> synthetic KeyboardEvent on window (Q/A, Space,
+  //     KeyG), the exact e.code values FsKeyDownCallback reads.
+  // Edges only (the centre/view stays clear), semi-transparent, auto-fades when
+  // idle, and only appears in flight on a touch device.
+  (function () {
+    var isTouch = (navigator.maxTouchPoints > 0) || ('ontouchstart' in window);
+    if (!isTouch) return;
+    var T = TXT.touch;
+    function canvas() { return document.getElementById('canvas') || document.querySelector('canvas'); }
+    function steer(defX, defY) { // defX,defY in [-1,1]; (0,0) = neutral
+      var c = canvas(); if (!c) return;
+      var r = c.getBoundingClientRect();
+      var denom = Math.min(r.width, r.height) / 2;
+      var x = r.left + r.width / 2 + defX * denom;
+      var y = r.top + r.height / 2 + defY * denom;
+      c.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, buttons: 0, bubbles: true }));
+    }
+    function key(code, down) { window.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', { code: code, bubbles: true })); }
+    function tap(code) { key(code, true); setTimeout(function () { key(code, false); }, 60); }
+
+    var wrap = document.createElement('div');
+    wrap.id = 'ysfw-touch';
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:30;pointer-events:none;display:none;transition:opacity .4s';
+    document.body.appendChild(wrap);
+    var idleTimer = null;
+    function wake() { wrap.style.opacity = '0.92'; if (idleTimer) clearTimeout(idleTimer); idleTimer = setTimeout(function () { wrap.style.opacity = '0.32'; }, 4000); }
+
+    // Left stick pad.
+    var pad = document.createElement('div');
+    pad.id = 'ysfw-stick';
+    pad.style.cssText = 'position:absolute;left:14px;bottom:14px;width:130px;height:130px;border-radius:50%;border:1px solid rgba(143,163,187,.5);background:rgba(13,20,29,.5);pointer-events:auto;touch-action:none';
+    var knob = document.createElement('div');
+    knob.id = 'ysfw-stick-knob';
+    knob.style.cssText = 'position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;background:rgba(77,163,255,.55);border:1px solid rgba(77,163,255,.9)';
+    pad.appendChild(knob);
+    wrap.appendChild(pad);
+    var padId = null, padR = 65;
+    function padMove(t) {
+      var r = pad.getBoundingClientRect();
+      var dx = (t.clientX - (r.left + r.width / 2)) / padR;
+      var dy = (t.clientY - (r.top + r.height / 2)) / padR;
+      var m = Math.hypot(dx, dy); if (m > 1) { dx /= m; dy /= m; }
+      knob.style.left = (50 + dx * 38) + '%';
+      knob.style.top = (50 + dy * 38) + '%';
+      steer(dx, dy); wake();
+    }
+    pad.addEventListener('touchstart', function (e) { e.preventDefault(); padId = e.changedTouches[0].identifier; padMove(e.changedTouches[0]); }, { passive: false });
+    pad.addEventListener('touchmove', function (e) { for (var i = 0; i < e.changedTouches.length; i++) if (e.changedTouches[i].identifier === padId) { e.preventDefault(); padMove(e.changedTouches[i]); } }, { passive: false });
+    function padEnd(e) { for (var i = 0; i < e.changedTouches.length; i++) if (e.changedTouches[i].identifier === padId) { padId = null; knob.style.left = '50%'; knob.style.top = '50%'; steer(0, 0); wake(); } }
+    pad.addEventListener('touchend', padEnd);
+    pad.addEventListener('touchcancel', padEnd);
+
+    function mkBtn(label, css) {
+      var b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = 'pointer-events:auto;touch-action:none;border:1px solid rgba(143,163,187,.5);background:rgba(13,20,29,.6);color:#e6edf3;border-radius:10px;font-size:13px;font-weight:600;' + css;
+      return b;
+    }
+    // Throttle (hold to repeat Q/A) on the right, above fire/gear.
+    var thrUp = mkBtn('▲', 'position:absolute;right:96px;bottom:96px;width:52px;height:48px');
+    var thrDn = mkBtn('▼', 'position:absolute;right:96px;bottom:14px;width:52px;height:48px');
+    var thrLbl = document.createElement('div');
+    thrLbl.textContent = T.thr;
+    thrLbl.style.cssText = 'position:absolute;right:96px;bottom:66px;width:52px;text-align:center;color:#8fa3bb;font-size:10px;pointer-events:none';
+    function holdRepeat(btn, code) {
+      var iv = null;
+      btn.addEventListener('touchstart', function (e) { e.preventDefault(); tap(code); wake(); if (iv) clearInterval(iv); iv = setInterval(function () { tap(code); }, 130); }, { passive: false });
+      var stop = function () { if (iv) { clearInterval(iv); iv = null; } };
+      btn.addEventListener('touchend', stop); btn.addEventListener('touchcancel', stop);
+    }
+    holdRepeat(thrUp, 'KeyQ'); holdRepeat(thrDn, 'KeyA');
+    // Fire (hold) + gear (tap).
+    var fire = mkBtn(T.fire, 'position:absolute;right:14px;bottom:78px;width:72px;height:60px;background:rgba(199,93,106,.35);border-color:rgba(199,93,106,.8)');
+    fire.addEventListener('touchstart', function (e) { e.preventDefault(); key('Space', true); wake(); }, { passive: false });
+    fire.addEventListener('touchend', function () { key('Space', false); });
+    fire.addEventListener('touchcancel', function () { key('Space', false); });
+    var gear = mkBtn(T.gear, 'position:absolute;right:14px;bottom:14px;width:72px;height:52px');
+    gear.addEventListener('touchstart', function (e) { e.preventDefault(); tap('KeyG'); wake(); }, { passive: false });
+    wrap.appendChild(thrLbl); wrap.appendChild(thrUp); wrap.appendChild(thrDn); wrap.appendChild(fire); wrap.appendChild(gear);
+
+    // Visible only in flight.
+    setInterval(function () {
+      var show = !!globalThis.ysfwInFlight;
+      if (show && wrap.style.display === 'none') { wrap.style.display = 'block'; wake(); }
+      else if (!show && wrap.style.display !== 'none') { wrap.style.display = 'none'; }
+    }, 500);
   })();
 
   // Host-side pack advertising (M6): once this browser is hosting a game, start
