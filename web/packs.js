@@ -252,12 +252,17 @@ function buildGeneratedLists(lists, resolve, id) {
   return generated;
 }
 
-// Install a pack archive into the user dir via the adapter.  Idempotent:
-// re-installing the same bytes reuses the existing payload and just refreshes
-// the generated lists + index entry.
-export async function installPack(zipBytes, opts) {
+// Analyze a pack archive WITHOUT touching any filesystem: unzip, validate,
+// content-hash every file, derive the (Merkle-ish) pack id, and build the
+// regenerated lists.  This is the pure core shared by installPack (writes the
+// payload into the engine FS) and the OPFS content-addressed store
+// (web/opfs-store.js, which stages payload as blobs keyed by sha256 and
+// materializes on demand).
+//   returns { id, name, categories, total, files:[{path,bytes}],
+//     hashed:[{path,size,sha256}], generated:[{category,file,text,entries}],
+//     manifest, source, now }
+export async function analyzePack(zipBytes, opts) {
   const {
-    fs,
     sha256,
     name,
     source = 'user-supplied',
@@ -266,12 +271,12 @@ export async function installPack(zipBytes, opts) {
     maxFileBytes = 64 * 1024 * 1024,
     maxPackBytes = 256 * 1024 * 1024,
   } = opts;
-  if (!fs || !sha256) throw new Error('installPack requires { fs, sha256 }');
+  if (!sha256) throw new Error('analyzePack requires { sha256 }');
 
   const files = readArchive(zipBytes);
   if (files.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
 
-  // Reject path traversal and enforce size limits before touching the FS.
+  // Reject path traversal and enforce size limits before any storage.
   let total = 0;
   for (const f of files) {
     if (f.path.split('/').includes('..')) throw new Error(`unsafe path in pack: ${f.path}`);
@@ -309,11 +314,21 @@ export async function installPack(zipBytes, opts) {
     lists: generated.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
   };
   // Remember where a pack came from so a HOST can re-advertise that URL and let
-  // joiners self-fetch it (Option B, M7) instead of pulling the bytes P2P.  Kept
-  // out of the pack-id hash: the id is computed over the archive files only, and
-  // manifest.json is excluded from both the id and the P2P-transferred zip, so a
-  // URL-imported pack and a P2P-pulled one share the same content-addressed id.
+  // joiners self-fetch it (Option B) instead of pulling the bytes P2P.  Kept out
+  // of the pack-id hash: the id is computed over the archive files only.
   if (sourceUrl) manifest.sourceUrl = sourceUrl;
+
+  return { id, name: packName, categories: manifest.categories, total, files, hashed, generated, manifest, source, now };
+}
+
+// Install a pack archive into the user dir via the adapter.  Idempotent:
+// re-installing the same bytes reuses the existing payload and just refreshes
+// the generated lists + index entry.
+export async function installPack(zipBytes, opts) {
+  const { fs } = opts;
+  if (!fs || !opts.sha256) throw new Error('installPack requires { fs, sha256 }');
+
+  const { id, name: packName, total, files, generated, manifest, source, now } = await analyzePack(zipBytes, opts);
 
   // Stage the payload (+ manifest) and commit it atomically, unless an
   // identical pack id is already present.
