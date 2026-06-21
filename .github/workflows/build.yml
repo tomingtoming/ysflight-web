@@ -31,6 +31,15 @@ jobs:
       - name: Unit tests (pack engine)
         run: scripts/test.sh
 
+      # Browser-free signaling-protocol smokes: the host-reconnect / room-reclaim
+      # contract (worker/signal.js + its sig-stub mirror) and the pack host's
+      # client-side reconnect loop.  Both self-start the sig-stub; fast, no GPU.
+      - name: Signaling reconnect smoke (host reclaim + client reconnect)
+        run: |
+          npm install --no-save ws
+          node scripts/smoke-mp-reconnect.mjs
+          node scripts/smoke-mp-pack-reconnect.mjs
+
       - name: Install smoke-test browser
         run: |
           npm install --no-save playwright

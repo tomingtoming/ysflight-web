@@ -19,14 +19,32 @@ wss.on('connection', (ws) => {
     if (m.t === 'ping') return;
 
     if (m.t === 'host' && typeof m.room === 'string' && m.room.length <= 16) {
-      if (rooms.has(m.room)) { send(ws, { t: 'host-taken' }); return; }
-      conn.role = 'host';
-      conn.room = m.room;
-      let manifest = null;
+      let manifest = null, hasManifest = false;
       if (m.manifest != null) {
+        hasManifest = true;
         try { if (JSON.stringify(m.manifest).length <= 64 * 1024) manifest = m.manifest; } catch (e) {}
       }
-      rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest });
+      const token = (typeof m.token === 'string' && m.token.length <= 64) ? m.token : null;
+      const existing = rooms.get(m.room);
+      if (existing) {
+        // Reconnecting host reclaims its room with a matching token (mirror of
+        // worker/signal.js); otherwise an existing room is a genuine collision.
+        if (token && existing.token && token === existing.token) {
+          const old = existing.host;
+          existing.host = ws;
+          if (old && old !== ws) { try { old.close(); } catch (e) {} }
+          conn.role = 'host';
+          conn.room = m.room;
+          if (hasManifest) existing.manifest = manifest;
+          send(ws, { t: 'host-ok', room: m.room });
+        } else {
+          send(ws, { t: 'host-taken' });
+        }
+        return;
+      }
+      conn.role = 'host';
+      conn.room = m.room;
+      rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, token });
       send(ws, { t: 'host-ok', room: m.room });
 
     } else if (m.t === 'join' && typeof m.room === 'string') {
@@ -52,6 +70,7 @@ wss.on('connection', (ws) => {
     const r = rooms.get(conn.room);
     if (!r) return;
     if (conn.role === 'host') {
+      if (r.host !== ws) return;  // a newer socket reclaimed this room; ignore the stale close
       for (const [, p] of r.peers) send(p, { t: 'host-left' });
       rooms.delete(conn.room);
     } else {

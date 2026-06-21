@@ -182,6 +182,14 @@ function openSignal(url) {
   return ws;
 }
 
+// A per-session id that lets a reconnecting host RECLAIM its pack-room from the
+// signaling hub (see worker/signal.js) instead of being rejected with host-taken.
+// Not a security boundary (rooms are guessable 8-digit codes already) -- just
+// enough entropy to distinguish the same host reconnecting from a code collision.
+function randomToken() {
+  return (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).slice(0, 24);
+}
+
 async function sendZipChunked(ch, id, zip) {
   ch.send(JSON.stringify({ op: 'begin', id, size: zip.length }));
   ch.bufferedAmountLowThreshold = PACK_BUFFER_HIGH / 2;
@@ -203,9 +211,11 @@ async function sendZipChunked(ch, id, zip) {
 export function startPackHost(gameRoom, opts) {
   const { signalUrl, iceServers = DEFAULT_ICE, listPackFiles, buildManifest, log = () => {} } = opts;
   const room = derivePackRoom(gameRoom);
+  const token = randomToken();
   const peers = new Map(); // peerId -> { pc, remoteSet, iceQ }
-  const ws = openSignal(signalUrl);
-  const sig = (o) => { try { ws.send(JSON.stringify(o)); } catch (e) {} };
+  let ws = null, ping = null, stopped = false, reconnectTimer = null, backoff = 0;
+  let manifestBuilt = false, manifestVal; // build once, resend verbatim on reclaim
+  const sig = (o) => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); } catch (e) {} };
 
   async function serve(ch, peer, id) {
     try {
@@ -222,53 +232,98 @@ export function startPackHost(gameRoom, opts) {
     }
   }
 
-  ws.addEventListener('open', async () => {
-    // Publish the pack manifest alongside the host claim so a joiner can read it
-    // from join-ok (§5.5) and diff BEFORE booting — only control metadata flows
-    // through the signaling hub; pack bytes still go P2P.
-    let manifest;
-    try { manifest = buildManifest ? await buildManifest() : undefined; } catch (e) {}
-    sig({ t: 'host', room, manifest });
-  });
-  ws.addEventListener('message', async (ev) => {
-    let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (m.t === 'host-ok') { log('hosting ' + room); return; }
-    if (m.t === 'host-taken') { log('pack-room taken: ' + room); return; }
-    if (m.t === 'peer') {
-      const pc = new RTCPeerConnection({ iceServers });
-      const st = { pc, remoteSet: false, iceQ: [] };
-      peers.set(m.peer, st);
-      pc.onicecandidate = (e) => { if (e.candidate) sig({ t: 'ice', peer: m.peer, data: e.candidate }); };
-      const ch = pc.createDataChannel('ysf-pack', { ordered: true });
-      ch.binaryType = 'arraybuffer';
-      ch.onmessage = (e) => {
-        if (typeof e.data !== 'string') return;
-        let mm; try { mm = JSON.parse(e.data); } catch (er) { return; }
-        if (mm.op === 'want' && mm.id) serve(ch, m.peer, mm.id);
-      };
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sig({ t: 'sdp', peer: m.peer, data: offer });
-    } else if (m.t === 'sdp') {
-      const st = peers.get(m.peer); if (!st) return;
-      await st.pc.setRemoteDescription(m.data);
-      st.remoteSet = true;
-      for (const c of st.iceQ) { try { await st.pc.addIceCandidate(c); } catch (e) {} }
-      st.iceQ = [];
-    } else if (m.t === 'ice') {
-      const st = peers.get(m.peer); if (!st) return;
-      if (st.remoteSet) { try { await st.pc.addIceCandidate(m.data); } catch (e) {} }
-      else st.iceQ.push(m.data);
-    } else if (m.t === 'peer-left') {
-      const st = peers.get(m.peer);
-      if (st) { try { st.pc.close(); } catch (e) {} peers.delete(m.peer); }
-    }
-  });
+  function scheduleReconnect() {
+    if (stopped || reconnectTimer) return;
+    const delay = Math.min(15000, 1000 * Math.pow(2, backoff));
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; backoff += 1; connect(); }, delay);
+  }
+  // Resume after a frozen/backgrounded tab: the reconnect backoff timer is frozen
+  // too, so kick an immediate reconnect when the page becomes visible and the
+  // socket is not open.  Idempotent.
+  function reconnectNow() {
+    if (stopped) return;
+    if (ws && ws.readyState === 1) return;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    backoff = 0; connect();
+  }
+  const onVisible = () => { if (typeof document === 'undefined' || document.visibilityState === 'visible') reconnectNow(); };
+
+  function connect() {
+    if (stopped) return;
+    const sock = new WebSocket(signalUrl);
+    ws = sock;
+    sock.binaryType = 'arraybuffer';
+    let myPing = null;   // per-socket so a stale socket's timer can't outlive it
+    sock.addEventListener('open', async () => {
+      myPing = setInterval(() => { try { sock.send(JSON.stringify({ t: 'ping' })); } catch (e) {} }, 25000);
+      ping = myPing;     // expose the current socket's ping so stop() can clear it
+      // Publish the pack manifest alongside the host claim so a joiner can read it
+      // from join-ok (§5.5) and diff BEFORE booting — only control metadata flows
+      // through the signaling hub; pack bytes still go P2P.  Built once and resent
+      // verbatim on a reclaim so a joiner arriving after a host reconnect still sees
+      // it.  token lets the hub treat this reconnect as a reclaim, not host-taken.
+      if (!manifestBuilt) { try { manifestVal = buildManifest ? await buildManifest() : undefined; } catch (e) {} manifestBuilt = true; }
+      try { if (sock.readyState === 1) sock.send(JSON.stringify({ t: 'host', room, token, manifest: manifestVal })); } catch (e) {}
+    });
+    sock.addEventListener('close', () => {
+      if (myPing) { clearInterval(myPing); if (ping === myPing) ping = null; myPing = null; }
+      // Resume race: reconnectNow() may have opened a newer socket before this stale
+      // close arrived.  Only the current socket drives reconnect, else a stale close
+      // would schedule a redundant reconnect storm.
+      if (ws !== sock) return;
+      if (stopped) return;
+      scheduleReconnect();   // a dropped pack-host socket would otherwise make late joiners miss pack sync
+    });
+    sock.addEventListener('message', async (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.t === 'host-ok') { backoff = 0; log('hosting ' + room); return; }
+      if (m.t === 'host-taken') { log('pack-room taken: ' + room); return; }
+      if (m.t === 'peer') {
+        const pc = new RTCPeerConnection({ iceServers });
+        const st = { pc, remoteSet: false, iceQ: [] };
+        peers.set(m.peer, st);
+        pc.onicecandidate = (e) => { if (e.candidate) sig({ t: 'ice', peer: m.peer, data: e.candidate }); };
+        const ch = pc.createDataChannel('ysf-pack', { ordered: true });
+        ch.binaryType = 'arraybuffer';
+        ch.onmessage = (e) => {
+          if (typeof e.data !== 'string') return;
+          let mm; try { mm = JSON.parse(e.data); } catch (er) { return; }
+          if (mm.op === 'want' && mm.id) serve(ch, m.peer, mm.id);
+        };
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sig({ t: 'sdp', peer: m.peer, data: offer });
+      } else if (m.t === 'sdp') {
+        const st = peers.get(m.peer); if (!st) return;
+        await st.pc.setRemoteDescription(m.data);
+        st.remoteSet = true;
+        for (const c of st.iceQ) { try { await st.pc.addIceCandidate(c); } catch (e) {} }
+        st.iceQ = [];
+      } else if (m.t === 'ice') {
+        const st = peers.get(m.peer); if (!st) return;
+        if (st.remoteSet) { try { await st.pc.addIceCandidate(m.data); } catch (e) {} }
+        else st.iceQ.push(m.data);
+      } else if (m.t === 'peer-left') {
+        const st = peers.get(m.peer);
+        if (st) { try { st.pc.close(); } catch (e) {} peers.delete(m.peer); }
+      }
+    });
+  }
+
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
+  if (typeof window !== 'undefined') window.addEventListener('pageshow', onVisible);
+  connect();
 
   return {
     room,
+    reconnect: reconnectNow,
     stop() {
-      try { ws.close(); } catch (e) {}
+      stopped = true;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (ping) { clearInterval(ping); ping = null; }
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      if (typeof window !== 'undefined') window.removeEventListener('pageshow', onVisible);
+      try { if (ws) ws.close(); } catch (e) {}
       for (const [, st] of peers) { try { st.pc.close(); } catch (e) {} }
       peers.clear();
     },

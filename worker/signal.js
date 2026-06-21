@@ -5,12 +5,21 @@
 // JSON protocol the wasm client already speaks (see
 // src/port/yssocket/yssocket_emscripten.cpp):
 //
-//   client -> server : {t:'host',room,manifest?} | {t:'join',room}
+//   client -> server : {t:'host',room,token?,manifest?} | {t:'join',room}
 //                      | {t:'sdp'|'ice', peer?, data}   (host sends peer, peer omits it)
+//                      | {t:'ping'}
 //   server -> client : {t:'host-ok',room} | {t:'host-taken'} | {t:'no-room'}
 //                      | {t:'join-ok',peer,manifest?} | {t:'peer',peer}
 //                      | {t:'sdp'|'ice', peer, data}
 //                      | {t:'host-left'} | {t:'peer-left',peer}
+//
+// token (optional) lets a host whose signaling WebSocket dropped (mobile tab
+// freeze, transient network, page resume) RECONNECT and re-send {t:'host'} with
+// the same token to RECLAIM its room -- keeping already-joined peers -- instead of
+// being rejected with host-taken.  onClose only deletes a room for the socket that
+// currently owns it, so a reclaimed room is not clobbered by the old socket's late
+// close.  Together these stop a brief host-socket loss from permanently deleting
+// the room and stranding late joiners on no-room.
 //
 // manifest (optional) is the host's add-on-pack list (ids+hashes+categories,
 // tiny control metadata) stored in room state and echoed to joiners; pack BYTES
@@ -96,8 +105,8 @@ export class SignalHub {
     // Per-connection state (mirrors signal.mjs's per-socket role/room/peerId).
     const conn = { role: null, room: null, peerId: 0, closed: false };
     server.addEventListener('message', (ev) => this.onMessage(server, conn, ev.data));
-    server.addEventListener('close', () => this.onClose(conn));
-    server.addEventListener('error', () => this.onClose(conn));
+    server.addEventListener('close', () => this.onClose(server, conn));
+    server.addEventListener('error', () => this.onClose(server, conn));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -130,15 +139,14 @@ export class SignalHub {
     if (m.t === 'ping') return;
 
     if (m.t === 'host' && typeof m.room === 'string' && m.room.length <= 16) {
-      if (this.rooms.has(m.room)) { this.send(ws, { t: 'host-taken' }); this.log('host-taken', m.room); return; }
-      conn.role = 'host';
-      conn.room = m.room;
       // Optional add-on-pack manifest (tiny control metadata so a joiner knows
       // which packs the host requires; pack BYTES never touch the Worker -- they
       // go P2P).  Cap its serialized size so a host can't bloat the in-memory hub.
+      // Parsed up front so both the create and the reclaim path can apply it.
       let manifest = null;
-      let bytes = 0, dropped = false;
+      let bytes = 0, dropped = false, hasManifest = false;
       if (m.manifest != null) {
+        hasManifest = true;
         try {
           const s = JSON.stringify(m.manifest);
           bytes = s.length;
@@ -146,7 +154,32 @@ export class SignalHub {
           else dropped = true; // > 64KB cap -> joiner sees no manifest and silently skips sync
         } catch (e) {}
       }
-      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest });
+      const token = (typeof m.token === 'string' && m.token.length <= 64) ? m.token : null;
+      const existing = this.rooms.get(m.room);
+      if (existing) {
+        // Re-host (reclaim): a host whose signaling socket dropped (mobile freeze,
+        // transient network, page resume) reconnects and re-sends {t:'host'} with
+        // the SAME token to reclaim its room -- WITHOUT disturbing already-joined
+        // peers (keep the peers Map + nextPeer so live peerIds stay valid).  Without
+        // a matching token an existing room is a genuine code collision -> taken.
+        if (token && existing.token && token === existing.token) {
+          const old = existing.host;
+          existing.host = ws;                          // adopt the fresh socket
+          if (old && old !== ws) { try { old.close(); } catch (e) {} } // its stale-close is guarded below
+          conn.role = 'host';
+          conn.room = m.room;
+          if (hasManifest) existing.manifest = manifest; // refresh; absent -> keep prior
+          this.send(ws, { t: 'host-ok', room: m.room });
+          this.log('host-reclaim', m.room, { peers: existing.peers.size, packs: Array.isArray(existing.manifest) ? existing.manifest.length : 0 });
+          return;
+        }
+        this.send(ws, { t: 'host-taken' });
+        this.log('host-taken', m.room);
+        return;
+      }
+      conn.role = 'host';
+      conn.room = m.room;
+      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, token });
       this.send(ws, { t: 'host-ok', room: m.room });
       // packs: how many add-on packs the host advertised; dropped: the manifest
       // exceeded the 64KB hub cap and was discarded (a prime suspect when a joiner
@@ -186,12 +219,18 @@ export class SignalHub {
     }
   }
 
-  onClose(conn) {
+  onClose(ws, conn) {
     if (conn.closed || !conn.room) return;
     conn.closed = true;
     const r = this.rooms.get(conn.room);
     if (!r) return;
     if (conn.role === 'host') {
+      // Only the CURRENT host socket tears the room down.  If the host already
+      // reconnected and reclaimed the room with a fresh socket (r.host !== ws),
+      // this is the delayed close of the OLD socket -- ignore it, or it would
+      // clobber the freshly reclaimed room and strand the reconnected host (the
+      // bug behind "after idle, late joiners get no-room").
+      if (r.host !== ws) { this.log('host-close-stale', conn.room); return; }
       for (const [, pws] of r.peers) this.send(pws, { t: 'host-left' });
       this.rooms.delete(conn.room);
       this.log('host-left', conn.room, { peers: r.peers.size });
