@@ -128,6 +128,7 @@
       badgeDirect: '🟢 マルチプレイOK',
       badgeDirectTitle: 'この回線は対戦に適しています（多くの相手と直接つながります）。クリックで再確認。',
       joinLabel: 'Room ID で参加',
+      joinToggle: '友達に招待された？ Room ID で参加',
       joinNamePlaceholder: '名前（任意）',
       joinBtn: 'ルームに参加',
       errRoomEmpty: 'Room ID を入力してください',
@@ -176,6 +177,7 @@
       badgeDirect: '🟢 Multiplayer OK',
       badgeDirectTitle: 'This network is good for multiplayer (direct connection to most peers). Click to re-check.',
       joinLabel: 'Join by Room ID',
+      joinToggle: 'Have an invite? Join by Room ID',
       joinNamePlaceholder: 'Name (optional)',
       joinBtn: 'Join room',
       errRoomEmpty: 'Enter a Room ID',
@@ -1012,11 +1014,28 @@
       btn.addEventListener('click', go);
       roomIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
       nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
-      wrap.appendChild(label);
-      wrap.appendChild(roomIn);
-      wrap.appendChild(nameIn);
-      wrap.appendChild(err);
-      wrap.appendChild(btn);
+      // Collapsed by default.  The join form is only useful to someone who already
+      // has a Room ID / invite, so on a bare manual launch it should NOT compete for
+      // the fold with Quick Flight (the only reliable first-flight route).  A
+      // low-emphasis toggle reveals the (byte-for-byte identical) form on demand; the
+      // ?join= invite path uses a SEPARATE form (below) and never reaches here.
+      var stack = document.createElement('div');
+      stack.style.cssText = 'display:none;flex-direction:column;align-items:center;gap:8px';
+      stack.appendChild(label);
+      stack.appendChild(roomIn);
+      stack.appendChild(nameIn);
+      stack.appendChild(err);
+      stack.appendChild(btn);
+      var toggle = document.createElement('button');
+      toggle.textContent = TXT.joinToggle;
+      toggle.style.cssText = 'background:none;border:0;color:#8fa3bb;font-size:13px;cursor:pointer;padding:4px;text-decoration:underline';
+      toggle.addEventListener('click', function () {
+        var open = stack.style.display !== 'none';
+        stack.style.display = open ? 'none' : 'flex';
+        if (!open) setTimeout(function () { roomIn.focus(); }, 30);
+      });
+      wrap.appendChild(toggle);
+      wrap.appendChild(stack);
       overlay.appendChild(wrap);
     }
 
