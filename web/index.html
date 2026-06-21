@@ -8,6 +8,7 @@
 <link rel="icon" href="icons/icon-192.png">
 <script type="module" src="packs-ui.js"></script>
 <script type="module" src="pack-net.js"></script>
+<script type="module" src="replays-ui.js"></script>
 <title>YSFLIGHT web</title>
 <style>
   html, body {
@@ -283,6 +284,15 @@
         // NO .stp, so a bare ?freeflight=AIRCRAFT silently failed to spawn.
         a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH10000_01');
       }
+      // ?replay=<file> plays a saved recording: the engine's -replayrecord loads the
+      // .yfs and auto-starts playback (a loaded flight record makes PlayerPlaneIsReady
+      // false).  The file lives in the IDBFS user dir's replays/; sanitize to a bare
+      // name so it cannot escape that directory.
+      var rp = q.get('replay');
+      if (rp) {
+        var rf = String(rp).replace(/[^A-Za-z0-9._-]/g, '');
+        if (rf) a.push('-replayrecord', '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT/replays/' + rf);
+      }
       return a;
     })(),
     preRun: [function () {
@@ -315,6 +325,7 @@
           var q = new URLSearchParams(location.search);
           var joinRoom = Module.ysfwJoinRoom;
           var freeflight = q.get('freeflight');
+          var replay = q.get('replay');
           Module.__ysfwUserDir = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
           try { FS.mkdirTree(Module.__ysfwUserDir); } catch (e) {}
           // Path A pack storage: payload lives in OPFS (on disk, deduped).  Mount
@@ -339,6 +350,7 @@
             Module.__ysfwJoinSync = true;
             window.__ysfwFsReady = true;
             if (window.ysfwPacksInit) window.ysfwPacksInit();
+            if (window.ysfwReplaysInit) window.ysfwReplaysInit();
             // Solo = abandon the join: drop the -client args (set by the join IIFE
             // below) so the engine boots single-player rather than connecting to a
             // host whose required field we could not obtain, then release the gate.
@@ -398,7 +410,7 @@
               if (!gateReleased && !Module.__ysfwJoinFailureShown) bootSolo();
             }, 90000);
             runJoinSync();
-          } else if (!freeflight) {
+          } else if (!freeflight && !replay) {
             // Manual launch: show the pack panel; packs-ui.js releases on "play".
             Module.addRunDependency('ysfw-packs');
             Module.__ysfwGateHeld = true;
@@ -408,14 +420,17 @@
             }, 5000);
             window.__ysfwFsReady = true;
             if (window.ysfwPacksInit) window.ysfwPacksInit();
+            if (window.ysfwReplaysInit) window.ysfwReplaysInit();
           } else {
-            // freeflight: boot straight in.  Remember the launched triple so the top
-            // page can offer a one-tap "Fly again" next visit (read in packs-ui
+            // freeflight OR replay: boot straight in (no gate).  For a freeflight,
+            // remember the launched triple so the top page can offer a one-tap "Fly
+            // again" next visit (read in packs-ui renderPanel, gated there to bundled
             // renderPanel, gated there to bundled presets so it never deep-links into
             // an uninstalled add-on).  Storage may throw (private mode) -> guard.
             try { if (freeflight) localStorage.setItem('ysfwLastFlight', freeflight); } catch (e) {}
             window.__ysfwFsReady = true;
             if (window.ysfwPacksInit) window.ysfwPacksInit();
+            if (window.ysfwReplaysInit) window.ysfwReplaysInit();
           }
         } catch (e) {
           releaseGate();
@@ -685,6 +700,22 @@
       if (globalThis.ysfwInFlight) { if (!enteredFlight) maybeAutoHelp(); enteredFlight = true; return; }
       if (!enteredFlight) return;  // still booting into the flight; not an exit yet
       var lang = q.get('lang');  // keep an explicit language override across the reload
+      location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
+    }, 800);
+  })();
+
+  // Replay playback: return to the top page when the replay ends, mirroring the Quick
+  // Flight return above.  Driven by globalThis.ysfwReplaying (set by the engine's
+  // ChangeRunMode for YSRUNMODE_REPLAYRECORD).  Armed only for ?replay launches.
+  (function () {
+    var q = new URLSearchParams(location.search);
+    if (!q.get('replay')) return;
+    var entered = false;
+    setInterval(function () {
+      if (!booted) return;
+      if (globalThis.ysfwReplaying) { entered = true; return; }
+      if (!entered) return;  // still loading into the replay; not an exit yet
+      var lang = q.get('lang');
       location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
     }, 800);
   })();
@@ -1035,6 +1066,7 @@
     var joinRoom = q.get('join');
     var presetName = q.get('name');
     var freeflight = q.get('freeflight');
+    var replay = q.get('replay');
 
     function startJoin(name) {
       var nm = (name && name.trim()) || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
@@ -1168,11 +1200,11 @@
     } else {
       if (joinRoom && presetName) {
         Module.arguments = Module.arguments.concat(['-client', presetName, joinRoom]);
-      } else if (!freeflight) {
-        // No invite link and not a freeflight deep-link: a deliberate manual
-        // launch.  Offer "join by Room ID" next to the pack panel; the engine
-        // still loads (for solo / hosting), but submitting the form navigates
-        // away to the invite-link join flow before main() matters.
+      } else if (!freeflight && !replay) {
+        // No invite link, not a freeflight, not a replay deep-link: a deliberate
+        // manual launch.  Offer "join by Room ID" next to the pack panel; the engine
+        // still loads (for solo / hosting), but submitting the form navigates away to
+        // the invite-link join flow before main() matters.
         renderManualJoinForm();
         renderHostHowto();
       }
