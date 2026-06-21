@@ -65,6 +65,7 @@ const S = ({
       noEntries: 'パックのリストに有効なエントリがありませんでした',
     },
     playBtn: '▶ プレイ開始',
+    flyAgain: '↻ 続きから',
     joinFailTitle: '⚠ 必須パックを取得できませんでした',
     joinFailDesc: (names) => 'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
       'を取得できませんでした。このまま参加すると正しく飛べません。再試行するか、ソロ（シングルプレイ）で開始してください。',
@@ -112,6 +113,7 @@ const S = ({
       noEntries: 'The pack lists contained no usable entries',
     },
     playBtn: '▶ Play',
+    flyAgain: '↻ Fly again',
     joinFailTitle: '⚠ Couldn’t obtain required packs',
     joinFailDesc: (names) => 'Couldn’t obtain the host’s required field' + (names.length ? ' “' + names.join(', ') + '”' : '') +
       '. Joining now would not fly correctly. Retry, or start in solo (single-player).',
@@ -593,6 +595,29 @@ function renderPanel() {
       location.assign(location.origin + location.pathname + '?freeflight=' + p.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
     });
     qGrid.appendChild(card);
+  }
+  // Returning visitor fast-path: if the last Quick Flight matches a BUNDLED preset,
+  // surface a one-tap "Fly again" above the grid.  Gated to bundled presets so it can
+  // never deep-link into an uninstalled add-on (an arbitrary saved triple could).
+  // Read is guarded -- localStorage may be unavailable (private mode).
+  let lastFlight = null;
+  try { lastFlight = localStorage.getItem('ysfwLastFlight'); } catch (e) {}
+  const lastPreset = lastFlight ? PRESETS.find((p) => p.ff === lastFlight) : null;
+  if (lastPreset) {
+    const again = document.createElement('button');
+    again.style.cssText = 'display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:8px;border:1px solid ' + ACCENT + ';border-radius:8px;background:rgba(77,163,255,.12);cursor:pointer';
+    const an = document.createElement('div');
+    an.textContent = S.flyAgain + ' ' + lastPreset.name;
+    an.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:700';
+    const as = document.createElement('div');
+    as.textContent = lastPreset.sub;
+    as.style.cssText = 'color:#9db4d0;font-size:11px;margin-top:1px';
+    again.appendChild(an);
+    again.appendChild(as);
+    again.addEventListener('click', () => {
+      location.assign(location.origin + location.pathname + '?freeflight=' + lastPreset.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
+    });
+    quickWrap.appendChild(again);
   }
   quickWrap.appendChild(qGrid);
   panel.appendChild(quickWrap);

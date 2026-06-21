@@ -409,7 +409,11 @@
             window.__ysfwFsReady = true;
             if (window.ysfwPacksInit) window.ysfwPacksInit();
           } else {
-            // freeflight: boot straight in.
+            // freeflight: boot straight in.  Remember the launched triple so the top
+            // page can offer a one-tap "Fly again" next visit (read in packs-ui
+            // renderPanel, gated there to bundled presets so it never deep-links into
+            // an uninstalled add-on).  Storage may throw (private mode) -> guard.
+            try { if (freeflight) localStorage.setItem('ysfwLastFlight', freeflight); } catch (e) {}
             window.__ysfwFsReady = true;
             if (window.ysfwPacksInit) window.ysfwPacksInit();
           }
