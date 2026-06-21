@@ -158,6 +158,14 @@
         ],
       },
       touch: { fire: '発射', gear: 'ギア', thr: '推力', wsel: '武器切替', view: '視点', rudder: 'ラダー', flap: 'フラップ', radar: 'レーダー', ap: '自動操縦', nudge: 'お試し版 — PC / タブレットだと全機能で快適です' },
+      host: {
+        toggle: '友達と対戦したい？（ホストの始め方）',
+        steps: [
+          '「▶ プレイ開始」を押してゲームを起動',
+          'ゲーム内メニューで Network → Start Server を選ぶ',
+          'ホストで飛び始めると画面右上に「Room: 番号 📋」が出ます。クリックで招待リンクをコピーし、友達に送って参加してもらいましょう',
+        ],
+      },
     },
     en: {
       note: 'Source & assets: ',
@@ -206,6 +214,14 @@
         ],
       },
       touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust', wsel: 'Weapon', view: 'View', rudder: 'Rudder', flap: 'Flaps', radar: 'Radar', ap: 'A/P', nudge: 'Taster — best with all controls on PC / tablet' },
+      host: {
+        toggle: 'Want to play with friends? (How to host)',
+        steps: [
+          'Press “▶ Play” to launch the game',
+          'In the engine menu, open Network → Start Server',
+          'Once you’re flying as host, a “Room: <id> 📋” chip appears top-right — click it to copy the invite link and send it to your friends',
+        ],
+      },
     },
   })[window.ysfwLang];
   document.documentElement.lang = window.ysfwLang;
@@ -1020,6 +1036,38 @@
       overlay.appendChild(wrap);
     }
 
+    // Host how-to: a collapsed "Play with friends" disclosure for the bare manual
+    // launch.  Hosting runs through the engine's native Network menu (unchangeable
+    // C++), so this only TEACHES the path and points at the existing Room-chip copy
+    // control — no new boot logic, no Module.arguments touch.  Self-collapses so it
+    // stays fold-safe on its own.
+    function renderHostHowto() {
+      if (document.getElementById('ysfw-host-howto')) return;
+      var H = TXT.host;
+      var wrap = document.createElement('div');
+      wrap.id = 'ysfw-host-howto';
+      wrap.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;align-items:center;gap:8px';
+      var card = document.createElement('div');
+      card.style.cssText = 'display:none;flex-direction:column;gap:6px;width:min(420px,86vw);background:#0b121b;border:1px solid #1d2633;border-radius:10px;padding:14px 16px;text-align:left;box-sizing:border-box';
+      H.steps.forEach(function (s, i) {
+        var row = document.createElement('div');
+        row.style.cssText = 'color:#9fb2c8;font-size:12.5px;line-height:1.55';
+        row.textContent = (i + 1) + '. ' + s;
+        card.appendChild(row);
+      });
+      var toggle = document.createElement('button');
+      toggle.textContent = H.toggle;
+      toggle.style.cssText = 'background:none;border:0;color:#8fa3bb;font-size:13px;cursor:pointer;padding:4px;text-decoration:underline';
+      toggle.addEventListener('click', function () {
+        card.style.display = (card.style.display === 'none') ? 'flex' : 'none';
+      });
+      wrap.appendChild(toggle);
+      wrap.appendChild(card);
+      overlay.appendChild(wrap);
+      // ?host=1 deep-link auto-expands (a deliberate "I want to host" entry).
+      try { if (new URLSearchParams(location.search).get('host') === '1') card.style.display = 'flex'; } catch (e) {}
+    }
+
     if (joinRoom && !presetName) {
       statusEl.textContent = '';
       var form = document.createElement('div');
@@ -1050,6 +1098,7 @@
         // still loads (for solo / hosting), but submitting the form navigates
         // away to the invite-link join flow before main() matters.
         renderManualJoinForm();
+        renderHostHowto();
       }
       loadEngine();
     }
