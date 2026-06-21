@@ -10,5 +10,10 @@
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ],
+  "shortcuts": [
+    { "name": "Cessna 172 / Small Map", "short_name": "Cessna 172", "url": "./?freeflight=CESSNA_172R,SMALL_MAP,RW36_01", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "F/A-18 Hornet / Atsugi", "short_name": "F/A-18", "url": "./?freeflight=F-18C_HORNET,ATSUGI_AIRBASE,RW01_01", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "F-15J Eagle / Hawaii", "short_name": "F-15J", "url": "./?freeflight=F-15J_EAGLE,HAWAII,NORTH10000_01", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }
