@@ -52,8 +52,18 @@ const S = ({
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
     urlFetching: 'URL から取得中…',
-    urlFail: '直接取得できませんでした（CORS 等）。zip をDLしてドロップしてください',
-    dropZone: 'パック (.zip) をドロップ / クリックして選択',
+    urlFail: '直接取得できませんでした（CORS／ネットワーク）。zip をDLしてドロップしてください',
+    urlFail404: (s) => 'URL を取得できませんでした（' + s + '）。リンクが正しいか確認してください',
+    dropZone: 'パック (.zip) を1つ以上ドロップ / クリックして選択',
+    dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください',
+    postPlayHint: 'プレイ開始後、エンジンのメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
+    errMap: {
+      noList: 'YSFLIGHT のリスト（aircraft/air*.lst など）が見つかりません。zip の直下に aircraft/ や scenery/ があるか確認してください',
+      tooBig: 'パックが大きすぎます（サイズ上限を超過）',
+      unsafe: 'パック内に不正なパス（..）が含まれています',
+      empty: 'パックが空です（有効なファイルがありません）',
+      noEntries: 'パックのリストに有効なエントリがありませんでした',
+    },
     playBtn: '▶ プレイ開始',
     joinFailTitle: '⚠ 必須パックを取得できませんでした',
     joinFailDesc: (names) => 'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
@@ -89,8 +99,18 @@ const S = ({
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
     urlFetching: 'Fetching from URL…',
-    urlFail: 'Could not fetch directly (CORS etc.). Download the zip and drop it here',
-    dropZone: 'Drop a pack (.zip) / click to choose',
+    urlFail: 'Could not fetch directly (CORS / network). Download the zip and drop it here',
+    urlFail404: (s) => 'Could not fetch the URL (' + s + '). Check the link is correct',
+    dropZone: 'Drop one or more packs (.zip) / click to choose',
+    dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level',
+    postPlayHint: 'After Play, open Simulation → Create Flight in the engine menu to fly your installed aircraft & maps',
+    errMap: {
+      noList: 'No YSFLIGHT list found (aircraft/air*.lst, etc.). Make sure the zip has folders like aircraft/ or scenery/ at its top level',
+      tooBig: 'The pack is too large (exceeds the size limit)',
+      unsafe: 'The pack contains an unsafe path (..)',
+      empty: 'The pack is empty (no usable files)',
+      noEntries: 'The pack lists contained no usable entries',
+    },
     playBtn: '▶ Play',
     joinFailTitle: '⚠ Couldn’t obtain required packs',
     joinFailDesc: (names) => 'Couldn’t obtain the host’s required field' + (names.length ? ' “' + names.join(', ') + '”' : '') +
@@ -437,6 +457,19 @@ function start() {
   if (panel) panel.style.display = 'none';
 }
 
+// Map a raw packs.js install error to short, localized guidance (shared by the
+// drop/file bulk import and the URL import).  Matches the streaming-path messages
+// (analyzePackStreaming); unknown messages pass through raw so nothing is hidden.
+function friendlyErr(msg) {
+  const m = String((msg && msg.message) || msg || '');
+  if (m.indexOf('no YSFLIGHT list found') !== -1) return S.errMap.noList;
+  if (m.indexOf('pack exceeds') !== -1 || m.indexOf('file exceeds') !== -1) return S.errMap.tooBig;
+  if (m.indexOf('unsafe path') !== -1) return S.errMap.unsafe;
+  if (m.indexOf('pack is empty') !== -1) return S.errMap.empty;
+  if (m.indexOf('no usable entries') !== -1) return S.errMap.noEntries;
+  return m;
+}
+
 // Import a batch of dropped/picked files.  Processing CONTINUES past failures and,
 // at the end, summarises (count) and WARNS with the list of packs that could not
 // be imported.  Speed: the old per-pack overhead -- a full-tree IDBFS syncfs and a
@@ -458,7 +491,7 @@ async function handleFiles(fileList) {
   // the very end -- AFTER the list is rendered -- so the panel never shows
   // "✓ done" next to an empty list.
   const tail = () => [
-    ...failed.map((f) => '✗ ' + f.name + ': ' + f.error),
+    ...failed.map((f) => '✗ ' + f.name + ': ' + friendlyErr(f.error)),
     ...nonZip.map((f) => '— ' + f.name + ' ' + S.notZip),
   ];
   const setStatus = (head) => { if (status) status.textContent = [head, ...tail()].join('\n'); };
@@ -568,6 +601,12 @@ function renderPanel() {
   title.textContent = S.panelTitle;
   title.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:10px';
   panel.appendChild(title);
+  // Where do installed packs show up?  The biggest modder drop-off is not knowing
+  // the aircraft/maps appear under the engine's Simulation -> Create Flight.
+  const postPlay = document.createElement('div');
+  postPlay.textContent = S.postPlayHint;
+  postPlay.style.cssText = 'color:#5d7290;font-size:11px;margin:-4px 0 10px;line-height:1.5';
+  panel.appendChild(postPlay);
 
   listEl = document.createElement('div');
   listEl.id = 'ysfw-pack-list';
@@ -607,6 +646,10 @@ function renderPanel() {
     if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
   });
   panel.appendChild(drop);
+  const dropHintEl = document.createElement('div');
+  dropHintEl.textContent = S.dropHint;
+  dropHintEl.style.cssText = 'color:#5d7290;font-size:10.5px;margin-top:4px;text-align:center';
+  panel.appendChild(dropHintEl);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
   // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
@@ -634,7 +677,19 @@ function renderPanel() {
       await installFromBytes(bytes, name, url); // does sync + refresh; records sourceUrl
       urlIn.value = '';
     } catch (e) {
-      if (status) status.textContent = S.urlFail + ': ' + url;
+      // Three distinct failures, distinguished by the error (res is out of scope in
+      // a CORS rejection): a non-ok response = Error('HTTP <status>') (404 etc.); a
+      // valid URL that served a BAD pack = a packs.js analysis error (route it to the
+      // same friendly guidance as a dropped bad zip, not a misleading "can't fetch");
+      // a real CORS/network failure = a TypeError with no status.
+      const m = (e && e.message) || String(e);
+      const http = /^HTTP (\d.*)$/.exec(m);
+      const packErr = /no YSFLIGHT list found|pack exceeds|file exceeds|unsafe path|pack is empty|no usable entries/.test(m);
+      if (status) {
+        status.textContent = http ? S.urlFail404(http[1]) + ': ' + url
+          : packErr ? friendlyErr(m)
+          : S.urlFail + ': ' + url;
+      }
     } finally {
       urlBtn.disabled = false;
     }
