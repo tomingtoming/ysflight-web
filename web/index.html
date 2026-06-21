@@ -147,7 +147,7 @@
       joinBtn: 'ルームに参加',
       errRoomEmpty: 'Room ID を入力してください',
       errRoomInvalid: 'Room ID は英数字・- ・_（14文字以内）で入力してください',
-      inviteNameLabel: function (room) { return 'Room ' + room + ' に参加 — 名前を入力'; },
+      inviteNameLabel: function (room) { return 'Room ' + room + ' に参加 — 名前（任意）'; },
       inviteJoinBtn: '参加する',
       syncError: '(同期エラー)',
       joinSyncing: 'ホストのパックを同期中…',
@@ -207,7 +207,7 @@
       joinBtn: 'Join room',
       errRoomEmpty: 'Enter a Room ID',
       errRoomInvalid: 'Room ID: letters, digits, - and _ only (max 14 chars)',
-      inviteNameLabel: function (room) { return 'Joining Room ' + room + ' — enter your name'; },
+      inviteNameLabel: function (room) { return 'Joining Room ' + room + ' — name (optional)'; },
       inviteJoinBtn: 'Join',
       syncError: '(sync error)',
       joinSyncing: 'Syncing the host’s add-ons…',
@@ -803,14 +803,17 @@
     // Exposed so the first-ever Quick Flight launch can auto-open the legend once on
     // PC (the mouse-as-stick fallback is non-obvious); see the freeflight IIFE.
     window.__ysfwHelpToggle = toggle;
-    // Floating "?" button so touch / no-keyboard users can open it too.  Top-left:
-    // clear of the top-right badge/chip AND of the bottom corners, which the mobile
-    // touch controls (stick / throttle) occupy in flight.
+    // Floating "?" button so touch / no-keyboard users can open it too.  Bottom-LEFT:
+    // the engine's native menu bar lives at the TOP, so a top-left button overlaps it
+    // (and its submenus).  Bottom-left is clear in menus and on desktop; on a touch
+    // device IN FLIGHT the on-screen stick occupies this corner, so the in-flight
+    // touch-HUD toggle below hides this button while the stick is up (mutually
+    // exclusive states: menu vs. flying).
     var btn = document.createElement('button');
     btn.id = 'ysfw-help-btn';
     btn.textContent = H.openHint;
     btn.title = H.toggleTitle;
-    btn.style.cssText = 'position:fixed;left:8px;top:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
+    btn.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
     btn.onclick = function () { toggle(); };
     document.body.appendChild(btn);
     function typing() {
@@ -990,11 +993,15 @@
       setTimeout(function () { if (n.parentNode) n.remove(); }, 7000);
     }
 
-    // Visible only in flight.
+    // Visible only in flight.  This interval only runs on touch devices (the IIFE
+    // returned early for !coarse), so toggling the help button here keeps it visible
+    // on desktop yet hides it while the on-screen stick occupies the bottom-left
+    // corner in flight.
     setInterval(function () {
       var show = !!globalThis.ysfwInFlight;
-      if (show && wrap.style.display === 'none') { wrap.style.display = 'block'; wake(); maybeNudge(); }
-      else if (!show && wrap.style.display !== 'none') { wrap.style.display = 'none'; }
+      var hb = document.getElementById('ysfw-help-btn');
+      if (show && wrap.style.display === 'none') { wrap.style.display = 'block'; wake(); maybeNudge(); if (hb) hb.style.display = 'none'; }
+      else if (!show && wrap.style.display !== 'none') { wrap.style.display = 'none'; if (hb) hb.style.display = ''; }
     }, 500);
   })();
 
