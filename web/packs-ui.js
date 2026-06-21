@@ -45,6 +45,7 @@ const S = ({
     panelTitle: '追加パック',
     quickTitle: '🛫 今すぐ飛ぶ',
     quickHint: 'クリックでそのまま離陸（追加パック不要）',
+    touchHint: 'スマホ対応：離陸すると画面に操縦スティックが出ます',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -73,6 +74,7 @@ const S = ({
     panelTitle: 'Add-on packs',
     quickTitle: '🛫 Quick flight',
     quickHint: 'Click to take off right away (no add-on needed)',
+    touchHint: 'Touch-ready: an on-screen stick appears once you take off.',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -504,6 +506,16 @@ function renderPanel() {
   qHint.textContent = S.quickHint;
   qHint.style.cssText = 'color:#5d7290;font-size:11px;margin-bottom:8px';
   quickWrap.appendChild(qHint);
+  // On touch devices, surface the taster value (on-screen stick after takeoff) ON the
+  // top page, not only once already in flight.  Inline the coarse-pointer test (no
+  // named const) so it never collides with other coarse checks in renderPanel.
+  if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
+      navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
+    const touchHint = document.createElement('div');
+    touchHint.textContent = S.touchHint;
+    touchHint.style.cssText = 'color:#8fa3bb;font-size:11px;margin-bottom:8px';
+    quickWrap.appendChild(touchHint);
+  }
   const qGrid = document.createElement('div');
   qGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
   const PRESETS = [
