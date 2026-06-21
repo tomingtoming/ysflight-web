@@ -539,6 +539,16 @@ function renderPanel() {
   const overlay = document.getElementById('overlay');
   if (!overlay || document.getElementById('ysfw-pack-panel')) return;
 
+  // The .data download is already complete by the time the panel shows (the gate
+  // is held only to await the user's "Play").  This shell has no
+  // monitorRunDependencies, so Emscripten's last "Downloading data… (n/n)"
+  // setStatus is never cleared and the full progress bar lingers above the
+  // panel.  Clear both so the panel isn't crowned by a stale "downloading".
+  const shellStatus = document.getElementById('status');
+  if (shellStatus) shellStatus.textContent = '';
+  const shellProgress = document.getElementById('progress');
+  if (shellProgress) shellProgress.style.display = 'none';
+
   const panel = document.createElement('div');
   panel.id = 'ysfw-pack-panel';
   panel.style.cssText =
