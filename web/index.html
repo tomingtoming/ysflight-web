@@ -135,6 +135,8 @@
       inviteNameLabel: function (room) { return 'Room ' + room + ' に参加 — 名前を入力'; },
       inviteJoinBtn: '参加する',
       syncError: '(同期エラー)',
+      joinSyncing: 'ホストのパックを同期中…',
+      joinProgress: function (done, total) { return 'ホストのパックを同期中… ' + done + '/' + total; },
       help: {
         title: '操作 / Controls',
         toggleTitle: '操作ガイド（? キーで開閉）',
@@ -183,6 +185,8 @@
       inviteNameLabel: function (room) { return 'Joining Room ' + room + ' — enter your name'; },
       inviteJoinBtn: 'Join',
       syncError: '(sync error)',
+      joinSyncing: 'Syncing the host’s add-ons…',
+      joinProgress: function (done, total) { return 'Syncing the host’s add-ons… ' + done + '/' + total; },
       help: {
         title: 'Controls',
         toggleTitle: 'Controls guide (press ? to toggle)',
@@ -312,8 +316,18 @@
             }
             // Re-runnable so the obtain-failure panel's "Retry" can try again (M7).
             function runJoinSync() {
+              // Show live sync activity instead of a frozen "loading…" bar (the sync
+              // can run up to the 90s backstop).  Set it HERE — inside preRun, after
+              // the .data download, where Emscripten's setStatus has gone quiet so it
+              // is not clobbered (in the name-form go() it would be overwritten by the
+              // "Downloading data…" progress).  Writes no-op once the gate releases.
+              if (!gateReleased) statusEl.textContent = TXT.joinSyncing;
+              var onProgress = function (done, total) {
+                if (gateReleased) return;
+                statusEl.textContent = total ? TXT.joinProgress(done, total) : TXT.joinSyncing;
+              };
               var doSync = (window.ysfwPackNet && window.ysfwPackNet.syncAsJoiner)
-                ? window.ysfwPackNet.syncAsJoiner(joinRoom)
+                ? window.ysfwPackNet.syncAsJoiner(joinRoom, onProgress)
                 : Promise.resolve(null);
               return doSync.then(function (r) {
                 // If the gate already went (backstop fired, or the user chose Solo

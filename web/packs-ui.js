@@ -57,6 +57,12 @@ const S = ({
       'を取得できませんでした。このまま参加すると正しく飛べません。再試行するか、ソロ（シングルプレイ）で開始してください。',
     retryBtn: '↻ 再試行',
     soloBtn: 'ソロでプレイ',
+    joinReason: {
+      'no-room': 'ホストがまだ起動していないようです。相手にゲーム開始を頼んでから再試行してください。',
+      'timeout': '接続がタイムアウトしました（回線が厳しい可能性）。再試行するか、相手と直結できるか確認してください。',
+      'host-left': 'ホストとの接続が切れました。相手がまだホスト中か確認して再試行してください。',
+      '_default': 'パックを取得できませんでした。少し待ってから再試行してください。',
+    },
   },
   en: {
     emptyList: '(No add-on packs — you can play as-is)',
@@ -85,6 +91,12 @@ const S = ({
       '. Joining now would not fly correctly. Retry, or start in solo (single-player).',
     retryBtn: '↻ Retry',
     soloBtn: 'Play solo',
+    joinReason: {
+      'no-room': 'The host doesn’t seem to be up yet — ask your friend to start the game, then retry.',
+      'timeout': 'The connection timed out (the network may be restrictive). Retry, or check that you can connect directly.',
+      'host-left': 'Lost the connection to the host. Make sure they’re still hosting, then retry.',
+      '_default': 'Could not obtain the pack. Wait a moment, then retry.',
+    },
   },
 })[LANG];
 
@@ -667,6 +679,30 @@ function showJoinFailure(failed, handlers) {
   desc.style.cssText = 'color:#cbb;font-size:12px;line-height:1.6;margin-bottom:12px';
   desc.textContent = S.joinFailDesc(names);
   panel.appendChild(desc);
+
+  // Per-pack failure reason (timeout / host-not-up / host-left / …) so Retry is an
+  // informed choice, not a blind guess.  reason comes from pack-net's failed[] joined
+  // onto requiredFailed; unknown/compound reasons (id-mismatch:*, raw errors) and the
+  // no-reason syncError path fall back to a generic line / show nothing.
+  const reasonKey = (reason) => {
+    const r = String(reason || '');
+    return (r === 'no-room' || r === 'timeout' || r === 'host-left') ? r : '_default';
+  };
+  const reasonSeen = new Set();
+  const reasonLines = [];
+  for (const f of (failed || [])) {
+    if (!f || !f.reason) continue;
+    const k = reasonKey(f.reason);
+    if (reasonSeen.has(k)) continue;
+    reasonSeen.add(k);
+    reasonLines.push('• ' + ((S.joinReason && (S.joinReason[k] || S.joinReason._default)) || ''));
+  }
+  if (reasonLines.length) {
+    const why = document.createElement('div');
+    why.style.cssText = 'color:#d8b9b9;font-size:12px;line-height:1.6;margin-bottom:12px;white-space:pre-line';
+    why.textContent = reasonLines.join('\n');
+    panel.appendChild(why);
+  }
 
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:10px';
