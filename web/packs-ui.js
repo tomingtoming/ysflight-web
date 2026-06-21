@@ -45,6 +45,9 @@ const S = ({
     panelTitle: '追加パック',
     quickTitle: '🛫 今すぐ飛ぶ',
     quickHint: 'クリックでそのまま離陸（追加パック不要）',
+    tagBeginner: '👍 はじめての方向け',
+    tagIntermediate: '中級者向け',
+    tagAirliner: '大型機',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -73,6 +76,9 @@ const S = ({
     panelTitle: 'Add-on packs',
     quickTitle: '🛫 Quick flight',
     quickHint: 'Click to take off right away (no add-on needed)',
+    tagBeginner: '👍 Beginner',
+    tagIntermediate: 'Intermediate',
+    tagAirliner: 'Airliner',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -506,16 +512,23 @@ function renderPanel() {
   quickWrap.appendChild(qHint);
   const qGrid = document.createElement('div');
   qGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
+  // tag is a difficulty hint (localized via the S table) so a newcomer can pick the
+  // easy one; the Cessna is flagged `recommended` and gets the accent treatment so it
+  // visibly out-weighs the (demoted) join button and the harder jets.
   const PRESETS = [
-    { name: 'Cessna 172', sub: 'Small Map', ff: 'CESSNA_172R,SMALL_MAP,RW36_01' },
-    { name: 'F/A-18 Hornet', sub: '厚木 / Atsugi', ff: 'F-18C_HORNET,ATSUGI_AIRBASE,RW01_01' },
-    { name: 'F-15J Eagle', sub: 'Hawaii ✈ 空中', ff: 'F-15J_EAGLE,HAWAII,NORTH10000_01' },
-    { name: 'Boeing 747', sub: 'Heathrow', ff: 'B747,HEATHROW,RW27R' },
+    { name: 'Cessna 172', sub: 'Small Map', ff: 'CESSNA_172R,SMALL_MAP,RW36_01', tag: S.tagBeginner, recommended: true },
+    { name: 'F/A-18 Hornet', sub: '厚木 / Atsugi', ff: 'F-18C_HORNET,ATSUGI_AIRBASE,RW01_01', tag: S.tagIntermediate },
+    { name: 'F-15J Eagle', sub: 'Hawaii ✈ 空中', ff: 'F-15J_EAGLE,HAWAII,NORTH10000_01', tag: S.tagIntermediate },
+    { name: 'Boeing 747', sub: 'Heathrow', ff: 'B747,HEATHROW,RW27R', tag: S.tagAirliner },
   ];
   const curLang = new URLSearchParams(location.search).get('lang');
   for (const p of PRESETS) {
     const card = document.createElement('button');
-    card.style.cssText = 'text-align:left;padding:9px 11px;border:1px solid #243244;border-radius:8px;background:#0d141d;cursor:pointer';
+    // Accent ONLY the recommended (beginner) card so it visibly leads; the harder
+    // presets keep the quiet #243244 border (accenting all four would dilute the
+    // hierarchy against the accent Play/URL buttons).
+    card.style.cssText = 'text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid ' +
+      (p.recommended ? ACCENT + ';background:rgba(77,163,255,.08)' : '#243244;background:#0d141d');
     const nm = document.createElement('div');
     nm.textContent = '▶ ' + p.name;
     nm.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600';
@@ -524,6 +537,13 @@ function renderPanel() {
     sub.style.cssText = 'color:#8fa3bb;font-size:11px;margin-top:1px';
     card.appendChild(nm);
     card.appendChild(sub);
+    if (p.tag) {
+      const tag = document.createElement('div');
+      tag.textContent = p.tag;
+      tag.style.cssText = 'margin-top:5px;font-size:10px;' +
+        (p.recommended ? 'color:' + ACCENT + ';font-weight:700' : 'color:#5d7290');
+      card.appendChild(tag);
+    }
     card.addEventListener('click', () => {
       location.assign(location.origin + location.pathname + '?freeflight=' + p.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
     });
@@ -631,7 +651,15 @@ function renderPanel() {
   playBtn.addEventListener('click', start);
   panel.appendChild(playBtn);
 
-  overlay.appendChild(panel);
+  // On touch devices, put the Quick Flight panel ABOVE the Room-ID join form so the
+  // primary action is the first thing a thumb reaches (the join form renders earlier,
+  // synchronously, from index.html).  Fine-pointer PCs keep DOM order (the panel sits
+  // below the form there, which is fine with the keyboard/legend available).
+  const coarse = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
+    navigator.maxTouchPoints > 0 || ('ontouchstart' in window);
+  const joinForm = document.getElementById('ysfw-manual-join');
+  if (coarse && joinForm) overlay.insertBefore(panel, joinForm);
+  else overlay.appendChild(panel);
   refresh();
 }
 
