@@ -79,6 +79,18 @@
     text-align: center;
     line-height: 1.6;
   }
+  /* One-line value proposition under the loading bar — what this is + how to start.
+     Static DOM so it paints immediately during the (~23MB) .data download, before
+     any CTA renders.  Brighter than the attribution #note, dimmer than #status. */
+  #pitch {
+    margin-top: 14px;
+    font-size: 13.5px;
+    color: #9db4d0;
+    max-width: 460px;
+    text-align: center;
+    line-height: 1.65;
+    padding: 0 16px;
+  }
 </style>
 </head>
 <body>
@@ -86,6 +98,7 @@
   <h1>YSFLIGHT web</h1>
   <div id="progress"><div id="bar"></div></div>
   <div id="status">loading...</div>
+  <div id="pitch"></div>
   <div id="note">
     YS FLIGHT SIMULATOR (c) Soji Yamakawa (CaptainYS) — WebAssembly port.<br>
     <span id="note-src">元データ・ソースコード: </span><a href="https://github.com/captainys/YSFLIGHT" style="color:#4da3ff">captainys/YSFLIGHT</a>
@@ -113,6 +126,7 @@
   var TXT = ({
     ja: {
       note: '元データ・ソースコード: ',
+      pitch: 'ブラウザで動く無料フライトシム。「今すぐ飛ぶ」で機体を選べば即離陸（スマホ対応）。',
       chipCopyTitle: 'クリックで招待リンクをコピー',
       chipCopied: '✓ 招待リンクをコピーしました',
       connecting: '（接続中…）',
@@ -161,6 +175,7 @@
     },
     en: {
       note: 'Source & assets: ',
+      pitch: 'A free flight sim, right in your browser — pick a Quick Flight aircraft to take off (touch-friendly).',
       chipCopyTitle: 'Click to copy the invite link',
       chipCopied: '✓ Invite link copied',
       connecting: ' (connecting…)',
@@ -209,7 +224,10 @@
     },
   })[window.ysfwLang];
   document.documentElement.lang = window.ysfwLang;
-  (function () { var n = document.getElementById('note-src'); if (n) n.textContent = TXT.note; })();
+  (function () {
+    var n = document.getElementById('note-src'); if (n) n.textContent = TXT.note;
+    var p = document.getElementById('pitch'); if (p) p.textContent = TXT.pitch;
+  })();
 
   var Module = {
     canvas: document.getElementById('canvas'),
