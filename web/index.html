@@ -305,7 +305,13 @@
       try { FS.mkdir('/home/web_user/Documents'); } catch (e) {}
       FS.mount(IDBFS, {}, '/home/web_user/Documents');
       Module.addRunDependency('idbfs-load');
-      FS.syncfs(true, function () {
+      FS.syncfs(true, function (idbfsLoadErr) {
+        // Diagnostic: a silently-swallowed load error here means persisted config
+        // never comes back on reload.  Logged so a "settings don't save" report can
+        // be pinned to load vs. save vs. wrong-path (the engine also prints its
+        // resolved "User YSFLIGHT Dir=" / "YSFLIGHT Config Dir=").
+        if (idbfsLoadErr) console.error('[idbfs] load failed: ' + (idbfsLoadErr.message || idbfsLoadErr));
+        else console.log('[idbfs] load ok');
         // Pre-boot add-on pack management.  Hold a run dependency so the engine's
         // one-time template scan (a few frames into main) runs only after packs
         // are in place — no reload needed.  Three flows:
@@ -460,11 +466,21 @@
       // slow write): a second syncfs while one is in flight is wasted work and
       // triggers emscripten's "N FS.syncfs operations in flight" warning.
       var syncing = false;
+      var flushLogged = false;
       var flush = function () {
         if (syncing) return;
         syncing = true;
-        try { Module.FS.syncfs(false, function () { syncing = false; }); }
-        catch (e) { syncing = false; }
+        try {
+          Module.FS.syncfs(false, function (err) {
+            syncing = false;
+            // Diagnostic: a save error (e.g. QuotaExceededError when the MEMFS-mounted
+            // packs/ tree gets walked into the IndexedDB write) means NOTHING in the
+            // Documents tree is persisted — config included.  Log the first outcome so
+            // a "settings don't save" report is decisive; errors always log.
+            if (err) console.error('[idbfs] flush failed: ' + (err.message || err));
+            else if (!flushLogged) { flushLogged = true; console.log('[idbfs] flush ok'); }
+          });
+        } catch (e) { syncing = false; console.error('[idbfs] flush threw: ' + (e && e.message ? e.message : e)); }
       };
       setInterval(flush, 10000);
       window.addEventListener('visibilitychange', flush);
