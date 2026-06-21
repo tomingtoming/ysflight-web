@@ -46,18 +46,38 @@ const S = ({
     quickTitle: '🛫 今すぐ飛ぶ',
     quickHint: 'クリックでそのまま離陸（追加パック不要）',
     touchHint: 'スマホ対応：離陸すると画面に操縦スティックが出ます',
+    tagBeginner: '👍 はじめての方向け',
+    tagIntermediate: '中級者向け',
+    tagAirliner: '大型機',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
     urlFetching: 'URL から取得中…',
-    urlFail: '直接取得できませんでした（CORS 等）。zip をDLしてドロップしてください',
-    dropZone: 'パック (.zip) をドロップ / クリックして選択',
+    urlFail: '直接取得できませんでした（CORS／ネットワーク）。zip をDLしてドロップしてください',
+    urlFail404: (s) => 'URL を取得できませんでした（' + s + '）。リンクが正しいか確認してください',
+    dropZone: 'パック (.zip) を1つ以上ドロップ / クリックして選択',
+    dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください',
+    postPlayHint: 'プレイ開始後、エンジンのメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
+    errMap: {
+      noList: 'YSFLIGHT のリスト（aircraft/air*.lst など）が見つかりません。zip の直下に aircraft/ や scenery/ があるか確認してください',
+      tooBig: 'パックが大きすぎます（サイズ上限を超過）',
+      unsafe: 'パック内に不正なパス（..）が含まれています',
+      empty: 'パックが空です（有効なファイルがありません）',
+      noEntries: 'パックのリストに有効なエントリがありませんでした',
+    },
     playBtn: '▶ プレイ開始',
+    flyAgain: '↻ 続きから',
     joinFailTitle: '⚠ 必須パックを取得できませんでした',
     joinFailDesc: (names) => 'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
       'を取得できませんでした。このまま参加すると正しく飛べません。再試行するか、ソロ（シングルプレイ）で開始してください。',
     retryBtn: '↻ 再試行',
     soloBtn: 'ソロでプレイ',
+    joinReason: {
+      'no-room': 'ホストがまだ起動していないようです。相手にゲーム開始を頼んでから再試行してください。',
+      'timeout': '接続がタイムアウトしました（回線が厳しい可能性）。再試行するか、相手と直結できるか確認してください。',
+      'host-left': 'ホストとの接続が切れました。相手がまだホスト中か確認して再試行してください。',
+      '_default': 'パックを取得できませんでした。少し待ってから再試行してください。',
+    },
   },
   en: {
     emptyList: '(No add-on packs — you can play as-is)',
@@ -75,18 +95,38 @@ const S = ({
     quickTitle: '🛫 Quick flight',
     quickHint: 'Click to take off right away (no add-on needed)',
     touchHint: 'Touch-ready: an on-screen stick appears once you take off.',
+    tagBeginner: '👍 Beginner',
+    tagIntermediate: 'Intermediate',
+    tagAirliner: 'Airliner',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
     urlFetching: 'Fetching from URL…',
-    urlFail: 'Could not fetch directly (CORS etc.). Download the zip and drop it here',
-    dropZone: 'Drop a pack (.zip) / click to choose',
+    urlFail: 'Could not fetch directly (CORS / network). Download the zip and drop it here',
+    urlFail404: (s) => 'Could not fetch the URL (' + s + '). Check the link is correct',
+    dropZone: 'Drop one or more packs (.zip) / click to choose',
+    dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level',
+    postPlayHint: 'After Play, open Simulation → Create Flight in the engine menu to fly your installed aircraft & maps',
+    errMap: {
+      noList: 'No YSFLIGHT list found (aircraft/air*.lst, etc.). Make sure the zip has folders like aircraft/ or scenery/ at its top level',
+      tooBig: 'The pack is too large (exceeds the size limit)',
+      unsafe: 'The pack contains an unsafe path (..)',
+      empty: 'The pack is empty (no usable files)',
+      noEntries: 'The pack lists contained no usable entries',
+    },
     playBtn: '▶ Play',
+    flyAgain: '↻ Fly again',
     joinFailTitle: '⚠ Couldn’t obtain required packs',
     joinFailDesc: (names) => 'Couldn’t obtain the host’s required field' + (names.length ? ' “' + names.join(', ') + '”' : '') +
       '. Joining now would not fly correctly. Retry, or start in solo (single-player).',
     retryBtn: '↻ Retry',
     soloBtn: 'Play solo',
+    joinReason: {
+      'no-room': 'The host doesn’t seem to be up yet — ask your friend to start the game, then retry.',
+      'timeout': 'The connection timed out (the network may be restrictive). Retry, or check that you can connect directly.',
+      'host-left': 'Lost the connection to the host. Make sure they’re still hosting, then retry.',
+      '_default': 'Could not obtain the pack. Wait a moment, then retry.',
+    },
   },
 })[LANG];
 
@@ -421,6 +461,19 @@ function start() {
   if (panel) panel.style.display = 'none';
 }
 
+// Map a raw packs.js install error to short, localized guidance (shared by the
+// drop/file bulk import and the URL import).  Matches the streaming-path messages
+// (analyzePackStreaming); unknown messages pass through raw so nothing is hidden.
+function friendlyErr(msg) {
+  const m = String((msg && msg.message) || msg || '');
+  if (m.indexOf('no YSFLIGHT list found') !== -1) return S.errMap.noList;
+  if (m.indexOf('pack exceeds') !== -1 || m.indexOf('file exceeds') !== -1) return S.errMap.tooBig;
+  if (m.indexOf('unsafe path') !== -1) return S.errMap.unsafe;
+  if (m.indexOf('pack is empty') !== -1) return S.errMap.empty;
+  if (m.indexOf('no usable entries') !== -1) return S.errMap.noEntries;
+  return m;
+}
+
 // Import a batch of dropped/picked files.  Processing CONTINUES past failures and,
 // at the end, summarises (count) and WARNS with the list of packs that could not
 // be imported.  Speed: the old per-pack overhead -- a full-tree IDBFS syncfs and a
@@ -442,7 +495,7 @@ async function handleFiles(fileList) {
   // the very end -- AFTER the list is rendered -- so the panel never shows
   // "✓ done" next to an empty list.
   const tail = () => [
-    ...failed.map((f) => '✗ ' + f.name + ': ' + f.error),
+    ...failed.map((f) => '✗ ' + f.name + ': ' + friendlyErr(f.error)),
     ...nonZip.map((f) => '— ' + f.name + ' ' + S.notZip),
   ];
   const setStatus = (head) => { if (status) status.textContent = [head, ...tail()].join('\n'); };
@@ -518,16 +571,23 @@ function renderPanel() {
   }
   const qGrid = document.createElement('div');
   qGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
+  // tag is a difficulty hint (localized via the S table) so a newcomer can pick the
+  // easy one; the Cessna is flagged `recommended` and gets the accent treatment so it
+  // visibly out-weighs the (demoted) join button and the harder jets.
   const PRESETS = [
-    { name: 'Cessna 172', sub: 'Small Map', ff: 'CESSNA_172R,SMALL_MAP,RW36_01' },
-    { name: 'F/A-18 Hornet', sub: '厚木 / Atsugi', ff: 'F-18C_HORNET,ATSUGI_AIRBASE,RW01_01' },
-    { name: 'F-15J Eagle', sub: 'Hawaii ✈ 空中', ff: 'F-15J_EAGLE,HAWAII,NORTH10000_01' },
-    { name: 'Boeing 747', sub: 'Heathrow', ff: 'B747,HEATHROW,RW27R' },
+    { name: 'Cessna 172', sub: 'Small Map', ff: 'CESSNA_172R,SMALL_MAP,RW36_01', tag: S.tagBeginner, recommended: true },
+    { name: 'F/A-18 Hornet', sub: '厚木 / Atsugi', ff: 'F-18C_HORNET,ATSUGI_AIRBASE,RW01_01', tag: S.tagIntermediate },
+    { name: 'F-15J Eagle', sub: 'Hawaii ✈ 空中', ff: 'F-15J_EAGLE,HAWAII,NORTH10000_01', tag: S.tagIntermediate },
+    { name: 'Boeing 747', sub: 'Heathrow', ff: 'B747,HEATHROW,RW27R', tag: S.tagAirliner },
   ];
   const curLang = new URLSearchParams(location.search).get('lang');
   for (const p of PRESETS) {
     const card = document.createElement('button');
-    card.style.cssText = 'text-align:left;padding:9px 11px;border:1px solid #243244;border-radius:8px;background:#0d141d;cursor:pointer';
+    // Accent ONLY the recommended (beginner) card so it visibly leads; the harder
+    // presets keep the quiet #243244 border (accenting all four would dilute the
+    // hierarchy against the accent Play/URL buttons).
+    card.style.cssText = 'text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid ' +
+      (p.recommended ? ACCENT + ';background:rgba(77,163,255,.08)' : '#243244;background:#0d141d');
     const nm = document.createElement('div');
     nm.textContent = '▶ ' + p.name;
     nm.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600';
@@ -536,10 +596,40 @@ function renderPanel() {
     sub.style.cssText = 'color:#8fa3bb;font-size:11px;margin-top:1px';
     card.appendChild(nm);
     card.appendChild(sub);
+    if (p.tag) {
+      const tag = document.createElement('div');
+      tag.textContent = p.tag;
+      tag.style.cssText = 'margin-top:5px;font-size:10px;' +
+        (p.recommended ? 'color:' + ACCENT + ';font-weight:700' : 'color:#5d7290');
+      card.appendChild(tag);
+    }
     card.addEventListener('click', () => {
       location.assign(location.origin + location.pathname + '?freeflight=' + p.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
     });
     qGrid.appendChild(card);
+  }
+  // Returning visitor fast-path: if the last Quick Flight matches a BUNDLED preset,
+  // surface a one-tap "Fly again" above the grid.  Gated to bundled presets so it can
+  // never deep-link into an uninstalled add-on (an arbitrary saved triple could).
+  // Read is guarded -- localStorage may be unavailable (private mode).
+  let lastFlight = null;
+  try { lastFlight = localStorage.getItem('ysfwLastFlight'); } catch (e) {}
+  const lastPreset = lastFlight ? PRESETS.find((p) => p.ff === lastFlight) : null;
+  if (lastPreset) {
+    const again = document.createElement('button');
+    again.style.cssText = 'display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:8px;border:1px solid ' + ACCENT + ';border-radius:8px;background:rgba(77,163,255,.12);cursor:pointer';
+    const an = document.createElement('div');
+    an.textContent = S.flyAgain + ' ' + lastPreset.name;
+    an.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:700';
+    const as = document.createElement('div');
+    as.textContent = lastPreset.sub;
+    as.style.cssText = 'color:#9db4d0;font-size:11px;margin-top:1px';
+    again.appendChild(an);
+    again.appendChild(as);
+    again.addEventListener('click', () => {
+      location.assign(location.origin + location.pathname + '?freeflight=' + lastPreset.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
+    });
+    quickWrap.appendChild(again);
   }
   quickWrap.appendChild(qGrid);
   panel.appendChild(quickWrap);
@@ -548,6 +638,12 @@ function renderPanel() {
   title.textContent = S.panelTitle;
   title.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:10px';
   panel.appendChild(title);
+  // Where do installed packs show up?  The biggest modder drop-off is not knowing
+  // the aircraft/maps appear under the engine's Simulation -> Create Flight.
+  const postPlay = document.createElement('div');
+  postPlay.textContent = S.postPlayHint;
+  postPlay.style.cssText = 'color:#5d7290;font-size:11px;margin:-4px 0 10px;line-height:1.5';
+  panel.appendChild(postPlay);
 
   listEl = document.createElement('div');
   listEl.id = 'ysfw-pack-list';
@@ -587,6 +683,10 @@ function renderPanel() {
     if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
   });
   panel.appendChild(drop);
+  const dropHintEl = document.createElement('div');
+  dropHintEl.textContent = S.dropHint;
+  dropHintEl.style.cssText = 'color:#5d7290;font-size:10.5px;margin-top:4px;text-align:center';
+  panel.appendChild(dropHintEl);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
   // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
@@ -614,7 +714,19 @@ function renderPanel() {
       await installFromBytes(bytes, name, url); // does sync + refresh; records sourceUrl
       urlIn.value = '';
     } catch (e) {
-      if (status) status.textContent = S.urlFail + ': ' + url;
+      // Three distinct failures, distinguished by the error (res is out of scope in
+      // a CORS rejection): a non-ok response = Error('HTTP <status>') (404 etc.); a
+      // valid URL that served a BAD pack = a packs.js analysis error (route it to the
+      // same friendly guidance as a dropped bad zip, not a misleading "can't fetch");
+      // a real CORS/network failure = a TypeError with no status.
+      const m = (e && e.message) || String(e);
+      const http = /^HTTP (\d.*)$/.exec(m);
+      const packErr = /no YSFLIGHT list found|pack exceeds|file exceeds|unsafe path|pack is empty|no usable entries/.test(m);
+      if (status) {
+        status.textContent = http ? S.urlFail404(http[1]) + ': ' + url
+          : packErr ? friendlyErr(m)
+          : S.urlFail + ': ' + url;
+      }
     } finally {
       urlBtn.disabled = false;
     }
@@ -643,7 +755,15 @@ function renderPanel() {
   playBtn.addEventListener('click', start);
   panel.appendChild(playBtn);
 
-  overlay.appendChild(panel);
+  // On touch devices, put the Quick Flight panel ABOVE the Room-ID join form so the
+  // primary action is the first thing a thumb reaches (the join form renders earlier,
+  // synchronously, from index.html).  Fine-pointer PCs keep DOM order (the panel sits
+  // below the form there, which is fine with the keyboard/legend available).
+  const coarse = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
+    navigator.maxTouchPoints > 0 || ('ontouchstart' in window);
+  const joinForm = document.getElementById('ysfw-manual-join');
+  if (coarse && joinForm) overlay.insertBefore(panel, joinForm);
+  else overlay.appendChild(panel);
   refresh();
 }
 
@@ -679,6 +799,30 @@ function showJoinFailure(failed, handlers) {
   desc.style.cssText = 'color:#cbb;font-size:12px;line-height:1.6;margin-bottom:12px';
   desc.textContent = S.joinFailDesc(names);
   panel.appendChild(desc);
+
+  // Per-pack failure reason (timeout / host-not-up / host-left / …) so Retry is an
+  // informed choice, not a blind guess.  reason comes from pack-net's failed[] joined
+  // onto requiredFailed; unknown/compound reasons (id-mismatch:*, raw errors) and the
+  // no-reason syncError path fall back to a generic line / show nothing.
+  const reasonKey = (reason) => {
+    const r = String(reason || '');
+    return (r === 'no-room' || r === 'timeout' || r === 'host-left') ? r : '_default';
+  };
+  const reasonSeen = new Set();
+  const reasonLines = [];
+  for (const f of (failed || [])) {
+    if (!f || !f.reason) continue;
+    const k = reasonKey(f.reason);
+    if (reasonSeen.has(k)) continue;
+    reasonSeen.add(k);
+    reasonLines.push('• ' + ((S.joinReason && (S.joinReason[k] || S.joinReason._default)) || ''));
+  }
+  if (reasonLines.length) {
+    const why = document.createElement('div');
+    why.style.cssText = 'color:#d8b9b9;font-size:12px;line-height:1.6;margin-bottom:12px;white-space:pre-line';
+    why.textContent = reasonLines.join('\n');
+    panel.appendChild(why);
+  }
 
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:10px';

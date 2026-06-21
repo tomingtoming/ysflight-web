@@ -279,7 +279,7 @@ export function startPackHost(gameRoom, opts) {
 // opts: { signalUrl, iceServers?, installFromBytes(bytes)->Promise<{id}>, uninstall(id)?, corrupt?, log? }
 // Resolves to { installed:[ids], failed:[{id,reason}] }.
 export function joinPackHost(gameRoom, wantedIds, opts) {
-  const { signalUrl, iceServers = DEFAULT_ICE, installFromBytes, uninstall, corrupt = false, timeoutMs = 30000, log = () => {} } = opts;
+  const { signalUrl, iceServers = DEFAULT_ICE, installFromBytes, uninstall, corrupt = false, timeoutMs = 30000, log = () => {}, onInstalled = () => {} } = opts;
   const room = derivePackRoom(gameRoom);
   return new Promise((resolve) => {
     const ws = openSignal(signalUrl);
@@ -339,7 +339,7 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
           try {
             const res = await installFromBytes(zip);
             if (done) return; // the guard timeout already resolved us — leave the result arrays alone
-            if (res && res.id === wanted) { installed.push(wanted); log('installed ' + wanted); }
+            if (res && res.id === wanted) { installed.push(wanted); log('installed ' + wanted); onInstalled(); }
             else {
               // A mismatched id means installFromBytes already persisted the bytes
               // under the WRONG (recomputed) id — roll that bogus pack back so a
@@ -469,7 +469,7 @@ export async function fetchPackFromUrl(pack, opts) {
 // requiredFailed lists the REQUIRED (field/scenery) packs neither path obtained —
 // the caller must NOT boot silently into the session when it is non-empty (M7).
 export async function syncPacksAsJoiner(gameRoom, opts) {
-  const { list, log = () => {} } = opts;
+  const { list, log = () => {}, onProgress } = opts;
   const manifest = await fetchHostManifest(gameRoom, opts);
   if (!manifest || manifest.length === 0) return { installed: [], failed: [], missing: 0, conflicts: [], requiredFailed: [] };
   const localIndex = (await list()) || [];
@@ -483,26 +483,37 @@ export async function syncPacksAsJoiner(gameRoom, opts) {
   const installed = [];
   const failed = [];
   const needP2P = [];
+  // Progress for the joiner's loading overlay (optional; no-op for Node/unit tests):
+  // report a 0/total baseline now, then tick on each obtained pack across BOTH paths.
+  let doneCount = 0;
+  if (onProgress) onProgress(doneCount, ordered.length);
   // Option B first: any pack advertising a sourceUrl is self-fetched (offloads the
   // host).  Any B failure (network/404/integrity) falls through to Option A.
   for (const p of ordered) {
     if (p.sourceUrl) {
       const ok = await fetchPackFromUrl(p, opts);
-      if (ok) { installed.push(p.id); continue; }
+      if (ok) { installed.push(p.id); doneCount++; if (onProgress) onProgress(doneCount, ordered.length); continue; }
       log('Option B failed for ' + p.id + ' — falling back to host push (Option A)');
     }
     needP2P.push(p);
   }
-  // Option A (M5 transport): pull whatever Option B did not satisfy.
+  // Option A (M5 transport): pull whatever Option B did not satisfy.  Thread a
+  // per-install tick through joinPackHost so the overlay advances during the pull.
   if (needP2P.length) {
-    const res = await joinPackHost(gameRoom, needP2P.map((p) => p.id), opts);
+    const res = await joinPackHost(gameRoom, needP2P.map((p) => p.id),
+      { ...opts, onInstalled: () => { doneCount++; if (onProgress) onProgress(doneCount, ordered.length); } });
     for (const id of res.installed) installed.push(id);
     for (const f of res.failed) failed.push(f);
   }
   const got = new Set(installed);
+  // Carry each failed pack's reason (timeout / no-room / host-left / id-mismatch / …)
+  // onto requiredFailed so the obtain-failure UX can explain WHY and make Retry an
+  // informed choice rather than a blind guess.
+  const reasonById = new Map();
+  for (const f of failed) if (f && f.id != null && !reasonById.has(f.id)) reasonById.set(f.id, f.reason);
   const requiredFailed = ordered
     .filter((p) => requiredIds.has(p.id) && !got.has(p.id))
-    .map((p) => ({ id: p.id, name: p.name, categories: p.categories || [] }));
+    .map((p) => ({ id: p.id, name: p.name, categories: p.categories || [], reason: reasonById.get(p.id) }));
   return { installed, failed, missing: ordered.length, conflicts, requiredFailed };
 }
 
@@ -540,7 +551,7 @@ if (typeof window !== 'undefined') {
     },
     // Pre-boot join sync (M6): read the host manifest, diff, pull the missing
     // packs, install — the boot gate releases when this resolves.
-    syncAsJoiner(gameRoom) {
+    syncAsJoiner(gameRoom, onProgress) {
       return syncPacksAsJoiner(gameRoom, {
         signalUrl: signalUrlOf(),
         iceServers: iceOf(),
@@ -550,6 +561,8 @@ if (typeof window !== 'undefined') {
         installFromBytes: (bytes, name, sourceUrl) => window.ysfwPacks.installFromBytes(bytes, name, sourceUrl),
         uninstall: (id) => window.ysfwPacks.uninstall(id),
         corrupt: !!window.__ysfwPackCorrupt, // test hook: corrupt the P2P transfer
+        // Optional progress sink for the loading overlay; absent for Node/smoke.
+        onProgress: typeof onProgress === 'function' ? onProgress : undefined,
         log: (s) => console.log('[pack-net join] ' + s),
       });
     },
