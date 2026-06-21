@@ -555,6 +555,25 @@
     // and clicking copies the invite link /?join=<room>.  It replaces (and
     // hides) the engine's #ysfw-room-overlay.
     var chip = null;
+    // Pin the live Room ID into the URL (?room=<code>) the moment we start hosting,
+    // so a full page reload re-hosts the SAME code and previously-shared invite
+    // links (/?join=<code>) keep working.  Without this the host mints a fresh
+    // random code on every (re)host, silently killing old links — one half of the
+    // "after a while, players can't rejoin" report (the other half is the signaling
+    // reconnect in yssocket/pack-net).  One-shot; preserves any other query params.
+    var roomPinned = false;
+    function pinRoomUrl(code) {
+      if (roomPinned || !code) return;
+      roomPinned = true;
+      try {
+        var u = new URL(location.href);
+        if (u.searchParams.get('room') !== code) {
+          u.searchParams.set('room', code);
+          history.replaceState(history.state, '', u.toString());
+        }
+        Module.ysfwRoomCode = code; // keep any later read in sync
+      } catch (e) {}
+    }
     function ensureChip() {
       if (chip) return chip;
       chip = document.createElement('div');
@@ -671,6 +690,7 @@
         // The chip replaces the engine overlay, so hide #ysfw-room-overlay.
         if (badge) badge.style.display = 'none';
         if (roomEl) roomEl.style.display = 'none';
+        pinRoomUrl(host.room);
         renderChip(host.room, !host.ok);
         ensureChip().style.display = 'block';
       } else if (host && host.failed) {
@@ -685,6 +705,21 @@
         if (roomEl) roomEl.style.display = 'none';
       }
     }, 800);
+
+    // Resume after a backgrounded/frozen tab: a hidden mobile tab (screen lock,
+    // app switch) freezes JS timers, so the host's keepalive ping stops and its
+    // signaling socket is torn down — the room vanishes for late joiners.  The
+    // engine host (yssocket) and pack host (pack-net) reconnect on their own ws
+    // close, but a frozen tab also froze their backoff timers; on becoming visible
+    // again, kick an immediate reconnect.  (pack-net listens for itself too; this
+    // covers the engine game host, whose reconnect we expose as R.host.reconnect.)
+    function resumeSignaling() {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      var R = globalThis.ysfwRtc;
+      if (R && R.host && R.host.reconnect) { try { R.host.reconnect(); } catch (e) {} }
+    }
+    window.addEventListener('visibilitychange', resumeSignaling);
+    window.addEventListener('pageshow', resumeSignaling);
   })();
 
   // ---- Quick Flight: return to the top (pre-boot shell) when the flight ends --
