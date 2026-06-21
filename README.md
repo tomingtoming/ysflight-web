@@ -7,6 +7,8 @@ YSFLIGHT web is a WebAssembly port of Soji Yamakawa (CaptainYS)'s
 [YS FLIGHT SIMULATOR](https://ysflight.org), runnable in any modern browser
 with WebGL — no installation required.
 
+**▶ プレイ / Play: https://ysflight-web.toming.app**
+
 ## 構成 / Architecture
 
 ```
@@ -80,6 +82,8 @@ google-chrome)。CI では `default` のみ実行されます。
 **レンダラ周りを変更したら push 前に必ず実行してください。**
 
 ## デプロイ / Deploy
+
+本番 URL は **https://ysflight-web.toming.app**（Cloudflare Workers のカスタムドメイン）。
 
 本番は **Cloudflare Workers**（設定は `wrangler.jsonc`）。Worker 本体は
 `worker/signal.js`（`/signal` の WebRTC シグナリング＝Durable Object `SignalHub`）で、

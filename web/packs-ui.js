@@ -45,6 +45,7 @@ const S = ({
     panelTitle: '追加パック',
     quickTitle: '🛫 今すぐ飛ぶ',
     quickHint: 'クリックでそのまま離陸（追加パック不要）',
+    touchHint: 'スマホ対応：離陸すると画面に操縦スティックが出ます',
     tagBeginner: '👍 はじめての方向け',
     tagIntermediate: '中級者向け',
     tagAirliner: '大型機',
@@ -93,6 +94,7 @@ const S = ({
     panelTitle: 'Add-on packs',
     quickTitle: '🛫 Quick flight',
     quickHint: 'Click to take off right away (no add-on needed)',
+    touchHint: 'Touch-ready: an on-screen stick appears once you take off.',
     tagBeginner: '👍 Beginner',
     tagIntermediate: 'Intermediate',
     tagAirliner: 'Airliner',
@@ -537,6 +539,16 @@ function renderPanel() {
   const overlay = document.getElementById('overlay');
   if (!overlay || document.getElementById('ysfw-pack-panel')) return;
 
+  // The .data download is already complete by the time the panel shows (the gate
+  // is held only to await the user's "Play").  This shell has no
+  // monitorRunDependencies, so Emscripten's last "Downloading data… (n/n)"
+  // setStatus is never cleared and the full progress bar lingers above the
+  // panel.  Clear both so the panel isn't crowned by a stale "downloading".
+  const shellStatus = document.getElementById('status');
+  if (shellStatus) shellStatus.textContent = '';
+  const shellProgress = document.getElementById('progress');
+  if (shellProgress) shellProgress.style.display = 'none';
+
   const panel = document.createElement('div');
   panel.id = 'ysfw-pack-panel';
   panel.style.cssText =
@@ -557,6 +569,16 @@ function renderPanel() {
   qHint.textContent = S.quickHint;
   qHint.style.cssText = 'color:#5d7290;font-size:11px;margin-bottom:8px';
   quickWrap.appendChild(qHint);
+  // On touch devices, surface the taster value (on-screen stick after takeoff) ON the
+  // top page, not only once already in flight.  Inline the coarse-pointer test (no
+  // named const) so it never collides with other coarse checks in renderPanel.
+  if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
+      navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
+    const touchHint = document.createElement('div');
+    touchHint.textContent = S.touchHint;
+    touchHint.style.cssText = 'color:#8fa3bb;font-size:11px;margin-bottom:8px';
+    quickWrap.appendChild(touchHint);
+  }
   const qGrid = document.createElement('div');
   qGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
   // tag is a difficulty hint (localized via the S table) so a newcomer can pick the

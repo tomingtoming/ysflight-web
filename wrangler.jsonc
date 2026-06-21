@@ -22,6 +22,11 @@
   // SharedArrayBuffer / COOP+COEP.
   "name": "ysflight-web",
   "compatibility_date": "2025-06-01",
+  // Persist console logs (invocation + console.log) so pack-sync signaling can be
+  // searched after the fact in the dashboard (Workers & Pages -> ysflight-web ->
+  // Logs).  Only signaling control messages pass through this Worker -- game and
+  // pack BYTES are P2P -- so log volume stays tiny and well within the free tier.
+  "observability": { "enabled": true },
   // Preview URLs (per-version <VERSION_PREFIX>-ysflight-web.<subdomain>.workers.dev)
   // for `wrangler versions upload`.  Defaults to `workers_dev` (true here, since
   // no custom routes), so this is mostly explicit intent -- but without it a

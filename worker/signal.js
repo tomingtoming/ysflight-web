@@ -106,6 +106,19 @@ export class SignalHub {
     try { ws.send(JSON.stringify(obj)); } catch (e) {}
   }
 
+  // Structured signaling log.  Observability is on (wrangler.jsonc), so these are
+  // persisted and searchable -- grep the dashboard Logs by ev= or pack=true.  Only
+  // tiny control events are logged (no game/pack bytes pass through here), so the
+  // volume is negligible.  `pack` flags the derived pack-distribution room
+  // (web/pack-net.js derivePackRoom appends '~p'), the channel this debugging
+  // targets.
+  log(ev, room, extra) {
+    try {
+      console.log(JSON.stringify(Object.assign(
+        { ev, room, pack: typeof room === 'string' && room.endsWith('~p') }, extra || {})));
+    } catch (e) {}
+  }
+
   onMessage(ws, conn, raw) {
     let m;
     try { m = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw)); }
@@ -117,25 +130,32 @@ export class SignalHub {
     if (m.t === 'ping') return;
 
     if (m.t === 'host' && typeof m.room === 'string' && m.room.length <= 16) {
-      if (this.rooms.has(m.room)) { this.send(ws, { t: 'host-taken' }); return; }
+      if (this.rooms.has(m.room)) { this.send(ws, { t: 'host-taken' }); this.log('host-taken', m.room); return; }
       conn.role = 'host';
       conn.room = m.room;
       // Optional add-on-pack manifest (tiny control metadata so a joiner knows
       // which packs the host requires; pack BYTES never touch the Worker -- they
       // go P2P).  Cap its serialized size so a host can't bloat the in-memory hub.
       let manifest = null;
+      let bytes = 0, dropped = false;
       if (m.manifest != null) {
         try {
           const s = JSON.stringify(m.manifest);
+          bytes = s.length;
           if (s.length <= 64 * 1024) manifest = m.manifest;
+          else dropped = true; // > 64KB cap -> joiner sees no manifest and silently skips sync
         } catch (e) {}
       }
       this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest });
       this.send(ws, { t: 'host-ok', room: m.room });
+      // packs: how many add-on packs the host advertised; dropped: the manifest
+      // exceeded the 64KB hub cap and was discarded (a prime suspect when a joiner
+      // never pulls anything despite the host having packs enabled).
+      this.log('host', m.room, { packs: Array.isArray(manifest) ? manifest.length : 0, bytes, dropped });
 
     } else if (m.t === 'join' && typeof m.room === 'string') {
       const r = this.rooms.get(m.room);
-      if (!r) { this.send(ws, { t: 'no-room' }); return; }
+      if (!r) { this.send(ws, { t: 'no-room' }); this.log('join', m.room, { result: 'no-room' }); return; }
       conn.role = 'peer';
       conn.room = m.room;
       conn.peerId = r.nextPeer++;
@@ -144,15 +164,25 @@ export class SignalHub {
       // packs BEFORE the WebRTC/log-on handshake (see web/pack-net.js).
       this.send(ws, { t: 'join-ok', peer: conn.peerId, manifest: r.manifest || null });
       this.send(r.host, { t: 'peer', peer: conn.peerId });
+      this.log('join', m.room, { result: 'join-ok', peer: conn.peerId, packs: Array.isArray(r.manifest) ? r.manifest.length : 0 });
 
     } else if ((m.t === 'sdp' || m.t === 'ice') && conn.room) {
       const r = this.rooms.get(conn.room);
-      if (!r) return;
+      if (!r) { this.log('relay-drop', conn.room, { t: m.t, role: conn.role, reason: 'no-room' }); return; }
       if (conn.role === 'host') {
-        this.send(r.peers.get(m.peer), { t: m.t, peer: 0, data: m.data });
+        const target = r.peers.get(m.peer);
+        // A relay to an absent target (peer gone, or a stale/forged peer id) means
+        // the handshake silently stalls -- log it so the gap is visible.
+        if (!target) this.log('relay-drop', conn.room, { t: m.t, dir: 'host->peer', peer: m.peer, reason: 'no-peer' });
+        else this.send(target, { t: m.t, peer: 0, data: m.data });
       } else {
-        this.send(r.host, { t: m.t, peer: conn.peerId, data: m.data });
+        if (!r.host) this.log('relay-drop', conn.room, { t: m.t, dir: 'peer->host', peer: conn.peerId, reason: 'no-host' });
+        else this.send(r.host, { t: m.t, peer: conn.peerId, data: m.data });
       }
+      // SDP exchange is low-volume (one offer + one answer per pair) and marks the
+      // WebRTC handshake actually starting; ICE candidates are high-volume so they
+      // are NOT logged individually (a missing relay target above still surfaces).
+      if (m.t === 'sdp') this.log('sdp', conn.room, { dir: conn.role === 'host' ? 'host->peer' : 'peer->host', peer: conn.role === 'host' ? m.peer : conn.peerId });
     }
   }
 
@@ -164,9 +194,11 @@ export class SignalHub {
     if (conn.role === 'host') {
       for (const [, pws] of r.peers) this.send(pws, { t: 'host-left' });
       this.rooms.delete(conn.room);
+      this.log('host-left', conn.room, { peers: r.peers.size });
     } else {
       r.peers.delete(conn.peerId);
       this.send(r.host, { t: 'peer-left', peer: conn.peerId });
+      this.log('peer-left', conn.room, { peer: conn.peerId });
     }
   }
 }
