@@ -316,21 +316,6 @@
         // resolved "User YSFLIGHT Dir=" / "YSFLIGHT Config Dir=").
         if (idbfsLoadErr) console.error('[idbfs] load failed: ' + (idbfsLoadErr.message || idbfsLoadErr));
         else console.log('[idbfs] load ok');
-        // TEMP diagnostic: deterministic IDBFS round-trip test.  Read a boot counter
-        // from the IDBFS-persisted user dir, increment, write back, and persist it
-        // IMMEDIATELY with an explicit syncfs(false) (so the test does not depend on
-        // the 10s flush timing).  If it climbs across reloads, IDBFS persistence
-        // works and a "settings don't save" cause lies elsewhere (engine write
-        // timing); if it stays 1, the syncfs round-trip itself is broken.
-        try {
-          var bcPath = '/home/web_user/Documents/ysfw-jsbootcount.txt';
-          var bc = 0;
-          try { bc = parseInt(FS.readFile(bcPath, { encoding: 'utf8' }), 10) || 0; } catch (e) {}
-          bc++;
-          FS.writeFile(bcPath, String(bc));
-          console.log('[idbfs] JS boot count = ' + bc + ' (should climb across reloads)');
-          FS.syncfs(false, function (e) { console.log('[idbfs] boot-count persist: ' + (e ? (e.message || e) : 'ok')); });
-        } catch (e) { console.error('[idbfs] boot-count probe failed: ' + (e && e.message ? e.message : e)); }
         // Pre-boot add-on pack management.  Hold a run dependency so the engine's
         // one-time template scan (a few frames into main) runs only after packs
         // are in place — no reload needed.  Three flows:
@@ -535,6 +520,32 @@
       setInterval(flush, 10000);
       window.addEventListener('visibilitychange', flush);
       window.addEventListener('beforeunload', flush);
+      // Native settings (graphics flight.cfg / screen option.cfg / key+joystick
+      // ctlassign.cfg) are written by the engine the instant the user hits OK in
+      // a config dialog -- via fopen/fwrite/fclose, i.e. FS.close.  Those writes
+      // land only in the in-memory FS; the IDBFS round-trip itself is healthy
+      // (verified), but without an explicit syncfs the bytes are lost when the
+      // user reloads / closes the tab (or a mobile tab is frozen) before the 10s
+      // interval flush.  The visibilitychange/beforeunload flush above fires too
+      // late: syncfs is async and does not complete before the page is torn
+      // down.  So persist proactively -- when a *writable* file under the
+      // IDBFS-mounted Documents tree is closed, schedule a debounced flush.
+      var origClose = Module.FS.close.bind(Module.FS);
+      var closeFlushTimer = null;
+      Module.FS.close = function (stream) {
+        var r = origClose(stream);
+        try {
+          if (stream && (stream.flags & 3) !== 0) {            // O_WRONLY | O_RDWR (read-only closes ignored)
+            var p = stream.path || '';
+            if (p.lastIndexOf('/home/web_user/Documents/', 0) === 0 &&
+                p.indexOf('/packs/') < 0) {                    // packs/ is MEMFS, never persisted to IndexedDB
+              clearTimeout(closeFlushTimer);
+              closeFlushTimer = setTimeout(flush, 800);        // debounce: OK writes 3 cfg files in a burst
+            }
+          }
+        } catch (e) {}
+        return r;
+      };
     },
     print: function (text) { console.log(text); },
     printErr: (function () {
