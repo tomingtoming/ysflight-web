@@ -316,6 +316,21 @@
         // resolved "User YSFLIGHT Dir=" / "YSFLIGHT Config Dir=").
         if (idbfsLoadErr) console.error('[idbfs] load failed: ' + (idbfsLoadErr.message || idbfsLoadErr));
         else console.log('[idbfs] load ok');
+        // TEMP diagnostic: deterministic IDBFS round-trip test.  Read a boot counter
+        // from the IDBFS-persisted user dir, increment, write back, and persist it
+        // IMMEDIATELY with an explicit syncfs(false) (so the test does not depend on
+        // the 10s flush timing).  If it climbs across reloads, IDBFS persistence
+        // works and a "settings don't save" cause lies elsewhere (engine write
+        // timing); if it stays 1, the syncfs round-trip itself is broken.
+        try {
+          var bcPath = '/home/web_user/Documents/ysfw-jsbootcount.txt';
+          var bc = 0;
+          try { bc = parseInt(FS.readFile(bcPath, { encoding: 'utf8' }), 10) || 0; } catch (e) {}
+          bc++;
+          FS.writeFile(bcPath, String(bc));
+          console.log('[idbfs] JS boot count = ' + bc + ' (should climb across reloads)');
+          FS.syncfs(false, function (e) { console.log('[idbfs] boot-count persist: ' + (e ? (e.message || e) : 'ok')); });
+        } catch (e) { console.error('[idbfs] boot-count probe failed: ' + (e && e.message ? e.message : e)); }
         // Pre-boot add-on pack management.  Hold a run dependency so the engine's
         // one-time template scan (a few frames into main) runs only after packs
         // are in place — no reload needed.  Three flows:
