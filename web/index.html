@@ -153,6 +153,8 @@
       syncError: '(同期エラー)',
       joinSyncing: 'ホストのパックを同期中…',
       joinProgress: function (done, total) { return 'ホストのパックを同期中… ' + done + '/' + total; },
+      materializing: function (d, t) { return 'アドオンを展開中… ' + d + '/' + t; },
+      packsSkipped: function (n) { return n + ' 個のアドオンは容量上限を超えたため読み込まれませんでした。パネルで不要なものを無効化すると読み込めます。'; },
       help: {
         title: '操作 / Controls',
         toggleTitle: '操作ガイド（? キーで開閉）',
@@ -213,6 +215,8 @@
       syncError: '(sync error)',
       joinSyncing: 'Syncing the host’s add-ons…',
       joinProgress: function (done, total) { return 'Syncing the host’s add-ons… ' + done + '/' + total; },
+      materializing: function (d, t) { return 'Loading add-ons… ' + d + '/' + t; },
+      packsSkipped: function (n) { return n + ' add-on(s) were not loaded (over the memory budget). Disable some in the panel to make room.'; },
       help: {
         title: 'Controls',
         toggleTitle: 'Controls guide (press ? to toggle)',
@@ -342,9 +346,25 @@
           try { FS.mkdirTree(Module.__ysfwUserDir + '/packs'); } catch (e) {}
           try { FS.mount(FS.filesystems.MEMFS, {}, Module.__ysfwUserDir + '/packs'); } catch (e) {}
           Module.addRunDependency('ysfw-materialize');
-          Promise.resolve(window.ysfwPacks && window.ysfwPacks.materializeEnabled && window.ysfwPacks.materializeEnabled())
+          // Backstop: materializeEnabled now budgets memory so it should not hang,
+          // but never let a stuck/slow materialize block the boot forever (the panel
+          // and join-sync have their own backstops; this closes the same hole here).
+          var matDone = false;
+          function finishMaterialize() { if (matDone) return; matDone = true; Module.removeRunDependency('ysfw-materialize'); }
+          var matBackstop = setTimeout(function () {
+            console.error('[packs] materialize backstop (90s) — releasing boot gate; some packs may be missing');
+            finishMaterialize();
+          }, 90000);
+          // Progress on the loading status, but only when nothing else owns the UI
+          // (the pack panel / join-sync set their own text).
+          var matProgress = function (done, total) {
+            if (gateReleased || Module.__ysfwJoinSync) return;
+            if (document.getElementById('ysfw-pack-panel')) return;
+            statusEl.textContent = TXT.materializing(done, total);
+          };
+          Promise.resolve(window.ysfwPacks && window.ysfwPacks.materializeEnabled && window.ysfwPacks.materializeEnabled(matProgress))
             .catch(function (e) { console.warn('[packs] pre-boot materialize: ' + (e && e.message ? e.message : e)); })
-            .then(function () { Module.removeRunDependency('ysfw-materialize'); });
+            .then(function () { clearTimeout(matBackstop); finishMaterialize(); });
           if (joinRoom) {
             // M6/M7: hold the gate and OBTAIN the host's enabled packs before
             // main() — Option B (self-fetch each pack's advertised URL) with a
@@ -461,6 +481,21 @@
     onRuntimeInitialized: function () {
       booted = true;
       overlay.classList.add('hidden');
+      // If the capacity budget skipped some enabled packs, tell the user why their
+      // add-ons aren't all there (a dismissible banner, not a silent drop).
+      try {
+        var sk = window.__ysfwMaterializeSkipped;
+        if (sk && sk.length) {
+          var n = document.createElement('div');
+          n.style.cssText = 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:100000;max-width:min(560px,92vw);' +
+            'background:rgba(20,14,8,.95);border:1px solid #5a4a2a;border-radius:8px;padding:10px 14px;color:#e6d8b8;font-size:12.5px;line-height:1.5;cursor:pointer';
+          n.textContent = '⚠ ' + TXT.packsSkipped(sk.length);
+          n.title = sk.map(function (s) { return s.name || s.id; }).join(', ');
+          n.onclick = function () { if (n.parentNode) n.remove(); };
+          document.body.appendChild(n);
+          setTimeout(function () { if (n.parentNode) n.remove(); }, 15000);
+        }
+      } catch (e) {}
       // Persist /home/web_user/Documents to IndexedDB.  Guard against
       // overlapping syncfs calls (interval + visibilitychange/beforeunload, or a
       // slow write): a second syncfs while one is in flight is wasted work and

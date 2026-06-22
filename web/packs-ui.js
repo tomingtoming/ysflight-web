@@ -883,13 +883,55 @@ function setupFS() {
 // regenerated each boot from OPFS) and the tiny generated lists into the IDBFS
 // user dir.  index.html holds a run dependency across this so main() does not scan
 // until the packs are in place.
-async function materializeEnabled() {
-  if (!adapter && !setupFS()) return;
-  for (const rec of await opfs.listRecords()) {
-    if (rec.enabled === false) continue;
-    try { await opfs.materialize(rec, adapter); }
-    catch (e) { console.warn('[packs] materialize failed for ' + rec.id + ': ' + (e && e.message ? e.message : e)); }
+//
+// CAPACITY BUDGET: the materialize target is MEMFS == wasm linear memory (this is a
+// 32-bit build, ~2GB ceiling shared with the engine + bundled base assets).  With a
+// large enabled set (e.g. the whole ysfinder.jp catalogue, ~1.4GB+ unpacked) a naive
+// "materialize everything" exhausts memory and the boot HANGS with no progress.  So
+// cap the total bytes we load; packs that don't fit are SKIPPED (not materialized,
+// so the engine never scans them) and reported via the returned `skipped` list +
+// window.__ysfwMaterializeSkipped so the shell can tell the user.  Override the cap
+// for tuning with ?packbudget=<MB>.  This is the interim guard until pack payload is
+// read lazily from OPFS (WasmFS + ASYNCIFY) instead of bulk-copied into memory.
+const MATERIALIZE_BUDGET_BYTES = 768 * 1024 * 1024;
+
+async function materializeEnabled(onProgress) {
+  if (!adapter && !setupFS()) return { materialized: [], skipped: [] };
+  let budget = MATERIALIZE_BUDGET_BYTES;
+  try {
+    const q = new URLSearchParams(location.search).get('packbudget');
+    if (q != null && q !== '') budget = Math.max(0, parseFloat(q) * 1024 * 1024);
+  } catch (e) {}
+  const recs = (await opfs.listRecords()).filter((r) => r.enabled !== false);
+  const total = recs.length;
+  const materialized = [], skipped = [];
+  let used = 0, done = 0;
+  for (const rec of recs) {
+    const sz = rec.bytes || (rec.files || []).reduce((n, f) => n + (f.size || 0), 0);
+    // Skip once over budget -- but always allow the first pack so a single large
+    // pack still loads (no single ysfinder pack approaches the cap unpacked).
+    if (materialized.length > 0 && used + sz > budget) {
+      skipped.push({ id: rec.id, name: rec.name, bytes: sz, reason: 'budget' });
+      continue;
+    }
+    try {
+      await opfs.materialize(rec, adapter);
+      used += sz;
+      materialized.push(rec.id);
+    } catch (e) {
+      console.warn('[packs] materialize failed for ' + rec.id + ': ' + (e && e.message ? e.message : e));
+      skipped.push({ id: rec.id, name: rec.name, bytes: sz, reason: 'error', error: String((e && e.message) || e) });
+    }
+    done++;
+    if (typeof onProgress === 'function') { try { onProgress(done, total); } catch (e) {} }
   }
+  if (skipped.length) {
+    console.warn('[packs] ' + skipped.length + ' pack(s) not loaded (>' +
+      Math.round(budget / 1048576) + 'MB budget or error): ' +
+      skipped.map((s) => s.name || s.id).join(', '));
+  }
+  window.__ysfwMaterializeSkipped = skipped;
+  return { materialized, skipped };
 }
 
 function init() {
