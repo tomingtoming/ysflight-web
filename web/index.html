@@ -154,7 +154,7 @@
       joinSyncing: 'ホストのパックを同期中…',
       joinProgress: function (done, total) { return 'ホストのパックを同期中… ' + done + '/' + total; },
       materializing: function (d, t) { return 'アドオンを展開中… ' + d + '/' + t; },
-      packsSkipped: function (n) { return n + ' 個のアドオンは容量上限を超えたため読み込まれませんでした。パネルで不要なものを無効化すると読み込めます。'; },
+      packsSkipped: function (n, names) { return n + ' 個のアドオンを読み込めませんでした（取り込みデータの解析に失敗）。再取り込みをお試しください。' + (names ? '：' + names : ''); },
       help: {
         title: '操作 / Controls',
         toggleTitle: '操作ガイド（? キーで開閉）',
@@ -216,7 +216,7 @@
       joinSyncing: 'Syncing the host’s add-ons…',
       joinProgress: function (done, total) { return 'Syncing the host’s add-ons… ' + done + '/' + total; },
       materializing: function (d, t) { return 'Loading add-ons… ' + d + '/' + t; },
-      packsSkipped: function (n) { return n + ' add-on(s) were not loaded (over the memory budget). Disable some in the panel to make room.'; },
+      packsSkipped: function (n, names) { return n + ' add-on(s) could not be loaded (failed to parse the imported data). Try re-importing them.' + (names ? ': ' + names : ''); },
       help: {
         title: 'Controls',
         toggleTitle: 'Controls guide (press ? to toggle)',
@@ -346,8 +346,9 @@
           try { FS.mkdirTree(Module.__ysfwUserDir + '/packs'); } catch (e) {}
           try { FS.mount(FS.filesystems.MEMFS, {}, Module.__ysfwUserDir + '/packs'); } catch (e) {}
           Module.addRunDependency('ysfw-materialize');
-          // Backstop: materializeEnabled now budgets memory so it should not hang,
-          // but never let a stuck/slow materialize block the boot forever (the panel
+          // Backstop: materializeEnabled only copies lightweight metadata (no budget,
+          // no heavy payload) so it should not hang, but never let a stuck/slow
+          // materialize block the boot forever (the panel
           // and join-sync have their own backstops; this closes the same hole here).
           var matDone = false;
           function finishMaterialize() { if (matDone) return; matDone = true; Module.removeRunDependency('ysfw-materialize'); }
@@ -481,16 +482,18 @@
     onRuntimeInitialized: function () {
       booted = true;
       overlay.classList.add('hidden');
-      // If the capacity budget skipped some enabled packs, tell the user why their
-      // add-ons aren't all there (a dismissible banner, not a silent drop).
+      // If some enabled packs failed to materialize (parse error, not a capacity
+      // limit -- there is no boot-time budget since lazy-pack landed), tell the user
+      // which ones and why (a dismissible banner, not a silent drop).
       try {
         var sk = window.__ysfwMaterializeSkipped;
         if (sk && sk.length) {
+          var names = sk.map(function (s) { return s.name || s.id; }).join(', ');
           var n = document.createElement('div');
           n.style.cssText = 'position:fixed;left:50%;top:8px;transform:translateX(-50%);z-index:100000;max-width:min(560px,92vw);' +
             'background:rgba(20,14,8,.95);border:1px solid #5a4a2a;border-radius:8px;padding:10px 14px;color:#e6d8b8;font-size:12.5px;line-height:1.5;cursor:pointer';
-          n.textContent = '⚠ ' + TXT.packsSkipped(sk.length);
-          n.title = sk.map(function (s) { return s.name || s.id; }).join(', ');
+          n.textContent = '⚠ ' + TXT.packsSkipped(sk.length, names);
+          n.title = names;
           n.onclick = function () { if (n.parentNode) n.remove(); };
           document.body.appendChild(n);
           setTimeout(function () { if (n.parentNode) n.remove(); }, 15000);
