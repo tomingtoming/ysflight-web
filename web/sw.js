@@ -43,17 +43,28 @@ self.addEventListener('fetch', function (e) {
     return;
   }
 
-  // Hashed assets are immutable: cache first.
-  e.respondWith(
-    caches.match(e.request).then(function (hit) {
-      if (hit) return hit;
-      return fetch(e.request).then(function (res) {
-        if (res.ok) {
-          var copy = res.clone();
-          caches.open(CACHE_NAME).then(function (c) { c.put(e.request, copy); });
-        }
+  // Only the content-hashed engine assets (ysflight32_gl2.<hash>.{js,wasm,data}) are
+  // truly immutable -> cache first (fast, offline).  Everything else is a FIXED-name
+  // shell file (packs-ui.js, opfs-store.js, pack-net.js, sw.js, icons...) that changes
+  // WITHOUT a new filename, so cache-first would pin a stale copy across deploys --
+  // the root cause of repeated "my JS fix didn't take" bugs.  Serve those network-first
+  // with a cache fallback for offline.
+  if (/ysflight32_gl2\.[0-9a-f]{8}\.(js|wasm|data)$/.test(url.pathname)) {
+    e.respondWith(
+      caches.match(e.request).then(function (hit) {
+        if (hit) return hit;
+        return fetch(e.request).then(function (res) {
+          if (res.ok) { var copy = res.clone(); caches.open(CACHE_NAME).then(function (c) { c.put(e.request, copy); }); }
+          return res;
+        });
+      })
+    );
+  } else {
+    e.respondWith(
+      fetch(e.request).then(function (res) {
+        if (res.ok) { var copy = res.clone(); caches.open(CACHE_NAME).then(function (c) { c.put(e.request, copy); }); }
         return res;
-      });
-    })
-  );
+      }).catch(function () { return caches.match(e.request); })
+    );
+  }
 });
