@@ -182,9 +182,18 @@ export async function storeAnalyzedPack(analysis, { enabled = true } = {}) {
 // disabled pack's payload may still be materialized, but with no list the engine
 // does not scan it.  `fsAdapter` is the packs.js-style adapter rooted at the
 // YSFLIGHT user dir; `withLists` defaults to the record's enabled flag.
-export async function materialize(record, fsAdapter, { withLists = record.enabled !== false } = {}) {
+// File extensions the engine's startup template scan actually reads: the lists,
+// plus aircraft/ground property (.dat) and scenery start position (.stp).  The
+// heavy visual/collision payload (.dnm/.srf/.fld/.yfs/cockpit...) is NOT opened
+// during the scan -- the engine loads it lazily, one item at a time, when a pack
+// entry is selected/hovered.  So boot only needs these; the rest is materialized
+// on demand (materializeFile).
+const META_EXT = /\.(lst|dat|stp)$/i;
+
+export async function materialize(record, fsAdapter, { withLists = record.enabled !== false, metaOnly = false } = {}) {
   assertOPFS();
   for (const f of record.files) {
+    if (metaOnly && !META_EXT.test(f.path)) continue; // heavy payload deferred to materializeFile
     const dest = 'packs/' + record.id + '/' + f.path;
     await fsAdapter.mkdirp(parentDir(dest));
     await fsAdapter.writeFile(dest, await getBlob(f.sha256));
@@ -195,6 +204,20 @@ export async function materialize(record, fsAdapter, { withLists = record.enable
       await fsAdapter.writeFile(g.file, enc.encode(g.text));
     }
   }
+}
+
+// On-demand materialize of a single payload file (Phase 2): copy one pack file's
+// blob into the engine FS.  Returns true if the path is in the record (now on
+// disk), false if the record has no such file.  Idempotent (blobs are immutable,
+// so a re-write is harmless).
+export async function materializeFile(record, fsAdapter, relPath) {
+  assertOPFS();
+  const f = record.files.find((x) => x.path === relPath);
+  if (!f) return false;
+  const dest = 'packs/' + record.id + '/' + f.path;
+  await fsAdapter.mkdirp(parentDir(dest));
+  await fsAdapter.writeFile(dest, await getBlob(f.sha256));
+  return true;
 }
 
 // Garbage-collect blobs no longer referenced by any pack record.  Safe to run

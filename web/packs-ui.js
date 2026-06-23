@@ -390,7 +390,7 @@ async function installCore(bytes, name, sourceUrl) {
     });
     await opfs.putRecordFromAnalysis(a, { enabled: true });
     recordWritten = true;
-    await opfs.materialize(await opfs.getRecord(a.id), adapter);
+    await opfs.materialize(await opfs.getRecord(a.id), adapter, { metaOnly: true }); // listing only; payload on demand
     // Keep the in-memory list in sync (sync section, no await -> safe vs. the
     // concurrent bulk-import workers) so the panel never has to re-enumerate OPFS.
     cacheUpsert({ id: a.id, name: a.name, enabled: true, bytes: a.total, categories: a.categories });
@@ -428,8 +428,8 @@ async function installFromBytes(bytes, name, sourceUrl) {
 async function setEnabled(id, enabled) {
   if (!adapter) throw new Error('pack layer not ready');
   const rec = await opfs.setEnabled(id, enabled);
-  if (enabled) await opfs.materialize(rec, adapter);              // write payload + generated lists
-  else for (const g of rec.generated) await adapter.rmrf(g.file); // drop lists -> engine won't scan it
+  if (enabled) await opfs.materialize(rec, adapter, { metaOnly: true }); // write listing only; payload on demand
+  else for (const g of rec.generated) await adapter.rmrf(g.file);        // drop lists -> engine won't scan it
   cacheUpdate(id, { enabled: !!enabled });
   await sync();
   await refresh();
@@ -878,61 +878,110 @@ function setupFS() {
   return true;
 }
 
-// Materialize every ENABLED pack from OPFS into the engine FS before the engine's
-// one-time template scan: payload into the MEMFS-mounted packs/ (ephemeral,
-// regenerated each boot from OPFS) and the tiny generated lists into the IDBFS
-// user dir.  index.html holds a run dependency across this so main() does not scan
-// until the packs are in place.
+// Materialize every ENABLED pack's LISTING from OPFS into the engine FS before the
+// engine's one-time template scan: only the lightweight metadata the scan reads
+// (.lst/.dat/.stp) goes into the MEMFS-mounted packs/, and the tiny generated lists
+// into the IDBFS user dir.  index.html holds a run dependency across this so main()
+// does not scan until the listings are in place.
 //
-// CAPACITY BUDGET: the materialize target is MEMFS == wasm linear memory (this is a
-// 32-bit build, ~2GB ceiling shared with the engine + bundled base assets).  With a
-// large enabled set (e.g. the whole ysfinder.jp catalogue, ~1.4GB+ unpacked) a naive
-// "materialize everything" exhausts memory and the boot HANGS with no progress.  So
-// cap the total bytes we load; packs that don't fit are SKIPPED (not materialized,
-// so the engine never scans them) and reported via the returned `skipped` list +
-// window.__ysfwMaterializeSkipped so the shell can tell the user.  Override the cap
-// for tuning with ?packbudget=<MB>.  This is the interim guard until pack payload is
-// read lazily from OPFS (WasmFS + ASYNCIFY) instead of bulk-copied into memory.
-const MATERIALIZE_BUDGET_BYTES = 768 * 1024 * 1024;
-
+// The heavy visual/collision payload (.dnm/.srf/.fld...) is left in OPFS and copied
+// in on demand when a pack item is actually selected (see materializeOnDemand).
+// Because only metadata is loaded at boot, the old MEMFS capacity budget -- which
+// SKIPPED whole packs once the unpacked total approached the ~2GB wasm-linear-memory
+// ceiling -- is no longer needed: every enabled pack's listing is always available,
+// however many are installed.  This is the classic-FS path to "unlimited packs"
+// (the WasmFS+OPFS+ASYNCIFY route is paused on emscripten OPFS-backend bugs).
 async function materializeEnabled(onProgress) {
   if (!adapter && !setupFS()) return { materialized: [], skipped: [] };
-  let budget = MATERIALIZE_BUDGET_BYTES;
-  try {
-    const q = new URLSearchParams(location.search).get('packbudget');
-    if (q != null && q !== '') budget = Math.max(0, parseFloat(q) * 1024 * 1024);
-  } catch (e) {}
   const recs = (await opfs.listRecords()).filter((r) => r.enabled !== false);
   const total = recs.length;
   const materialized = [], skipped = [];
-  let used = 0, done = 0;
-  for (const rec of recs) {
-    const sz = rec.bytes || (rec.files || []).reduce((n, f) => n + (f.size || 0), 0);
-    // Skip once over budget -- but always allow the first pack so a single large
-    // pack still loads (no single ysfinder pack approaches the cap unpacked).
-    if (materialized.length > 0 && used + sz > budget) {
-      skipped.push({ id: rec.id, name: rec.name, bytes: sz, reason: 'budget' });
-      continue;
+  let done = 0, idx = 0;
+  // Parallelize: metadata materialize is OPFS-read bound, and with hundreds of packs
+  // a serial loop can run past the boot gate's 90s backstop, leaving later packs
+  // unscanned (missing from the menu).  A small worker pool keeps it well under.
+  const CONCURRENCY = 8;
+  async function worker() {
+    while (idx < recs.length) {
+      const rec = recs[idx++];
+      try {
+        await opfs.materialize(rec, adapter, { metaOnly: true });
+        materialized.push(rec.id);
+      } catch (e) {
+        console.warn('[packs] meta materialize failed for ' + rec.id + ': ' + (e && e.message ? e.message : e));
+        skipped.push({ id: rec.id, name: rec.name, reason: 'error', error: String((e && e.message) || e) });
+      }
+      done++;
+      if (typeof onProgress === 'function') { try { onProgress(done, total); } catch (e) {} }
     }
-    try {
-      await opfs.materialize(rec, adapter);
-      used += sz;
-      materialized.push(rec.id);
-    } catch (e) {
-      console.warn('[packs] materialize failed for ' + rec.id + ': ' + (e && e.message ? e.message : e));
-      skipped.push({ id: rec.id, name: rec.name, bytes: sz, reason: 'error', error: String((e && e.message) || e) });
-    }
-    done++;
-    if (typeof onProgress === 'function') { try { onProgress(done, total); } catch (e) {} }
   }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, recs.length) }, worker));
   if (skipped.length) {
-    console.warn('[packs] ' + skipped.length + ' pack(s) not loaded (>' +
-      Math.round(budget / 1048576) + 'MB budget or error): ' +
+    console.warn('[packs] ' + skipped.length + ' pack(s) failed meta materialize: ' +
       skipped.map((s) => s.name || s.id).join(', '));
   }
   window.__ysfwMaterializeSkipped = skipped;
   return { materialized, skipped };
 }
+
+// On-demand payload materialize (Phase 2): the engine (fschoose.cpp) calls this
+// when the selection dialog highlights an aircraft/field, passing a model file's
+// full path <userDir>/packs/<id>/<relPath>.  Boot only materialized .lst/.dat
+// metadata, so copy the rest of that pack's payload from OPFS into the engine FS
+// before the engine opens the model.
+//
+// We materialize the WHOLE pack (not just the .dnm), because a model references
+// TEXTURES (.bmp/.png/...) that are not listed in the .lst and cannot be reached
+// from the model's path -- without them WebGL has no texture to bind and the model
+// renders broken.  Pack-grained, first-touch only (tracked in materializedPacks),
+// idempotent.  Failures are graceful: a missing file makes the engine's fopen skip
+// that frame; the delete-on-error lets the next highlight retry.  (Memory is
+// bounded later by Phase 3 LRU unload.)
+const materializedDirs = new Set();
+window.ysfwOnChoiceHighlight = async (kind, fullPath) => {
+  if (!adapter || !fullPath) return;
+  const m = fullPath.match(/\/packs\/([^/]+)\/(.+)$/);
+  if (!m) return;
+  const id = m[1], dir = m[2].replace(/[^/]*$/, ''); // the model's directory (textures usually sit alongside it)
+  const key = id + ' ' + m[2];
+  if (materializedDirs.has(key)) return;
+  try {
+    const rec = await opfs.getRecord(id);
+    if (!rec) return;
+    // Materialize the model's DIRECTORY -- the .dnm/.srf PLUS the textures it
+    // references (which live alongside but are not listed in the .lst).  Scoping to
+    // the directory, not the whole pack, keeps it small enough to finish inside the
+    // engine's ~300ms still-delay; materializing a whole large pack does NOT, so the
+    // engine reads half-written files (Load Error (VISUAL) / "no PNG signature").
+    const targets = rec.files.filter((f) => f.path === m[2] || (f.path.startsWith(dir) && f.path.slice(dir.length).indexOf('/') < 0 && /\.(png|bmp|dds|jpe?g|tga)$/i.test(f.path)));
+    await Promise.all(targets.map((f) => opfs.materializeFile(rec, adapter, f.path).catch(() => {})));
+    materializedDirs.add(key); // mark done only AFTER every file is fully on disk
+  } catch (e) { /* leave unmarked -> a later highlight retries */ }
+};
+
+// Called by the engine's openat ASYNCIFY hook (src/port/ysfw_openat.jslib) the
+// instant a packs/ file is opened but missing from MEMFS.  Materializes that ONE
+// file from OPFS and AWAITS it, so the suspended fopen resumes with the file in
+// place -- this is the "last resort" that covers demo/flight (no still-delay).
+// In-flight map dedups concurrent opens (and the highlight prefetch) of the same
+// file so we never double-write a half-written blob.  Because openat awaits THIS
+// before opening, the engine never reads a partial file ("no PNG signature").
+const inflightOpen = new Map(); // "id relPath" -> Promise
+window.ysfwMaterializeForOpen = async (fullPath) => {
+  if (!adapter) return;
+  const m = fullPath.match(/\/packs\/([^/]+)\/(.+)$/);
+  if (!m) return;
+  const id = m[1], relPath = m[2], key = id + ' ' + relPath;
+  let p = inflightOpen.get(key);
+  if (!p) {
+    p = (async () => {
+      const rec = await opfs.getRecord(id);
+      if (rec) await opfs.materializeFile(rec, adapter, relPath);
+    })().finally(() => inflightOpen.delete(key));
+    inflightOpen.set(key, p);
+  }
+  await p;
+};
 
 function init() {
   const M = window.Module;

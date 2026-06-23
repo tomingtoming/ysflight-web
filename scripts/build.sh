@@ -77,7 +77,13 @@ hash8() { sha1sum "$1" | cut -c1-8; }
 H_JS=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.js")
 H_WASM=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.wasm")
 H_DATA=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.data")
-BUILD_ID=$(printf '%s%s%s' "$H_JS" "$H_WASM" "$H_DATA" | sha1sum | cut -c1-12)
+# Include the shell JS/HTML in the build id so changes to packs-ui.js / opfs-store.js
+# / sw.js etc. bust the service-worker precache -- these are NOT part of the wasm
+# hash, so without this a JS-only change keeps the same id and the SW serves stale.
+H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" \
+  "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/replays-ui.js" \
+  "$ROOT/web/sw.js" 2>/dev/null | sha1sum | cut -c1-8)
+BUILD_ID=$(printf '%s%s%s%s' "$H_JS" "$H_WASM" "$H_DATA" "$H_SHELL" | sha1sum | cut -c1-12)
 
 JS_FILE="ysflight32_gl2.$H_JS.js"
 WASM_FILE="ysflight32_gl2.$H_WASM.wasm"
