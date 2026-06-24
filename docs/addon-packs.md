@@ -188,7 +188,7 @@ YSFLIGHT のマルチプレイは**名前参照＋状態同期**のプロトコ�
 | **B. クライアントが URL から自己取得** | 元配布 URL / CDN (HTTPS) | **優先（速い経路）** |
 | C. プロジェクトの content-addressed ストア | 自前 CDN/R2 | **棚上げ**（"何もホストしない"に反する・運用/モデレーション負荷） |
 
-- **B を優先**: manifest（`{id, files:[{path,sha256,size}], sourceUrl}`）だけ受け取り、
+- **B を優先**: manifest（`{id, name, categories, sourceUrl}`）だけ受け取り、
   クライアントが `fetch` → SHA-256 検証 → IDBFS 書込。ホストの上り帯域を食わず、URL を持つ
   既存 addon にそのまま効く。リスクは CORS（多くの addon サイトは ACAO を返さない）
 - **A は必須**: 持ち込みパックは URL を持たないのが普通。その場合ホストが `'ysf-pack'` で
@@ -241,10 +241,21 @@ CMakeLists.txt:606）。**標準フローでは boot 前 join により両方と
 ### 5.5 ホスト側 manifest の公開
 
 ホストはパックをローカルに持つので boot 前 sync は不要だが、joiner が boot 前に欲しい
-**manifest を公開**する必要がある。`{t:'host', room}` に `manifest`（pack id＝content hash・
-ファイル別 hash・サイズ・任意の URL の小さな JSON）を付けて Durable Object の room 状態に保持し、
-`join-ok` で joiner に返す。manifest は小さな制御メタデータなので "ゲームデータは Worker を
-通らない" 不変条件は保たれる（バイトは流さない）。
+**manifest を公開**する必要がある。`{t:'host', room}` に `manifest`（**有効パックごとに
+`{id, name, categories, sourceUrl?}` だけ**の小さな JSON 配列）を付けて Durable Object の
+room 状態に保持し、`join-ok` で joiner に返す。manifest は小さな制御メタデータなので
+"ゲームデータは Worker を通らない" 不変条件は保たれる（バイトは流さない）。
+
+> **ファイル別 hash は広告しない（重要）**: id はパック内容の content hash なので、id が一致
+> すればバイトも一致する＝ファイル単位 diff は不要。joiner は id/name/categories/sourceUrl
+> しか読まない（`diffManifest` は id/name、`prioritizeMissing` は categories、Option B は
+> sourceUrl）。かつて `buildRoomManifest` が全ファイルの `{path,size,sha256(64字)}` を積んで
+> いたため、有効パックが多いホストでは manifest がハブの直列化上限を超え、**ハブが manifest を
+> 丸ごと破棄 → joiner はゼロ同期**（ホストは host-ok を受けるので「サーバは無事、クライアントに
+> 来ない」に見える）という事故になった。今は広告 manifest からファイル別 hash を除去し、上限は
+> 256KB に引き上げ、超過時は host-ok に `manifestDropped` を載せてホスト側でサイレントにせず
+> 警告する。on-disk の `packs/<id>/manifest.json` は従来どおりファイル別 hash を保持（id の
+> Merkle 計算に使う）。
 
 ## 6. リスクと対策
 
@@ -322,7 +333,7 @@ v1（M1〜M3＋起動fix）は main マージ済み。v2＝「ホストが有効
 
 | ID | 内容 | rebuild | 検証 |
 |---|---|---|---|
-| **M4** | ホスト manifest 契約＋Worker 通過（制御のみ・転送なし）。`pack-net.js` のコア（`derivePackRoom`/`buildRoomManifest`/`diffManifest`/`prioritizeMissing`）＋ `signal.js` の manifest passthrough（≤64KB） | 不要 | node 単体（本PR・14/14） |
+| **M4** | ホスト manifest 契約＋Worker 通過（制御のみ・転送なし）。`pack-net.js` のコア（`derivePackRoom`/`buildRoomManifest`/`diffManifest`/`prioritizeMissing`）＋ `signal.js` の manifest passthrough（≤256KB・超過は host-ok で報告） | 不要 | node 単体（本PR・14/14） |
 | **M5** | `'ysf-pack'` チャンク/背圧つき DataChannel（**Option A：ホストpush**）。長さプレフィックス枠・≤64KiB・`bufferedamountlow`・per-peer 直列 | 不要 | **2ブラウザ Playwright**（pack無しjoiner→P2P受領→sha256検証→install） |
 | **M6** | **pre-boot join 統合**：`?join` でゲートを保持し、ゲート内で manifest 受領→差分→取得→install→syncfs→解放（無リロード）。手動 Room-ID もシェル前段に集約 | 不要 | 2ブラウザ（招待リンクjoin→パック入りで起動・機体ロード確認） |
 | **M7** | **Option B（URL自己取得）** ＋ **フィールド最優先**（必須・ゲート停止）＋ 取得失敗UX（無言切断の前に明示パネル＋Retry/ソロ） | 不要 | Playwright 3ケース（B成功 / B→A fallback / フィールド取得失敗UX） |

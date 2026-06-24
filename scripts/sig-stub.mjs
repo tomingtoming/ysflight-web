@@ -9,6 +9,7 @@ import { WebSocketServer } from 'ws';
 const port = parseInt(process.argv[2] || '8935', 10);
 const rooms = new Map(); // room -> { host, peers: Map<id,ws>, nextPeer, manifest }
 const send = (ws, obj) => { try { if (ws) ws.send(JSON.stringify(obj)); } catch (e) {} };
+const MAX_MANIFEST_BYTES = 256 * 1024; // mirror worker/signal.js
 
 const wss = new WebSocketServer({ port });
 wss.on('connection', (ws) => {
@@ -19,11 +20,14 @@ wss.on('connection', (ws) => {
     if (m.t === 'ping') return;
 
     if (m.t === 'host' && typeof m.room === 'string' && m.room.length <= 16) {
-      let manifest = null, hasManifest = false;
+      let manifest = null, hasManifest = false, dropped = false, bytes = 0;
       if (m.manifest != null) {
         hasManifest = true;
-        try { if (JSON.stringify(m.manifest).length <= 64 * 1024) manifest = m.manifest; } catch (e) {}
+        try { bytes = JSON.stringify(m.manifest).length; if (bytes <= MAX_MANIFEST_BYTES) manifest = m.manifest; else dropped = true; } catch (e) {}
       }
+      const hostOk = (room) => dropped
+        ? { t: 'host-ok', room, manifestDropped: true, manifestBytes: bytes, manifestCap: MAX_MANIFEST_BYTES }
+        : { t: 'host-ok', room };
       const token = (typeof m.token === 'string' && m.token.length <= 64) ? m.token : null;
       const existing = rooms.get(m.room);
       if (existing) {
@@ -36,7 +40,7 @@ wss.on('connection', (ws) => {
           conn.role = 'host';
           conn.room = m.room;
           if (hasManifest) existing.manifest = manifest;
-          send(ws, { t: 'host-ok', room: m.room });
+          send(ws, hostOk(m.room));
         } else {
           send(ws, { t: 'host-taken' });
         }
@@ -45,7 +49,7 @@ wss.on('connection', (ws) => {
       conn.role = 'host';
       conn.room = m.room;
       rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, token });
-      send(ws, { t: 'host-ok', room: m.room });
+      send(ws, hostOk(m.room));
 
     } else if (m.t === 'join' && typeof m.room === 'string') {
       const r = rooms.get(m.room);

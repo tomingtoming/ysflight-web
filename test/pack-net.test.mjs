@@ -19,7 +19,7 @@ test('derivePackRoom: distinct from the game room and within 16 chars', () => {
   assert.equal(derivePackRoom('').length <= 16, true);
 });
 
-test('buildRoomManifest: advertises only enabled packs with per-file hashes', async () => {
+test('buildRoomManifest: advertises only enabled packs, WITHOUT per-file hashes', async () => {
   const index = [
     { id: 'aaaa', name: 'alpha', enabled: true, categories: ['aircraft'] },
     { id: 'bbbb', name: 'beta', enabled: false, categories: ['scenery'] }, // disabled -> excluded
@@ -34,10 +34,51 @@ test('buildRoomManifest: advertises only enabled packs with per-file hashes', as
     readManifestJson: async (id) => manifests[id] || null,
   });
   assert.deepEqual(room.map((p) => p.id), ['aaaa', 'cccc']); // beta (disabled) excluded
-  assert.deepEqual(room[0].files, [{ path: 'packs/aaaa/x.dnm', size: 10, sha256: 'h1' }]);
-  assert.equal(room[0].sourceUrl, 'https://e/x.zip');
+  assert.equal(room[0].files, undefined); // per-file hashes are DELIBERATELY not advertised (hub size cap)
+  assert.equal(room[0].sourceUrl, 'https://e/x.zip'); // sourceUrl IS advertised (Option-B self-fetch)
   assert.equal(room[1].sourceUrl, undefined); // no URL -> omitted
   assert.deepEqual(room[1].categories, ['scenery']);
+});
+
+test('buildRoomManifest: sourceUrl is read even when the stored manifest has no files[]', async () => {
+  // Regression: sourceUrl used to be read only inside the `if (mf.files)` branch,
+  // so a manifest carrying a URL but no files[] would lose its Option-B fast path.
+  const room = await buildRoomManifest({
+    list: async () => [{ id: 'aaaa', name: 'a', enabled: true, categories: [] }],
+    readManifestJson: async () => ({ sourceUrl: 'https://e/a.zip' }),
+  });
+  assert.equal(room[0].sourceUrl, 'https://e/a.zip');
+});
+
+test('buildRoomManifest: a many-pack advertised manifest stays under the hub cap', async () => {
+  // The bug: a host with a "mountain of packs" produced an advertised manifest that
+  // exceeded the signaling hub's serialized cap, so the hub dropped it whole and
+  // joiners synced NOTHING.  Build a heavy case (80 packs x 60 files each, with a
+  // 64-char sha256 per file in the STORED manifest.json) and assert the ADVERTISED
+  // manifest -- which must NOT carry that per-file bloat -- stays tiny.
+  const N = 80, FILES = 60;
+  const index = [];
+  const manifests = {};
+  for (let i = 0; i < N; i++) {
+    const id = ('pk' + i + '0000000000000').slice(0, 16);
+    index.push({ id, name: 'community add-on pack number ' + i, enabled: true, categories: ['aircraft', 'ground'] });
+    manifests[id] = {
+      sourceUrl: 'https://example.com/packs/' + id + '.zip',
+      files: Array.from({ length: FILES }, (_, j) => ({
+        path: 'packs/' + id + '/aircraft/model_' + j + '.dnm', size: 1234567, sha256: 'a'.repeat(64),
+      })),
+    };
+  }
+  const room = await buildRoomManifest({
+    list: async () => index,
+    readManifestJson: async (id) => manifests[id] || null,
+  });
+  assert.equal(room.length, N);
+  for (const p of room) assert.equal(p.files, undefined); // no per-file bloat crosses the hub
+  const bytes = JSON.stringify(room).length;
+  // WITH files[] this same set serialized to ~700KB+ (dropped by the 256KB cap, and
+  // the old 64KB cap many times over).  Without it, N=80 packs fit easily.
+  assert.ok(bytes < 64 * 1024, 'advertised manifest must fit the hub cap; got ' + bytes + ' bytes');
 });
 
 test('diffManifest: missing by id, present by id, same-name/different-id conflict', () => {

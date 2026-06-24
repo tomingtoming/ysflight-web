@@ -38,20 +38,27 @@ export function derivePackRoom(gameRoom) {
 // from the injected accessors, so it is unit-testable:
 //   list()               -> array of index entries {id,name,enabled,categories,...}
 //   readManifestJson(id) -> packs/<id>/manifest.json object {files:[{path,size,sha256}],sourceUrl?} | null
+//
+// Advertise ONLY the fields a joiner actually consumes: id (content-addressed
+// identity + the request key for an Option-A P2P pull), name (same-name/different-
+// hash conflict detection), categories (field-first prioritization), and sourceUrl
+// (Option-B self-fetch).  The per-file {path,size,sha256} list is DELIBERATELY
+// omitted: a joiner never reads it -- the pack id already encodes the exact file
+// set, so an identical id means identical bytes and no file-level diff is needed --
+// and carrying it bloated the manifest by ~90 bytes per file.  A host with many
+// enabled packs then blew past the signaling hub's serialized-manifest cap, so the
+// hub dropped the WHOLE manifest and joiners silently synced NOTHING (the host
+// still got host-ok, hence "host fine, clients get no packs").  This manifest is
+// the only pack metadata that crosses the hub; keep it lean.  (The stored on-disk
+// packs/<id>/manifest.json KEEPS files[] -- it backs analyzePack's content hash.)
 export async function buildRoomManifest({ list, readManifestJson }) {
   const index = (await list()) || [];
   const out = [];
   for (const e of index) {
     if (!e || e.enabled === false) continue;
-    let files = [];
-    let sourceUrl;
     const mf = await readManifestJson(e.id);
-    if (mf && Array.isArray(mf.files)) {
-      files = mf.files.map((f) => ({ path: f.path, size: f.size, sha256: f.sha256 }));
-      if (mf.sourceUrl) sourceUrl = mf.sourceUrl;
-    }
-    const pack = { id: e.id, name: e.name, categories: e.categories || [], files };
-    if (sourceUrl) pack.sourceUrl = sourceUrl;
+    const pack = { id: e.id, name: e.name, categories: e.categories || [] };
+    if (mf && mf.sourceUrl) pack.sourceUrl = mf.sourceUrl; // read independent of files[] (latent: was gated on it)
     out.push(pack);
   }
   return out;
@@ -276,7 +283,17 @@ export function startPackHost(gameRoom, opts) {
     });
     sock.addEventListener('message', async (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      if (m.t === 'host-ok') { backoff = 0; log('hosting ' + room); return; }
+      if (m.t === 'host-ok') {
+        backoff = 0;
+        // The hub reports back when our manifest exceeded its size cap and was
+        // dropped: without this it was a SILENT black hole -- the host kept running
+        // while every joiner synced zero packs.  Surface it loudly so the host
+        // knows to disable some packs (the manifest is intentionally lean now, so
+        // this should only fire for an extreme number of enabled packs).
+        if (m.manifestDropped) log('WARNING: pack manifest too large (' + m.manifestBytes + 'B > ' + m.manifestCap + 'B hub cap) -- DROPPED by the hub, so joiners will sync NO packs. Disable some enabled packs.');
+        else log('hosting ' + room);
+        return;
+      }
       if (m.t === 'host-taken') { log('pack-room taken: ' + room); return; }
       if (m.t === 'peer') {
         const pc = new RTCPeerConnection({ iceServers });

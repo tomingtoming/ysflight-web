@@ -8,7 +8,8 @@
 //   client -> server : {t:'host',room,token?,manifest?} | {t:'join',room}
 //                      | {t:'sdp'|'ice', peer?, data}   (host sends peer, peer omits it)
 //                      | {t:'ping'}
-//   server -> client : {t:'host-ok',room} | {t:'host-taken'} | {t:'no-room'}
+//   server -> client : {t:'host-ok',room,manifestDropped?,manifestBytes?,manifestCap?}
+//                      | {t:'host-taken'} | {t:'no-room'}
 //                      | {t:'join-ok',peer,manifest?} | {t:'peer',peer}
 //                      | {t:'sdp'|'ice', peer, data}
 //                      | {t:'host-left'} | {t:'peer-left',peer}
@@ -90,6 +91,15 @@ async function turnCredentials(env) {
   }
 }
 
+// Cap on a host's serialized add-on-pack manifest stored in the in-memory hub.
+// The manifest is lean control metadata (id/name/categories/sourceUrl per enabled
+// pack -- see web/pack-net.js buildRoomManifest, which deliberately omits per-file
+// hashes), so even a host with hundreds of packs stays far under this.  The cap is
+// a guard against a misbehaving client bloating hub memory, NOT an expected limit;
+// a manifest that trips it is DROPPED and reported back in host-ok so the host can
+// surface it (silent drop here was the bug behind "host fine, joiners get nothing").
+const MAX_MANIFEST_BYTES = 256 * 1024;
+
 export class SignalHub {
   constructor(state, env) {
     this.state = state;
@@ -150,10 +160,16 @@ export class SignalHub {
         try {
           const s = JSON.stringify(m.manifest);
           bytes = s.length;
-          if (s.length <= 64 * 1024) manifest = m.manifest;
-          else dropped = true; // > 64KB cap -> joiner sees no manifest and silently skips sync
+          if (s.length <= MAX_MANIFEST_BYTES) manifest = m.manifest;
+          else dropped = true; // over cap -> joiner would see no manifest; reported in host-ok below
         } catch (e) {}
       }
+      // host-ok carries the drop signal so the host can warn instead of silently
+      // distributing nothing (web/pack-net.js startPackHost logs it).  Only added
+      // when a manifest was actually dropped, so the common case stays minimal.
+      const hostOk = (room) => dropped
+        ? { t: 'host-ok', room, manifestDropped: true, manifestBytes: bytes, manifestCap: MAX_MANIFEST_BYTES }
+        : { t: 'host-ok', room };
       const token = (typeof m.token === 'string' && m.token.length <= 64) ? m.token : null;
       const existing = this.rooms.get(m.room);
       if (existing) {
@@ -169,7 +185,7 @@ export class SignalHub {
           conn.role = 'host';
           conn.room = m.room;
           if (hasManifest) existing.manifest = manifest; // refresh; absent -> keep prior
-          this.send(ws, { t: 'host-ok', room: m.room });
+          this.send(ws, hostOk(m.room));
           this.log('host-reclaim', m.room, { peers: existing.peers.size, packs: Array.isArray(existing.manifest) ? existing.manifest.length : 0 });
           return;
         }
@@ -180,9 +196,9 @@ export class SignalHub {
       conn.role = 'host';
       conn.room = m.room;
       this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, token });
-      this.send(ws, { t: 'host-ok', room: m.room });
+      this.send(ws, hostOk(m.room));
       // packs: how many add-on packs the host advertised; dropped: the manifest
-      // exceeded the 64KB hub cap and was discarded (a prime suspect when a joiner
+      // exceeded the hub cap and was discarded (a prime suspect when a joiner
       // never pulls anything despite the host having packs enabled).
       this.log('host', m.room, { packs: Array.isArray(manifest) ? manifest.length : 0, bytes, dropped });
 
