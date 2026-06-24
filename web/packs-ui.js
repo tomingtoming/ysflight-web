@@ -11,15 +11,15 @@
 // held).  The smoke test (scripts/smoke-pack.mjs) drives window.ysfwPacks
 // directly.  Install/list only here; enable-disable + uninstall land in M3.
 
-import { analyzePackStreaming } from './packs.js';
+import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
 
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
 const ACCENT = '#4da3ff';
-// Payload lives in OPFS (on disk), so the old MEMFS-bound 256MB cap is lifted.
+// MAX_PACK_BYTES (the whole-archive cap, 1.5GB) is defined in packs.js so the engine
+// core and this UI share one value; installCore forwards it to analyzePackStreaming.
 // NOTE: install still unzips the whole archive in memory (fflate unzipSync); a
 // streaming unzip is a follow-up before the very largest (~1GB) packs are smooth.
-const MAX_PACK_BYTES = 1536 * 1024 * 1024;
 
 // Shell UI locale.  Shares index.html's choice (window.ysfwLang); recomputed here
 // as a fallback so the module localizes even if loaded standalone (smoke test).

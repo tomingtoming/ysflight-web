@@ -48,6 +48,13 @@ const CATEGORIES = [
   { key: 'scenery', dir: 'scenery', prefix: 'sce', kind: 'field' },
 ];
 
+// Whole-archive size cap.  Payload is stored content-addressed in OPFS (on disk),
+// so this guards against a runaway/zip-bomb archive, not a memory budget.  The UI
+// (packs-ui.js) imports and forwards this same value; analyzePack/analyzePackStreaming
+// default to it so the engine core and the live install path never diverge.  (The
+// old 256MB default here was a dead value -- the UI always overrode it with 1.5GB.)
+export const MAX_PACK_BYTES = 1536 * 1024 * 1024; // 1.5GB
+
 const enc = new TextEncoder();
 const dec = new TextDecoder('utf-8', { fatal: false });
 const strToBytes = (s) => enc.encode(s);
@@ -341,7 +348,7 @@ export async function analyzePack(zipBytes, opts) {
     sourceUrl,
     now = Date.now(),
     maxFileBytes = 64 * 1024 * 1024,
-    maxPackBytes = 256 * 1024 * 1024,
+    maxPackBytes = MAX_PACK_BYTES,
   } = opts;
   if (!sha256) throw new Error('analyzePack requires { sha256 }');
 
@@ -421,7 +428,7 @@ export async function analyzePackStreaming(zipBytes, opts) {
     sourceUrl,
     now = Date.now(),
     maxFileBytes = 64 * 1024 * 1024,
-    maxPackBytes = 256 * 1024 * 1024,
+    maxPackBytes = MAX_PACK_BYTES,
   } = opts;
   if (!sha256 || !putBlob) throw new Error('analyzePackStreaming requires { sha256, putBlob }');
   const buf = zipBytes instanceof Uint8Array ? zipBytes : new Uint8Array(zipBytes);
