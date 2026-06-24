@@ -680,12 +680,23 @@
       if (badge) return badge;
       badge = document.createElement('button');
       badge.id = 'ysfw-conn-badge';
-      // Menu-only (invite button is hidden then), so it takes the top slot.
-      badge.style.cssText = 'position:fixed;right:8px;top:8px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
+      // Bottom-right, immediately LEFT of the always-on fullscreen button
+      // (#ysfw-fs-btn).  right is set dynamically in positionBadge() because the
+      // fullscreen button's width depends on its (localized) label.
+      badge.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
       badge.title = TXT.badgeTitle;
       badge.onclick = function () { if (checkState !== 'running') runCheck(); };
       document.body.appendChild(badge);
       return badge;
+    }
+    // Park the badge just left of the fullscreen button by measuring that button's
+    // live left edge (its width varies with the localized label).  If the button is
+    // absent (Fullscreen API unsupported -> it is never created) fall back to the
+    // bottom-right corner with the same 8px margin.
+    function positionBadge() {
+      var b = ensureBadge();
+      var fs = document.getElementById('ysfw-fs-btn');
+      b.style.right = (fs ? (window.innerWidth - fs.getBoundingClientRect().left + 6) : 8) + 'px';
     }
     function setBadge(text, title) {
       var b = ensureBadge();
@@ -746,6 +757,7 @@
       if (!inFlight) {
         // MENU: connection badge only.
         ensureBadge().style.display = 'block';
+        positionBadge();  // re-anchor left of the fullscreen button (label width may differ)
         if (checkState === 'idle') runCheck();
         if (chip) chip.style.display = 'none';
         if (roomEl) roomEl.style.display = 'none';
