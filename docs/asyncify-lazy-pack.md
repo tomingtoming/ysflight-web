@@ -63,19 +63,30 @@ boot 時は **メタ(.lst/.dat/.stp)だけ** materialize し（`web/packs-ui.js`
 静かなスタック破壊ではなく **abort** になり、`scripts/smoke-test.mjs` / `smoke-pack.mjs` の
 `/Aborted\(/` fatal 判定で捕捉できる。
 
-### 自動 capture 手順（着手して中断中）
+### 2026-06-24 実機検証の結論 — ADD 方式は indirect dispatcher で泥沼、`-Oz` を採用
 
-1. `ASYNCIFY_DEBUG`（`tools/emsdk/upstream/emscripten/src/lib/libasync.js`）ビルドで unwind 関数名を採取。
-2. `smoke-test.mjs`（boot/demo を駆動）+ `smoke-pack.mjs`（テストパック install→play→scan を駆動）で
-   主要経路を自動巡回し ADD 候補を集める。両者は `Cannot Load`/`Aborted`/`RuntimeError` を fatal 判定する
-   ので**回帰検知のゲート**にもなる。
-3. `IGNORE_INDIRECT=1 + ASYNCIFY_ADD=@list` で relink → サイズ測定 → smoke で resume クラッシュ無しを確認。
+emsdk 6.0.0 ローカル relink ＋ Playwright `smoke-pack` で上記戦略を実機検証した。ハーネスは
+`tools/asyncify/`（gitignore。`relink.sh`=link.txt を土台に追加フラグで再リンク、`verify.sh`=variant を
+web shell に載せ `smoke-pack` 駆動、`capture-abort.mjs`=`unreachable` の wasm スタックから ADD 候補採取）。
 
-**smoke では駆動されない経路**（interactive flight・機体選択プレビュー・replay・scenery 差分）は
-**実機巡回が必要**。ただし漏れても上記 ASSERTIONS で abort して気づける。
+**前提の落とし穴**: ローカル `build/` は ASYNCIFY 導入(PR#47)前の古い configure が残ることがある
+（link.txt に `-sASYNCIFY=1` が無い＝3.27M）。`scripts/build.sh` で再 configure すると ASYNCIFY 込み
+4.91M に戻り、上のベースライン表と一致する。
 
-> リスク評価: 静的推測だけでリストを組むと稀な経路で踏み抜く。実測 + ASSERTIONS + smoke 回帰で
-> 「漏れたら気づく」状態を作ってから絞るのが正攻法。腰を据えた作業で、急がない。
+- **`IGNORE_INDIRECT` 単体 = 3.65M (-25.7%)** だが smoke は **first boot で `unreachable`（rewind 失敗）**
+  ＝doc の「単体は出荷不可」を実証。
+- **ADD 反復は泥沼**: `main` を ADD すると main は通過するが、次は **`MainLoopTick` が `dynCall_v`
+  （void の indirect ディスパッチャ）経由で openat suspend** し、`dynCall_v` が計装外なので rewind が
+  `null function`。エンジンのメインループが**関数テーブル経由の indirect で駆動される**ため、ADD には
+  dispatcher とその先が芋づる式に必要で、`IGNORE_INDIRECT` の削減を相殺しつつ漏れ続ける。安全出荷には
+  全経路（boot/選択/飛行/replay/scenery）の実機巡回が要る長期作業＝doc の見立てを実測で裏付け。
+- **採用 = `-Oz` リンク**: 計装を一切変えないので**安全**。`scripts/build.sh` の cmake に
+  `-DCMAKE_EXE_LINKER_FLAGS="-Oz"` を注入（engine submodule の CMakeLists は非変更）。
+  **4.91M → 4.79M（-2.4% / -117KB）**、`smoke-pack` PASS。小幅だが確実。-25% の ADD 方式は上記ハーネスを
+  足場に将来の腰を据えた作業として残す。
+
+> リスク評価: ADD/ONLY は indirect dispatcher を含む全経路を実測で網羅しないと稀な経路で踏み抜く。
+> ASSERTIONS=1 の loud abort + smoke で「漏れたら気づく」状態は作れるが、本番の全経路網羅は別作業。
 
 ---
 
@@ -150,5 +161,6 @@ abort）の解決で出荷可能になれば、MEMFS materialize 自体が消え
 - layer1（誤誘導除去）・layer3（LRU unload）は実装済み。**build+deploy で反映**（`scripts/build.sh` →
   Cloudflare。新規 `web/memfs-lru.js` を含む shell JS が BUILD_ID に効くので SW precache が bust する）。
 - layer2（取り込み解析の非標準リスト名対応）を別 PR で根治。
-- サイズ削減の自動 capture を再開（宿題1）。
+- サイズ削減: **`-Oz` リンクで -2.4% 適用済み**（`scripts/build.sh` の `CMAKE_EXE_LINKER_FLAGS`）。
+  さらなる -25%（ADD 方式）は `dynCall_v` indirect dispatcher 経由の泥沼で長期作業（宿題1の 2026-06-24 結論）。
 - 任意: layer3 の per-open touch（要 wasm 再ビルド。上記注記）。

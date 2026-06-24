@@ -62,9 +62,16 @@ fi
 git -C "$ROOT" submodule update --init --depth 1 2>/dev/null || true
 
 # --- Configure + build -------------------------------------------------------
+# Link-time size optimization: -Oz on the final link (Binaryen wasm-opt) shaves
+# ~2.4% off the ASYNCIFY-instrumented wasm WITHOUT changing the instrumentation, so
+# it stays safe.  (The -25% IGNORE_INDIRECT route is unsafe here: the engine suspends
+# openat through the dynCall_v indirect dispatcher inside MainLoopTick, so stripping
+# indirect instrumentation aborts on rewind -- see docs/asyncify-lazy-pack.md.)
+# Injected here in the superproject so the engine submodule's CMakeLists is untouched.
 emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DYSFLIGHT_WEB_PORT_DIR="$ROOT/src/port"
+    -DYSFLIGHT_WEB_PORT_DIR="$ROOT/src/port" \
+    -DCMAKE_EXE_LINKER_FLAGS="-Oz"
 
 cmake --build "$BUILD_DIR" --target ysflight32_gl2 -j"$(nproc)"
 
