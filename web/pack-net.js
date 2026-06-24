@@ -152,34 +152,12 @@ function concatChunks(chunks, total) {
   return out;
 }
 
-// Walk packs/<id>/ in the Emscripten FS into { relPath: Uint8Array } (browser).
-function walkPackFiles(FS, userDir, id) {
-  const root = userDir + '/packs/' + id;
-  const out = {};
-  (function rec(abs, rel) {
-    let st;
-    try { st = FS.stat(abs); } catch (e) { return; }
-    if (FS.isDir(st.mode)) {
-      for (const n of FS.readdir(abs)) {
-        if (n === '.' || n === '..') continue;
-        rec(abs + '/' + n, rel ? rel + '/' + n : n);
-      }
-    } else {
-      out[rel] = FS.readFile(abs, { encoding: 'binary' });
-    }
-  })(root, '');
-  return out;
-}
-
-// Read packs/<id>/manifest.json from the Emscripten FS as an object (browser).
-function readPackManifestJson(FS, userDir, id) {
-  try {
-    const raw = FS.readFile(userDir + '/packs/' + id + '/manifest.json', { encoding: 'binary' });
-    return JSON.parse(new TextDecoder().decode(raw));
-  } catch (e) {
-    return null;
-  }
-}
+// NOTE: a host serves pack bytes from the durable OPFS content-addressed store
+// (window.ysfwPacks.packFilesForHost / packMetaForHost), NOT by walking the engine
+// MEMFS.  Under the lazy-pack scheme the MEMFS copy holds only .lst/.dat/.stp
+// metadata (payload is deferred + LRU-evictable), so a MEMFS walk would ship a
+// partial pack and the joiner's recomputed content-hash id would mismatch.  See
+// web/packs-ui.js packFilesForHost for the full rationale.
 
 function openSignal(url) {
   const ws = new WebSocket(url);
@@ -536,17 +514,18 @@ export async function fetchPackFromUrl(pack, opts) {
 // Option B (self-fetch its sourceUrl) when advertised, falling back to Option A
 // (host P2P push) on any B failure; packs with no URL go straight to A.
 // opts: { signalUrl, iceServers?, list()->Promise<index>, installFromBytes(),
-//         uninstall(id)?, fetchImpl?, log? }
-// Resolves to { installed, failed, missing, conflicts, requiredFailed } where
-// requiredFailed lists the REQUIRED (field/scenery) packs neither path obtained —
-// the caller must NOT boot silently into the session when it is non-empty (M7).
+//         uninstall(id)?, setEnabled(id,enabled)?, fetchImpl?, log? }
+// Resolves to { installed, failed, missing, conflicts, requiredFailed, disabledLocal }
+// where requiredFailed lists the REQUIRED (field/scenery) packs neither path obtained
+// — the caller must NOT boot silently into the session when it is non-empty (M7) —
+// and disabledLocal lists local packs disabled to enforce the host-wins conflict policy.
 export async function syncPacksAsJoiner(gameRoom, opts) {
-  const { list, log = () => {}, onProgress } = opts;
+  const { list, log = () => {}, onProgress, setEnabled } = opts;
   const manifest = await fetchHostManifest(gameRoom, opts);
-  if (!manifest || manifest.length === 0) return { installed: [], failed: [], missing: 0, conflicts: [], requiredFailed: [] };
+  if (!manifest || manifest.length === 0) return { installed: [], failed: [], missing: 0, conflicts: [], requiredFailed: [], disabledLocal: [] };
   const localIndex = (await list()) || [];
   const { missing, conflicts } = diffManifest(manifest, localIndex);
-  if (missing.length === 0) { log('all host packs already present'); return { installed: [], failed: [], missing: 0, conflicts, requiredFailed: [] }; }
+  if (missing.length === 0) { log('all host packs already present'); return { installed: [], failed: [], missing: 0, conflicts, requiredFailed: [], disabledLocal: [] }; }
   const { required, bestEffort } = prioritizeMissing(missing);
   const ordered = [...required, ...bestEffort]; // fields first
   const requiredIds = new Set(required.map((p) => p.id));
@@ -586,7 +565,25 @@ export async function syncPacksAsJoiner(gameRoom, opts) {
   const requiredFailed = ordered
     .filter((p) => requiredIds.has(p.id) && !got.has(p.id))
     .map((p) => ({ id: p.id, name: p.name, categories: p.categories || [], reason: reasonById.get(p.id) }));
-  return { installed, failed, missing: ordered.length, conflicts, requiredFailed };
+
+  // Enforce the "host version wins for the session" policy that diffManifest only
+  // DETECTED before.  When a host pack we just installed shares its NAME with a
+  // DIFFERENT local pack, both packs' generated air*.lst entries would otherwise stay
+  // live; the engine matches templates by NAME and does NOT dedup (it appends), so it
+  // silently resolves to whichever it scans first — a visual desync where the joiner
+  // may fly the WRONG same-name model.  Disable the local conflicting pack so only the
+  // host's list is scanned.  setEnabled keeps the pack INSTALLED (just drops its lists),
+  // so the joiner can re-enable it from the panel after the session.  This runs inside
+  // the pre-boot run-dependency gate, so the local list is gone before main() scans.
+  const disabledLocal = [];
+  if (setEnabled) {
+    for (const c of conflicts) {
+      if (!got.has(c.hostId)) continue; // host version didn't actually install -> leave local enabled
+      try { await setEnabled(c.localId, false); disabledLocal.push(c.localId); log('host-wins: disabled local pack ' + c.localId + ' (same name as host ' + c.hostId + ')'); }
+      catch (e) { log('could not disable conflicting local pack ' + c.localId + ': ' + ((e && e.message) || e)); }
+    }
+  }
+  return { installed, failed, missing: ordered.length, conflicts, requiredFailed, disabledLocal };
 }
 
 // Browser wiring: host/join that pull deps from the page (Module.FS,
@@ -595,18 +592,17 @@ if (typeof window !== 'undefined') {
   const signalUrlOf = () =>
     (window.Module && window.Module.ysfwSignalUrl) ||
     ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal');
-  const userDirOf = () =>
-    (window.Module && window.Module.__ysfwUserDir) || '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
   const iceOf = () => window.ysfwPackIce || DEFAULT_ICE; // tests may set [] for loopback determinism
   window.ysfwPackNet = {
     host(gameRoom) {
       return startPackHost(gameRoom, {
         signalUrl: signalUrlOf(),
         iceServers: iceOf(),
-        listPackFiles: async (id) => walkPackFiles(window.Module.FS, userDirOf(), id),
+        // Serve from the durable OPFS store, not the lazy/partial MEMFS copy.
+        listPackFiles: (id) => window.ysfwPacks.packFilesForHost(id),
         buildManifest: () => buildRoomManifest({
           list: () => window.ysfwPacks.list(),
-          readManifestJson: (id) => readPackManifestJson(window.Module.FS, userDirOf(), id),
+          readManifestJson: (id) => window.ysfwPacks.packMetaForHost(id),
         }),
         log: (s) => console.log('[pack-net host] ' + s),
       });
@@ -632,6 +628,8 @@ if (typeof window !== 'undefined') {
         // (P2P pulls pass it undefined -> no URL recorded, which is correct).
         installFromBytes: (bytes, name, sourceUrl) => window.ysfwPacks.installFromBytes(bytes, name, sourceUrl),
         uninstall: (id) => window.ysfwPacks.uninstall(id),
+        // Host-wins conflict policy: disable a local same-name pack so only the host's list scans.
+        setEnabled: (id, enabled) => window.ysfwPacks.setEnabled(id, enabled),
         corrupt: !!window.__ysfwPackCorrupt, // test hook: corrupt the P2P transfer
         // Optional progress sink for the loading overlay; absent for Node/smoke.
         onProgress: typeof onProgress === 'function' ? onProgress : undefined,

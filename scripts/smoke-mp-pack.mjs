@@ -15,7 +15,14 @@ const sigUrl = process.argv[3] || 'ws://localhost:8935/signal';
 const ROOM = 'testmp01';
 const url = () => baseUrl + '?signal=' + encodeURIComponent(sigUrl);
 
-const browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
+// --disable-features=WebRtcHideLocalIpsWithMdns: headless Chromium otherwise masks
+// loopback host candidates behind mDNS .local names that don't resolve across two
+// browser contexts, so the ICE handshake never completes (transfer times out) even
+// though both pages are in the same process.  Exposing raw 127.0.0.1 candidates makes
+// the loopback transfer deterministic — required for this to run in CI.
+const browser = await chromium.launch({
+  args: ['--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'],
+});
 
 function die(msg, logs) {
   console.error('SMOKE-MP-PACK FAILED: ' + msg);
@@ -85,6 +92,57 @@ if ((badRes.installed || []).length !== 0 || badCount !== 0) {
   die('corrupted transfer was NOT rejected (it installed): ' + JSON.stringify(badRes), bad.logs);
 }
 console.log('NEGATIVE OK: corrupted transfer rejected (' + JSON.stringify(badRes.failed) + ')');
+
+// ---- MULTI-PACK: a host with SEVERAL enabled packs -> a joiner syncs them ALL ----
+// Guards two regressions at once, end-to-end through the real sig-stub hub:
+//   (1) 224db83 — the advertised manifest must survive the hub with many packs
+//       (a re-bloat would be dropped and the joiner would sync nothing); and
+//   (2) the OPFS-serve fix — each pack's heavy payload is only metadata-resident on
+//       the host (boot/install materialize .lst/.dat/.stp only), so serving by walking
+//       MEMFS would ship partial zips and EVERY id would mismatch.  The joiner uses the
+//       manifest path (syncAsJoiner: read manifest over the hub -> diff -> P2P pull).
+const ROOM2 = 'testmp02';
+const mhost = await newPage();
+await mhost.p.goto(url());
+await ready(mhost, 'multi-host');
+const multiIds = await mhost.p.evaluate(async (a) => {
+  const { zipSync } = await import('/vendor/fflate.js');
+  const E = (s) => new TextEncoder().encode(s);
+  const ids = [];
+  // one real community pack ...
+  const tr = await fetch('/test-pack.zip');
+  ids.push((await window.ysfwPacks.installFromBytes(new Uint8Array(await tr.arrayBuffer()), 'toming')).id);
+  // ... plus several synthesized DISTINCT aircraft packs (unique bytes -> unique ids).
+  // .dnm/.srf are payload (OPFS-only after install), .dat/.lst are metadata.
+  for (let i = 0; i < a.n; i++) {
+    const tag = 'synth' + i + '-' + Math.random().toString(36).slice(2, 9);
+    const zip = zipSync({
+      'aircraft/air_s.lst': E('aircraft/s.dnm aircraft/s.srf aircraft/s.dat\n'),
+      'aircraft/s.dnm': E('DNM-' + tag), 'aircraft/s.srf': E('SRF-' + tag), 'aircraft/s.dat': E('DAT-' + tag),
+    });
+    ids.push((await window.ysfwPacks.installFromBytes(zip, 'synth ' + i)).id);
+  }
+  // Host only AFTER every pack is installed, so the build-once manifest advertises all.
+  window.__h = window.ysfwPackNet.host(a.room);
+  return ids;
+}, { room: ROOM2, n: 3 });
+await waitForLog(mhost, /hosting /, 15000, 'multi-host');
+console.log('multi-host serving ' + multiIds.length + ' packs');
+
+const mjoin = await newPage();
+await mjoin.p.goto(url());
+await ready(mjoin, 'multi-join');
+if ((await mjoin.p.evaluate(async () => (await window.ysfwPacks.list()).length)) !== 0) {
+  die('multi-joiner started with packs already present', mjoin.logs);
+}
+const sync2 = await mjoin.p.evaluate(async (room) => await window.ysfwPackNet.syncAsJoiner(room), ROOM2);
+console.log('multi-join sync: ' + JSON.stringify(sync2));
+const after2 = await mjoin.p.evaluate(async () => (await window.ysfwPacks.list()).map((p) => p.id));
+for (const id of multiIds) {
+  if (!(sync2.installed || []).includes(id)) die('multi-join: pack not synced: ' + id, mjoin.logs);
+  if (!after2.includes(id)) die('multi-join: synced pack absent from joiner index: ' + id, mjoin.logs);
+}
+console.log('MULTI-PACK OK: joiner synced all ' + multiIds.length + ' packs via the manifest path (hub + per-pack OPFS serve)');
 
 console.log('SMOKE-MP-PACK PASSED');
 await browser.close();
