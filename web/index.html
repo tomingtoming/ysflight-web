@@ -4,6 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#0a0e14">
+<meta name="description" content="Fly YSFLIGHT in your browser — a free WebAssembly port of the classic flight sim. No install, instant multiplayer.">
+<!-- Social link-preview (Open Graph + Twitter): shared Room/invite links are the
+     growth loop, so they must unfurl with a title, blurb and image — not a bare URL. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="YSFLIGHT web">
+<meta property="og:title" content="YSFLIGHT web — fly in your browser">
+<meta property="og:description" content="A free WebAssembly port of YSFLIGHT. No install — instant flight and multiplayer, right in the browser.">
+<meta property="og:url" content="https://ysflight-web.toming.app/">
+<meta property="og:image" content="https://ysflight-web.toming.app/icons/icon-512.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="YSFLIGHT web — fly in your browser">
+<meta name="twitter:description" content="A free WebAssembly port of YSFLIGHT. No install — instant flight and multiplayer, right in the browser.">
+<meta name="twitter:image" content="https://ysflight-web.toming.app/icons/icon-512.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <script type="module" src="packs-ui.js"></script>
@@ -48,11 +61,18 @@
     opacity: 0;
     pointer-events: none;
   }
+  /* Stop the indeterminate shimmers once boot hides the overlay.  The ?join /
+     ?freeflight / ?replay paths only add .hidden (opacity:0) without display:none, and
+     browsers keep compositing animations on opacity:0 elements — so without this the
+     sheen would run forever behind the live game. */
+  #overlay.hidden #progress::after,
+  #overlay.hidden #ysfw-skeleton .sk-card::after { animation: none; }
   #overlay h1 {
     font-weight: 600;
     letter-spacing: 0.08em;
   }
   #progress {
+    position: relative;
     width: min(420px, 80vw);
     height: 8px;
     background: #1d2633;
@@ -65,6 +85,54 @@
     width: 0;
     background: #4da3ff;
     transition: width 0.2s;
+  }
+  /* Indeterminate sheen over the track so a slow link — or the post-download wasm
+     compile phase, where the numeric width can't advance — never looks frozen. */
+  #progress::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 20%, rgba(77,163,255,0.28) 50%, transparent 80%);
+    transform: translateX(-100%);
+    animation: ysfw-shimmer 1.4s ease-in-out infinite;
+  }
+  /* Loading skeleton: a non-interactive preview of the Quick Flight grid, painted
+     immediately during the (~23MB) .data download so the wait shows its destination
+     instead of a bare bar.  Removed by renderPanel() at manual launch, or hidden with
+     the overlay at boot (?join / ?freeflight). */
+  #ysfw-skeleton {
+    margin-top: 22px;
+    width: min(460px, 86vw);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 16px;
+    box-sizing: border-box;
+  }
+  #ysfw-skeleton .sk-row { display: flex; gap: 10px; }
+  #ysfw-skeleton .sk-card {
+    flex: 1;
+    height: 38px;
+    border-radius: 8px;
+    background: #121a26;
+    border: 1px solid #1d2633;
+    position: relative;
+    overflow: hidden;
+  }
+  #ysfw-skeleton .sk-hero { height: 52px; border-color: #2a3f5c; }
+  #ysfw-skeleton .sk-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 20%, rgba(77,163,255,0.10) 50%, transparent 80%);
+    transform: translateX(-100%);
+    animation: ysfw-shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes ysfw-shimmer { to { transform: translateX(100%); } }
+  /* Respect users who asked for less motion: drop the shimmer + opacity/width fades. */
+  @media (prefers-reduced-motion: reduce) {
+    #progress::after, #ysfw-skeleton .sk-card::after { animation: none; }
+    #overlay, #progress > div { transition: none; }
   }
   #status {
     margin-top: 12px;
@@ -100,6 +168,11 @@
   <div id="progress"><div id="bar"></div></div>
   <div id="status">loading...</div>
   <div id="pitch"></div>
+  <div id="ysfw-skeleton" aria-hidden="true">
+    <div class="sk-card sk-hero"></div>
+    <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
+    <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
+  </div>
   <div id="note">
     YS FLIGHT SIMULATOR (c) Soji Yamakawa (CaptainYS) — WebAssembly port.<br>
     <span id="note-src">元データ・ソースコード: </span><a href="https://github.com/captainys/YSFLIGHT" style="color:#4da3ff">captainys/YSFLIGHT</a>
