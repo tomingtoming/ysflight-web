@@ -103,6 +103,14 @@ Cloudflare の build image には Emscripten が入っていないため、`scri
 します（CMake も同様に自前取得）。固定したい場合は環境変数 `EMSDK_VERSION`
 （既定: `6.0.0`）。YSFLIGHT を wasm にフルコンパイルするのでビルドは数分かかります。
 
+> **CI とデプロイは別系統**。GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）は
+> push / PR で `scripts/build.sh` → unit + シグナリング/ブラウザ smoke を回す
+> **ビルド＋テスト専用**で、デプロイはしません。本番への反映は上記 **Cloudflare Workers
+> Builds が main への push を契機に自動実行**します（GitHub 側に `wrangler deploy`
+> ステップは無い）。手動デプロイは接続先アカウントの認証で `npx wrangler deploy`。
+> `wrangler deployments list` に出る Author は接続先 Cloudflare アカウント
+> （現状 `<cloudflare-account-email>`）、Source は `Unknown (deployment)` と表示されます。
+
 ### PR プレビュー URL
 
 非production ブランチ（PR）のビルドは `wrangler versions upload` で**プレビュー版**
@@ -127,6 +135,21 @@ GitHub の PR に付くのは pass/fail の「Workers Builds」チェック1個�
 > 注意: プレビュー URL が割り当たるのは **Preview URLs を有効化した後**にアップした
 > バージョンだけ。有効化前のビルドのプレビュー URL は 404 になります（その場合は再ビルド
 > すれば付きます）。
+
+### デプロイ状況の確認 / Verifying a live deploy
+
+main への push 後、Workers Builds が wasm フルビルドを回すので反映まで数分かかります。
+実際に本番へ載ったかは次で確認します（`deployments list` の Message は常に `-`＝git SHA は
+記録されないので、**どのコミットが載っているかは中身を突き合わせる**のが確実）：
+
+- `npx wrangler deployments status` … アクティブな version とその作成時刻
+- `npx wrangler deployments list` … 履歴（Author = 接続アカウント、Message `-`）
+- **静的アセット**: `curl -s https://ysflight-web.toming.app/pack-net.js` を取得し、手元の
+  `web/pack-net.js`（`dist/<file>` はそのコピー）と `diff` ＝バイト一致なら反映済み
+- **Worker（`/signal`）**: アセットと同じ `wrangler deploy` で**原子的に同時更新**される
+  （1 コミット = `worker/signal.js` ＋ `dist/` を一括）。挙動で確かめるなら
+  `wss://ysflight-web.toming.app/signal` に `{t:'host',room,manifest}` を送って `host-ok`
+  応答を見る（ルームは in-memory・切断で消える）
 
 GitHub Pages は repository settings の Pages で無効化してください。
 
