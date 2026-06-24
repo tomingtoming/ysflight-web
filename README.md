@@ -109,7 +109,9 @@ Cloudflare の build image には Emscripten が入っていないため、`scri
 > Builds が main への push を契機に自動実行**します（GitHub 側に `wrangler deploy`
 > ステップは無い）。手動デプロイは接続先アカウントの認証で `npx wrangler deploy`。
 > `wrangler deployments list` に出る Author は接続先 Cloudflare アカウント
-> （現状 `<cloudflare-account-email>`）、Source は `Unknown (deployment)` と表示されます。
+> （現状 `<cloudflare-account-email>`＝**オーナー本人の別アカウント**。リポジトリの
+> コミッタ `tomingtoming` とメールが違うが誤設定ではない）、Source は
+> `Unknown (deployment)` と表示されます。
 
 ### PR プレビュー URL
 
