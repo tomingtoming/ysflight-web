@@ -81,7 +81,7 @@ H_DATA=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.data")
 # / sw.js etc. bust the service-worker precache -- these are NOT part of the wasm
 # hash, so without this a JS-only change keeps the same id and the SW serves stale.
 H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" \
-  "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/replays-ui.js" \
+  "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" \
   "$ROOT/web/sw.js" 2>/dev/null | sha1sum | cut -c1-8)
 BUILD_ID=$(printf '%s%s%s%s' "$H_JS" "$H_WASM" "$H_DATA" "$H_SHELL" | sha1sum | cut -c1-12)
 
@@ -97,7 +97,7 @@ cp "$ROOT/web/icons/"*.png "$DIST_DIR/icons/"
 
 # Add-on pack layer: engine-agnostic core (packs.js) + pre-boot UI (packs-ui.js)
 # + vendored unzip (vendor/fflate.js).  Plain ES modules, no bundler.
-cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/replays-ui.js" "$DIST_DIR/"
+cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" "$DIST_DIR/"
 mkdir -p "$DIST_DIR/vendor"
 cp "$ROOT/web/vendor/fflate.js" "$DIST_DIR/vendor/"
 
@@ -106,7 +106,7 @@ sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',dat
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
 
 # Service worker: build id + precache list.
-PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"opfs-store.js\",\"replays-ui.js\",\"vendor/fflate.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"vendor/fflate.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 
@@ -129,6 +129,8 @@ cat > "$DIST_DIR/_headers" <<EOF
 /pack-net.js
   Cache-Control: no-cache
 /opfs-store.js
+  Cache-Control: no-cache
+/memfs-lru.js
   Cache-Control: no-cache
 /vendor/*
   Cache-Control: no-cache

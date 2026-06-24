@@ -3,7 +3,8 @@
 > ステータス: **実装済み機能の知見メモ＋未着手の最適化/構想**。無制限パックの本命解
 > (`__syscall_openat` の ASYNCIFY 化) は PR [#47](https://github.com/tomingtoming/ysflight-web/pull/47)
 > で実装・デプロイ済み。本ドキュメントは「その後に残った2つの宿題 — wasm サイズ削減と、
-> プレイ中 RAM の真の容量上限 — の調査結果と将来構想」を保全する。
+> プレイ中 RAM の真の容量上限 — の調査結果と将来構想」を保全する（うち **プレイ中 RAM の容量上限は
+> layer3 LRU unload として実装済み**。`web/memfs-lru.js` ＋ `web/packs-ui.js` 配線、JS のみ・wasm 再ビルド不要。下記）。
 > file:line は本リポジトリと upstream エンジン (`upstream/YSFLIGHT`, emscripten ブランチ) のもの。
 > 調査日: 2026-06-24。
 
@@ -86,7 +87,7 @@ UI 警告「N個のアドオンは容量上限を超えたため読み込まれ�
 （`web/index.html` `packsSkipped`、EN: "over the memory budget … make room"）は、
 **ASYNCIFY 前の MEMFS 一括展開バジェット時代の文言**。
 
-コード実態（`web/packs-ui.js` `materializeEnabled` 889-924行）:
+コード実態（`web/packs-ui.js` の `materializeEnabled`）:
 - enabled な全パックの**メタを無条件にロード**する。**boot 時の容量バジェットはもう存在しない**。
 - skip するのは `reason:'error'`（メタ materialize の失敗）**だけ**。`__ysfwMaterializeSkipped` の中身は
   容量超過ではなく**エラー**。
@@ -97,10 +98,12 @@ UI 警告「N個のアドオンは容量上限を超えたため読み込まれ�
 
 ### 真の容量上限: セッション中の MEMFS(RAM) 単調増加
 
-オンデマンド materialize は OPFS→**MEMFS（= wasm linear memory = RAM）**へコピーするが、
-**eviction が無い**。Phase 3 LRU unload は `web/packs-ui.js:939` のコメントだけで**未実装**。
-多数のパックを跨いで長時間飛ぶと RAM が単調増加し、いずれ ~2–4GB の linear-memory 天井に当たって
-abort する。**boot ではなくプレイ中に効く、これが本物の容量上限。**
+オンデマンド materialize は OPFS→**MEMFS（= wasm linear memory = RAM）**へコピーする。かつては
+**eviction が無く**、多数のパックを跨いで長時間飛ぶと RAM が単調増加し、いずれ ~2GB（wasm32 +
+`ALLOW_MEMORY_GROWTH` の既定上限 = `MAXIMUM_MEMORY`）の linear-memory 天井に当たって abort した。
+**boot ではなくプレイ中に効く、これが本物の容量上限。**
+→ **layer3 の LRU unload（下記）で解消済み**: `web/memfs-lru.js` が追跡ペイロードを高水位で LRU evict し、
+消えたファイルは次の open で openat フックが透過再 materialize するため、RAM は有界になった。
 
 ### 将来構想 3層
 
@@ -109,10 +112,29 @@ abort する。**boot ではなくプレイ中に効く、これが本物の容�
    → 本コミットに含む（`web/index.html` のみ）。
 2. **layer2（根治・中）**: 取り込み解析（`analyzePack`）が非標準なリスト名/配置を拾えるようにする。
    「3個落ちる」の根本治療。
-3. **layer3（真の無制限・大）**: **Phase 3 LRU unload**。materialize 済みファイルに last-touch を記録し、
-   MEMFS 使用量が閾値超過で LRU 順に `FS.unlink`。消しても**次の open で openat ASYNCIFY フックが
-   OPFS から透過再 materialize** するので安全。これでインストール数・総容量に関係なく **RAM が有界**
-   になり、真の無制限パックが完成する。インフラは既に9割揃っている（「消す→次の open で勝手に戻る」）。
+3. **layer3（真の無制限・大／実装済み）**: **Phase 3 LRU unload**。materialize 済みペイロードに
+   アクセス時刻（単調カウンタ）と byte サイズを記録し、追跡合計が高水位 (`highWater`) を超えたら LRU 順に
+   `FS.unlink` して低水位 (`lowWater`) まで落とす。消しても**次の open で openat ASYNCIFY フックが OPFS から
+   透過再 materialize** するので安全（「消す→次の open で勝手に戻る」既存基盤の再利用。openat フックは
+   出荷済みなので **JS のみ・wasm 再ビルド不要**）。これでインストール数・総容量に関係なく **RAM が有界**
+   になり、真の無制限パックが完成する。
+   - 実体: `web/memfs-lru.js`（純粋・依存ゼロ・node テスト可、`test/memfs-lru.test.mjs`）＋ `web/packs-ui.js`
+     配線（`trackMaterialized` / `sweepLru`、`ysfwMaterializeForOpen`・`ysfwOnChoiceHighlight` の materialize
+     直後に sweep。`residentInFlight` で in-flight open のファイルを evict から保護）。
+   - 既定 **highWater 768MiB / lowWater 512MiB**、`window.__ysfwMemfsBudget = { highWater, lowWater }`（bytes）で
+     上書き可。高低差 256MiB ≫ 単一ペイロードファイル（MB級）なので、直近 materialize 分は決して victim に
+     ならない。
+   - メタ（.lst/.dat/.stp）は**ピン留め**で evict しない: `.lst` はエンジンの glob で発見されるため、消すと
+     メニューから黙って消える（payload と違い openat 経由で戻らない）。
+   - 閾値は `Module.HEAP8.length` ではなく**追跡ペイロード合計**で測る — linear memory は縮まないので前者だと
+     一度超過したら無限 evict になる。後者が「実際に解放できてヒープ成長圧を下げられる」唯一のレバー。
+   - ビルド: 新規 `web/memfs-lru.js` を `scripts/build.sh` の H_SHELL（BUILD_ID）/ cp / PRECACHE / `_headers` に追加済み
+     （SW precache が bust する）。
+
+> layer3 の残り（任意・要 wasm 再ビルド）: **resident hit の per-open touch**。現状 recency は materialize 時刻
+> ベース（openat フックは MEMFS ヒット時に発火しないため、resident なファイルの再 open は recency を更新しない）。
+> 上記の高低差ゆえ実用上は LRU 同等で、万一の誤 evict も透過再 materialize で無害だが、厳密化するには openat
+> jslib に touch 呼び出しを足す必要があり再ビルドを伴う（`memfs-lru.js` 側は `touch(key)` を用意済み）。
 
 ### 終局（構造的決着）
 
@@ -125,7 +147,8 @@ abort）の解決で出荷可能になれば、MEMFS materialize 自体が消え
 
 ## 次の一手
 
-- layer1 を build+deploy で反映（`scripts/build.sh` → Cloudflare。index.html は BUILD_ID に効くので
-  SW precache が bust する）。
+- layer1（誤誘導除去）・layer3（LRU unload）は実装済み。**build+deploy で反映**（`scripts/build.sh` →
+  Cloudflare。新規 `web/memfs-lru.js` を含む shell JS が BUILD_ID に効くので SW precache が bust する）。
 - layer2（取り込み解析の非標準リスト名対応）を別 PR で根治。
 - サイズ削減の自動 capture を再開（宿題1）。
+- 任意: layer3 の per-open touch（要 wasm 再ビルド。上記注記）。

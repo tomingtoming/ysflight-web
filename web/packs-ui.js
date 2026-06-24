@@ -13,6 +13,7 @@
 
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
+import { createMemfsLru } from './memfs-lru.js';
 
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
 const ACCENT = '#4da3ff';
@@ -132,6 +133,11 @@ const S = ({
 
 let FS = null;
 let adapter = null;
+// layer3 (docs/asyncify-lazy-pack.md): bounds resident MEMFS payload so long
+// sessions across many packs do not grow the wasm linear memory into its ceiling.
+// Created once FS is ready (setupFS); evicts LRU payload via FS.unlink, which the
+// openat hook transparently re-materializes on next open.
+let lru = null;
 let listEl = null;
 let storageEl = null;
 // In-memory source of truth for the installed-pack list shown in the panel.
@@ -440,9 +446,14 @@ async function uninstall(id) {
   if (!adapter) throw new Error('pack layer not ready');
   const rec = await opfs.getRecord(id);
   if (rec) {
+    // Remove the record FIRST: a ysfwMaterializeForOpen that has not yet resolved its
+    // opfs.getRecord(id) now gets null and bails, so it cannot resurrect a payload file
+    // (and re-add a stale LRU entry) after the rmrf/forget below.
+    await opfs.removeRecord(id);
     for (const g of rec.generated) await adapter.rmrf(g.file); // remove generated lists (IDBFS)
     await adapter.rmrf('packs/' + id);                          // remove materialized payload (MEMFS)
-    await opfs.removeRecord(id);
+    if (lru) lru.forgetPrefix('packs/' + id + '/');             // drop its LRU accounting
+    forgetPrefetchForId(id);                                    // and its prefetch guard entries
     await opfs.gc();                                            // reclaim now-unreferenced blobs
   }
   cacheRemove(id);
@@ -872,10 +883,47 @@ function setupFS() {
   if (!M || !M.FS) return false;
   if (!adapter) {
     FS = M.FS;
-    adapter = makeFsAdapter(FS, M.__ysfwUserDir || USER_DIR_DEFAULT);
+    const root = M.__ysfwUserDir || USER_DIR_DEFAULT;
+    adapter = makeFsAdapter(FS, root);
+    // layer3 LRU: keys are engine-relative payload paths ("packs/<id>/<rel>"); the
+    // unlink maps a key back to its absolute MEMFS path.  Budget is overridable via
+    // window.__ysfwMemfsBudget = { highWater, lowWater } (bytes) for tuning/tests.
+    lru = createMemfsLru({
+      ...(window.__ysfwMemfsBudget || {}),
+      unlink: (key) => { try { FS.unlink(root + '/' + key); } catch (e) { /* already gone */ } },
+    });
   }
   window.ysfwPacks.fsReady = true;
   return true;
+}
+
+// Metadata the engine reads via its directory GLOB at scan time (.lst) or by fixed
+// path during selection (.dat/.stp).  These are PINNED -- never LRU-tracked or
+// evicted: an evicted .lst would silently vanish from the menu (the glob would not
+// re-discover it), unlike payload, which the openat hook re-materializes on open.
+// Mirrors META_EXT in opfs-store.js.
+const PINNED_EXT = /\.(lst|dat|stp)$/i;
+
+// Record an on-demand-materialized PAYLOAD file in the LRU (skips pinned metadata).
+// Eviction is a separate step (sweepLru) so a multi-file burst tracks all of its
+// files before a single sweep.
+function trackMaterialized(rec, id, relPath) {
+  if (!lru || PINNED_EXT.test(relPath)) return;
+  const f = rec.files.find((x) => x.path === relPath);
+  if (f) lru.track('packs/' + id + '/' + relPath, f.size || 0);
+}
+
+// Evict LRU payload if resident bytes crossed the high-water mark.  `protect` holds
+// the keys currently being materialized (residentInFlight), which must never be
+// evicted out from under an in-flight open.
+function sweepLru(protect) {
+  if (!lru) return;
+  const evicted = lru.sweep(protect);
+  if (!evicted.length) return;
+  invalidatePrefetch(evicted); // evicted payload -> let a later re-highlight re-prefetch
+  const s = lru.stats();
+  console.log('[packs] memfs LRU evicted ' + evicted.length + ' file(s) -> resident ' +
+    fmtBytes(s.total) + ' / ' + fmtBytes(s.highWater));
 }
 
 // Materialize every ENABLED pack's LISTING from OPFS into the engine FS before the
@@ -938,6 +986,30 @@ async function materializeEnabled(onProgress) {
 // that frame; the delete-on-error lets the next highlight retry.  (Memory is
 // bounded later by Phase 3 LRU unload.)
 const materializedDirs = new Set();
+// `materializedDirs` keys are "<id> <modelRelPath>"; a model's prefetch covers its
+// whole directory.  When layer3 evicts a file, drop any prefetch entry for a model in
+// the SAME directory, so the next highlight re-runs the parallel prefetch instead of
+// falling back to the slow per-file openat materialize mid-render.  Keeps this
+// write-once guard in sync with LRU residency (the two had diverged otherwise).
+function invalidatePrefetch(evictedKeys) {
+  if (!materializedDirs.size) return;
+  for (const key of evictedKeys) {
+    const mm = key.match(/^packs\/([^/]+)\/(.+)$/);
+    if (!mm) continue;
+    const id = mm[1], dir = mm[2].replace(/[^/]*$/, '');
+    for (const dk of materializedDirs) {
+      const sp = dk.indexOf(' ');
+      if (sp > 0 && dk.slice(0, sp) === id && dk.slice(sp + 1).replace(/[^/]*$/, '') === dir) materializedDirs.delete(dk);
+    }
+  }
+}
+// Drop every prefetch entry for a pack (uninstall) so a reinstall re-prefetches.
+function forgetPrefetchForId(id) {
+  for (const dk of materializedDirs) if (dk.startsWith(id + ' ')) materializedDirs.delete(dk);
+}
+// LRU keys (packs/<id>/<rel>) currently being materialized: passed to sweepLru as
+// the protect set so an in-flight open's file is never evicted out from under it.
+const residentInFlight = new Set();
 window.ysfwOnChoiceHighlight = async (kind, fullPath) => {
   if (!adapter || !fullPath) return;
   const m = fullPath.match(/\/packs\/([^/]+)\/(.+)$/);
@@ -954,7 +1026,16 @@ window.ysfwOnChoiceHighlight = async (kind, fullPath) => {
     // engine's ~300ms still-delay; materializing a whole large pack does NOT, so the
     // engine reads half-written files (Load Error (VISUAL) / "no PNG signature").
     const targets = rec.files.filter((f) => f.path === m[2] || (f.path.startsWith(dir) && f.path.slice(dir.length).indexOf('/') < 0 && /\.(png|bmp|dds|jpe?g|tga)$/i.test(f.path)));
-    await Promise.all(targets.map((f) => opfs.materializeFile(rec, adapter, f.path).catch(() => {})));
+    const lkeys = targets.map((f) => 'packs/' + id + '/' + f.path);
+    for (const k of lkeys) residentInFlight.add(k);
+    try {
+      await Promise.all(targets.map((f) => opfs.materializeFile(rec, adapter, f.path)
+        .then((wrote) => { if (wrote) trackMaterialized(rec, id, f.path); })
+        .catch(() => {})));
+      sweepLru(residentInFlight); // one sweep after the whole directory is resident
+    } finally {
+      for (const k of lkeys) residentInFlight.delete(k);
+    }
     materializedDirs.add(key); // mark done only AFTER every file is fully on disk
   } catch (e) { /* leave unmarked -> a later highlight retries */ }
 };
@@ -974,10 +1055,14 @@ window.ysfwMaterializeForOpen = async (fullPath) => {
   const id = m[1], relPath = m[2], key = id + ' ' + relPath;
   let p = inflightOpen.get(key);
   if (!p) {
+    const lkey = 'packs/' + id + '/' + relPath;
+    residentInFlight.add(lkey); // guard against eviction by a concurrent sweep
     p = (async () => {
       const rec = await opfs.getRecord(id);
-      if (rec) await opfs.materializeFile(rec, adapter, relPath);
-    })().finally(() => inflightOpen.delete(key));
+      if (!rec) return;
+      const wrote = await opfs.materializeFile(rec, adapter, relPath);
+      if (wrote) { trackMaterialized(rec, id, relPath); sweepLru(residentInFlight); }
+    })().finally(() => { inflightOpen.delete(key); residentInFlight.delete(lkey); });
     inflightOpen.set(key, p);
   }
   await p;
@@ -1007,6 +1092,7 @@ window.ysfwPacks = {
   showJoinFailure,
   setupFS,
   materializeEnabled,
+  memfsStats: () => (lru ? lru.stats() : null), // layer3 LRU observability (smoke/debug)
 };
 window.ysfwPacksInit = init;
 
