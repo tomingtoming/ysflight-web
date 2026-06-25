@@ -90,7 +90,7 @@ export async function getBlob(hash) {
 
 // --- pack records -----------------------------------------------------------
 
-async function putRecord(record) {
+export async function putRecord(record) {
   const fh = await (await dir(await root(), PACKS_DIR, true)).getFileHandle(record.id + '.json', { create: true });
   const w = await fh.createWritable();
   try { await w.write(enc.encode(JSON.stringify(record))); } finally { await w.close(); }
