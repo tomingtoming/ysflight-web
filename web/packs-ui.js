@@ -559,6 +559,8 @@ function renderPanel() {
   if (shellStatus) shellStatus.textContent = '';
   const shellProgress = document.getElementById('progress');
   if (shellProgress) shellProgress.style.display = 'none';
+  const shellSkeleton = document.getElementById('ysfw-skeleton');
+  if (shellSkeleton) shellSkeleton.remove(); // the real Quick Flight grid replaces the placeholder
 
   const panel = document.createElement('div');
   panel.id = 'ysfw-pack-panel';
@@ -801,6 +803,8 @@ function showJoinFailure(failed, handlers) {
   if (M) M.__ysfwJoinFailureShown = true;
   const overlay = document.getElementById('overlay');
   if (!overlay) { if (handlers && handlers.onSolo) handlers.onSolo(); return; } // no UI host -> degrade to solo
+  const skeleton = document.getElementById('ysfw-skeleton');
+  if (skeleton) skeleton.remove(); // drop the loading placeholder before the failure panel
   const existing = document.getElementById('ysfw-join-failure');
   if (existing) existing.remove(); // a Retry re-renders fresh
 
