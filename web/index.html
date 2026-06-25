@@ -650,7 +650,15 @@
     if (new URLSearchParams(location.search).get('turn') === '0') return;
     try {
       fetch('/turn', { method: 'POST' })
-        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (r) {
+          if (r.ok) return r.json();
+          // 204 = TURN secrets unset (graceful STUN-only); 502 = upstream mint failed.
+          // Either way there is NO relay, so symmetric-NAT/CGNAT peers can't connect or
+          // sync packs.  Warn so a deploy that forgot TURN_KEY_ID/TURN_API_TOKEN is
+          // greppable in the Workers logs instead of failing silently for those users.
+          console.warn('[turn] no ICE relay (HTTP ' + r.status + ') — STUN-only; restrictive networks (mobile/CGNAT) will fail to connect/sync. Set TURN_KEY_ID + TURN_API_TOKEN to enable a relay.');
+          return null;
+        })
         .then(function (d) {
           if (d && Array.isArray(d.iceServers) && d.iceServers.length) {
             Module.ysfwIceServers = d.iceServers;
@@ -658,7 +666,7 @@
             console.log('[turn] ICE relay ready (' + d.iceServers.length + ' server group(s))');
           }
         })
-        .catch(function () { /* STUN-only fallback */ });
+        .catch(function () { console.warn('[turn] /turn fetch failed — STUN-only fallback'); });
     } catch (e) {}
   })();
 

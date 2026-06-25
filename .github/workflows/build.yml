@@ -54,3 +54,12 @@ jobs:
       - name: Pack smoke (PR only)
         if: github.event_name == 'pull_request'
         run: scripts/smoke-pack.sh
+
+      # Real 2-browser P2P pack transfer over WebRTC (loopback ICE — no STUN/internet):
+      # a host serves from OPFS while a joiner pulls a single pack AND a multi-pack set
+      # over the 'ysf-pack' DataChannel, plus a corruption-reject negative.  The only
+      # automated guard for the actual byte path + the lazy-pack OPFS-serve fix; PR-only
+      # (boots browsers).  Self-starts serve.mjs + sig-stub.mjs and installs ws.
+      - name: MP pack transfer smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: scripts/smoke-mp-pack.sh

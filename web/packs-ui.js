@@ -76,6 +76,7 @@ const S = ({
     joinReason: {
       'no-room': 'ホストがまだ起動していないようです。相手にゲーム開始を頼んでから再試行してください。',
       'timeout': '接続がタイムアウトしました（回線が厳しい可能性）。再試行するか、相手と直結できるか確認してください。',
+      'timeoutNoTurn': '接続がタイムアウトしました。このサーバはTURN中継が未設定のため、厳しい回線（モバイル/CGNAT等）では同期できません。別の回線を試すか、サーバ運営者にTURN設定を依頼してください。',
       'host-left': 'ホストとの接続が切れました。相手がまだホスト中か確認して再試行してください。',
       '_default': 'パックを取得できませんでした。少し待ってから再試行してください。',
     },
@@ -125,6 +126,7 @@ const S = ({
     joinReason: {
       'no-room': 'The host doesn’t seem to be up yet — ask your friend to start the game, then retry.',
       'timeout': 'The connection timed out (the network may be restrictive). Retry, or check that you can connect directly.',
+      'timeoutNoTurn': 'The connection timed out. This server has no TURN relay configured, so restrictive networks (mobile/CGNAT) can’t sync. Try another network, or ask the server operator to configure TURN.',
       'host-left': 'Lost the connection to the host. Make sure they’re still hosting, then retry.',
       '_default': 'Could not obtain the pack. Wait a moment, then retry.',
     },
@@ -798,6 +800,18 @@ function renderPanel() {
 // Solo (single-player).  index.html holds the boot gate until the user chooses.
 //   failed:   [{ id, name, categories }]  (the required packs not obtained)
 //   handlers: { onRetry(), onSolo() }
+// True when the /turn fetch (index.html) populated an actual TURN relay (a turn:/turns:
+// URL), so a symmetric-NAT/CGNAT joiner CAN relay.  Mirrors index.html turnAvailable();
+// used to pick the right timeout copy in showJoinFailure (operator-config vs. user-network).
+function turnConfigured() {
+  const ice = (window.Module && window.Module.ysfwIceServers) || window.ysfwPackIce;
+  if (!Array.isArray(ice)) return false;
+  return ice.some((s) => {
+    const u = s && s.urls;
+    return (Array.isArray(u) ? u : [u]).some((x) => typeof x === 'string' && /^turns?:/.test(x));
+  });
+}
+
 function showJoinFailure(failed, handlers) {
   const M = window.Module;
   if (M) M.__ysfwJoinFailureShown = true;
@@ -837,7 +851,11 @@ function showJoinFailure(failed, handlers) {
   const reasonLines = [];
   for (const f of (failed || [])) {
     if (!f || !f.reason) continue;
-    const k = reasonKey(f.reason);
+    let k = reasonKey(f.reason);
+    // A timeout with no TURN relay configured is an OPERATOR problem (server has no
+    // relay so symmetric-NAT/CGNAT peers can never connect), not the joiner's network
+    // — don't tell them to "connect directly"; point at the real cause.
+    if (k === 'timeout' && !turnConfigured()) k = 'timeoutNoTurn';
     if (reasonSeen.has(k)) continue;
     reasonSeen.add(k);
     reasonLines.push('• ' + ((S.joinReason && (S.joinReason[k] || S.joinReason._default)) || ''));
@@ -1072,6 +1090,35 @@ window.ysfwMaterializeForOpen = async (fullPath) => {
   await p;
 };
 
+// HOST (multiplayer): read a pack's COMPLETE file tree straight from the durable
+// OPFS content-addressed store, NOT from MEMFS.  The MEMFS copy is lazy and partial:
+// boot materializes only .lst/.dat/.stp metadata and the heavy payload is both
+// deferred and LRU-evictable (see materializeEnabled + the openat hook), so walking
+// MEMFS would ship a pack MISSING its models/textures.  The joiner recomputes the
+// content-hash id over what it receives, so a partial tree yields a DIFFERENT id ->
+// id-mismatch -> rollback -> the pack never syncs.  The OPFS record always holds the
+// full immutable tree, so a zip built from it is complete regardless of what is
+// resident or evicted.  Returns { relPath: Uint8Array } (rel to packs/<id>/), {} if
+// the pack is unknown.
+async function packFilesForHost(id) {
+  const rec = await opfs.getRecord(id);
+  if (!rec || !rec.files) return {};
+  const out = {};
+  for (const f of rec.files) out[f.path] = await opfs.getBlob(f.sha256);
+  return out;
+}
+
+// HOST (multiplayer): the non-byte pack metadata a joiner's advertised manifest
+// needs -- currently just sourceUrl for the Option-B self-fetch.  Read from the OPFS
+// record (durable), NOT a MEMFS packs/<id>/manifest.json, which is not materialized
+// under the lazy-pack scheme (.lst/.dat/.stp only) -- so the old MEMFS read silently
+// lost sourceUrl and forced every pack onto the P2P push path.  Returns { sourceUrl? }.
+async function packMetaForHost(id) {
+  const rec = await opfs.getRecord(id);
+  if (!rec) return null;
+  return rec.sourceUrl ? { sourceUrl: rec.sourceUrl } : {};
+}
+
 function init() {
   const M = window.Module;
   if (!setupFS()) return;
@@ -1096,6 +1143,8 @@ window.ysfwPacks = {
   showJoinFailure,
   setupFS,
   materializeEnabled,
+  packFilesForHost, // multiplayer host: serve a complete pack from OPFS (not lazy MEMFS)
+  packMetaForHost,  // multiplayer host: advertise sourceUrl from OPFS (not lazy MEMFS)
   memfsStats: () => (lru ? lru.stats() : null), // layer3 LRU observability (smoke/debug)
 };
 window.ysfwPacksInit = init;
