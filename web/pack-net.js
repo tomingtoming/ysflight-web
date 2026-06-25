@@ -129,6 +129,10 @@ export function prioritizeMissing(missing) {
 const PACK_CHUNK = 60 * 1024; // <= the safe single-message size for a DataChannel
 const PACK_BUFFER_HIGH = 8 * 1024 * 1024; // pause sending above this bufferedAmount
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+const enc = new TextEncoder();
+// Reserved transfer id for the Step-1 metadata bundle (a real pack id is 16 hex
+// chars, so this never collides with one).
+const META_BUNDLE_ID = '__meta__';
 
 // Reconstruct a pack's original archive (its packs/<id>/ tree minus the
 // generated manifest.json) as a zip the joiner can install verbatim.  Pure;
@@ -194,7 +198,7 @@ async function sendZipChunked(ch, id, zip) {
 // opts: { signalUrl, iceServers?, listPackFiles(id)->Promise<{relPath:bytes}>,
 //         buildManifest()->Promise<manifest>?, log? }
 export function startPackHost(gameRoom, opts) {
-  const { signalUrl, iceServers = DEFAULT_ICE, listPackFiles, buildManifest, log = () => {} } = opts;
+  const { signalUrl, iceServers = DEFAULT_ICE, listPackFiles, buildManifest, getPackMeta, log = () => {} } = opts;
   const room = derivePackRoom(gameRoom);
   const token = randomToken();
   const peers = new Map(); // peerId -> { pc, remoteSet, iceQ }
@@ -214,6 +218,37 @@ export function startPackHost(gameRoom, opts) {
       await sendZipChunked(ch, id, zip);
     } catch (e) {
       try { ch.send(JSON.stringify({ op: 'error', id, reason: String((e && e.message) || e) })); } catch (e2) {}
+    }
+  }
+
+  // Step 1: serve a SINGLE metadata bundle for many packs at once -- each pack's
+  // .lst/.dat/.stp blobs + record meta, deflated into one zip.  Lets a joiner install
+  // hundreds of no-sourceUrl packs as SPARSE records (menu + boot scan complete,
+  // heavy geometry deferred) in one transfer, instead of a pre-boot full byte pull
+  // that blows past the boot gate.  getPackMeta(id) -> { record, blobs:{sha:bytes} }.
+  async function serveMeta(ch, peer, ids) {
+    try {
+      if (!getPackMeta) { ch.send(JSON.stringify({ op: 'error', id: META_BUNDLE_ID, reason: 'no-meta' })); return; }
+      const records = [];
+      const tree = {};
+      let blobCount = 0;
+      for (const id of ids) {
+        let meta = null;
+        try { meta = await getPackMeta(id); } catch (e) { meta = null; }
+        if (!meta || !meta.record) continue;
+        records.push(meta.record);
+        const blobs = meta.blobs || {};
+        for (const sha of Object.keys(blobs)) {
+          const key = 'blob/' + sha;
+          if (!tree[key]) { tree[key] = blobs[sha]; blobCount++; } // dedup blobs shared across packs
+        }
+      }
+      tree['records.json'] = enc.encode(JSON.stringify(records));
+      const zip = zipSync(tree, { level: 6 }); // DEFLATE: .lst/.dat are text-heavy and compress well
+      log('serving meta bundle (' + records.length + ' pack(s), ' + blobCount + ' blob(s), ' + zip.length + 'B) to peer ' + peer);
+      await sendZipChunked(ch, META_BUNDLE_ID, zip);
+    } catch (e) {
+      try { ch.send(JSON.stringify({ op: 'error', id: META_BUNDLE_ID, reason: String((e && e.message) || e) })); } catch (e2) {}
     }
   }
 
@@ -284,6 +319,7 @@ export function startPackHost(gameRoom, opts) {
           if (typeof e.data !== 'string') return;
           let mm; try { mm = JSON.parse(e.data); } catch (er) { return; }
           if (mm.op === 'want' && mm.id) serve(ch, m.peer, mm.id);
+          else if (mm.op === 'want-meta' && Array.isArray(mm.ids)) serveMeta(ch, m.peer, mm.ids);
         };
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -441,6 +477,84 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
   });
 }
 
+// JOINER (Step 1): pull a SINGLE metadata bundle for MANY packs in one request.
+// For a host with hundreds of no-sourceUrl packs, a pre-boot full byte pull cannot
+// finish under the boot gate; instead the best-effort packs that did not fully pull
+// get their .lst/.dat/.stp metadata here, so they still appear in the menu and the
+// engine's template scan finds their listing (heavy geometry is deferred to a later
+// lazy fetch).  Best-effort + NON-gating: any failure (no-room / host-left / timeout
+// / install error) resolves { installed: [] } — the menu just omits those packs, the
+// boot is never blocked.  Uses a SEPARATE pack-channel from joinPackHost so the
+// proven full-pull path is untouched.  opts: { signalUrl, iceServers?,
+// installMetaBundle(zipBytes)->Promise<{installed:[ids]}>, timeoutMs?, log? }.
+export function fetchMetaBundle(gameRoom, ids, opts) {
+  const { signalUrl, iceServers = DEFAULT_ICE, installMetaBundle, timeoutMs = 30000, log = () => {} } = opts;
+  const room = derivePackRoom(gameRoom);
+  return new Promise((resolve) => {
+    if (!ids || !ids.length || !installMetaBundle) { resolve({ installed: [] }); return; }
+    const ws = openSignal(signalUrl);
+    const sig = (o) => { try { ws.send(JSON.stringify(o)); } catch (e) {} };
+    let pc = null, ch = null, remoteSet = false, done = false, guard = null;
+    const iceQ = [];
+    let chunks = [], received = 0;
+    const finish = (installed) => {
+      if (done) return;
+      done = true;
+      if (guard) { clearTimeout(guard); guard = null; }
+      try { ws.close(); } catch (e) {}
+      try { if (pc) pc.close(); } catch (e) {}
+      resolve({ installed: installed || [] });
+    };
+    guard = setTimeout(() => { log('meta bundle timed out after ' + timeoutMs + 'ms'); finish([]); }, timeoutMs);
+
+    async function onChMessage(data) {
+      if (typeof data === 'string') {
+        let m; try { m = JSON.parse(data); } catch (e) { return; }
+        if (m.op === 'begin') { chunks = []; received = 0; }
+        else if (m.op === 'error') { log('meta bundle error: ' + m.reason); finish([]); }
+        else if (m.op === 'end') {
+          const zip = concatChunks(chunks, received);
+          try {
+            const r = await installMetaBundle(zip);
+            if (done) return; // guard already resolved
+            finish((r && r.installed) || []);
+          } catch (e) { if (!done) { log('meta bundle install failed: ' + ((e && e.message) || e)); finish([]); } }
+        }
+      } else {
+        const u = data instanceof Uint8Array ? data : new Uint8Array(data);
+        chunks.push(u); received += u.length;
+      }
+    }
+
+    ws.addEventListener('open', () => sig({ t: 'join', room }));
+    ws.addEventListener('message', async (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.t === 'no-room') { log('no pack host for meta bundle'); finish([]); }
+      else if (m.t === 'sdp') {
+        pc = new RTCPeerConnection({ iceServers });
+        pc.onicecandidate = (e) => { if (e.candidate) sig({ t: 'ice', data: e.candidate }); };
+        pc.ondatachannel = (e) => {
+          if (e.channel.label !== 'ysf-pack') return;
+          ch = e.channel;
+          ch.binaryType = 'arraybuffer';
+          ch.onopen = () => { try { ch.send(JSON.stringify({ op: 'want-meta', ids })); } catch (e2) {} };
+          ch.onmessage = (ev2) => onChMessage(ev2.data);
+        };
+        await pc.setRemoteDescription(m.data);
+        remoteSet = true;
+        for (const c of iceQ) { try { await pc.addIceCandidate(c); } catch (e) {} }
+        iceQ.length = 0;
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sig({ t: 'sdp', data: answer });
+      } else if (m.t === 'ice') {
+        if (pc && remoteSet) { try { await pc.addIceCandidate(m.data); } catch (e) {} }
+        else iceQ.push(m.data);
+      } else if (m.t === 'host-left') { log('host left before meta bundle'); finish([]); }
+    });
+  });
+}
+
 // JOINER (pre-boot, step 1): read the host's advertised manifest for the derived
 // pack-room WITHOUT pulling bytes — a control-only join that returns the manifest
 // the host published (§5.5), then closes.  Resolves to the manifest array, or
@@ -556,7 +670,30 @@ export async function syncPacksAsJoiner(gameRoom, opts) {
     for (const id of res.installed) installed.push(id);
     for (const f of res.failed) failed.push(f);
   }
-  const got = new Set(installed);
+  // Step 1: best-effort packs we could NOT fully obtain (no sourceUrl + the P2P pull
+  // timed out / the host was too slow under MANY packs) get their metadata pulled in
+  // ONE bundle, so they still appear in the menu and the engine's template scan finds
+  // their listing.  Heavy geometry is deferred (a later lazy fetch); until then those
+  // aircraft render broken — the SAME degraded state as a timed-out best-effort pull
+  // today, but with a complete menu and a fast boot.  Best-effort + non-gating, and
+  // NEVER applied to REQUIRED field/scenery (a sparse field would FATAL the engine at
+  // AddField), so this only touches aircraft/ground that did not full-pull in time.
+  const metaInstalled = [];
+  if (opts.fetchMetaBundle) {
+    const gotFull = new Set(installed);
+    const metaWanted = bestEffort.filter((p) => !gotFull.has(p.id)).map((p) => p.id);
+    if (metaWanted.length) {
+      try {
+        const mr = await opts.fetchMetaBundle(metaWanted);
+        for (const id of (mr && mr.installed) || []) metaInstalled.push(id);
+        log('meta-only installed ' + metaInstalled.length + '/' + metaWanted.length + ' best-effort pack(s) (menu complete; geometry deferred)');
+      } catch (e) { log('meta bundle phase failed: ' + ((e && e.message) || e)); }
+    }
+  }
+  // metaInstalled counts as "obtained" for host-wins: a meta pack's generated list IS
+  // materialized and scanned, so a same-name local pack must still be disabled to avoid
+  // the wrong-model desync.  (requiredFailed below is unaffected — required is never meta'd.)
+  const got = new Set([...installed, ...metaInstalled]);
   // Carry each failed pack's reason (timeout / no-room / host-left / id-mismatch / …)
   // onto requiredFailed so the obtain-failure UX can explain WHY and make Retry an
   // informed choice rather than a blind guess.
@@ -583,7 +720,7 @@ export async function syncPacksAsJoiner(gameRoom, opts) {
       catch (e) { log('could not disable conflicting local pack ' + c.localId + ': ' + ((e && e.message) || e)); }
     }
   }
-  return { installed, failed, missing: ordered.length, conflicts, requiredFailed, disabledLocal };
+  return { installed, metaInstalled, failed, missing: ordered.length, conflicts, requiredFailed, disabledLocal };
 }
 
 // Browser wiring: host/join that pull deps from the page (Module.FS,
@@ -604,6 +741,9 @@ if (typeof window !== 'undefined') {
           list: () => window.ysfwPacks.list(),
           readManifestJson: (id) => window.ysfwPacks.packMetaForHost(id),
         }),
+        // Step 1: serve a metadata-only bundle (.lst/.dat/.stp + record meta) so a
+        // joiner can sparse-install many packs without a full byte pull.
+        getPackMeta: (id) => window.ysfwPacks.packMetaBundleForHost(id),
         log: (s) => console.log('[pack-net host] ' + s),
       });
     },
@@ -631,6 +771,15 @@ if (typeof window !== 'undefined') {
         // Host-wins conflict policy: disable a local same-name pack so only the host's list scans.
         setEnabled: (id, enabled) => window.ysfwPacks.setEnabled(id, enabled),
         corrupt: !!window.__ysfwPackCorrupt, // test hook: corrupt the P2P transfer
+        // Step 1: best-effort packs that did not full-pull get their metadata in one
+        // bundle (menu complete, geometry deferred).  Injected so syncPacksAsJoiner
+        // stays transport-agnostic; opening a SEPARATE channel keeps full-pull untouched.
+        fetchMetaBundle: (ids) => fetchMetaBundle(gameRoom, ids, {
+          signalUrl: signalUrlOf(),
+          iceServers: iceOf(),
+          installMetaBundle: (bytes) => window.ysfwPacks.installMetaBundle(bytes),
+          log: (s) => console.log('[pack-net join] ' + s),
+        }),
         // Optional progress sink for the loading overlay; absent for Node/smoke.
         onProgress: typeof onProgress === 'function' ? onProgress : undefined,
         log: (s) => console.log('[pack-net join] ' + s),

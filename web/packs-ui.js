@@ -14,6 +14,7 @@
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
 import { createMemfsLru } from './memfs-lru.js';
+import { unzipSync } from './vendor/fflate.js';
 
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
 const ACCENT = '#4da3ff';
@@ -1119,6 +1120,82 @@ async function packMetaForHost(id) {
   return rec.sourceUrl ? { sourceUrl: rec.sourceUrl } : {};
 }
 
+// HOST (multiplayer, Step 1): the metadata-only payload for ONE pack -- its record
+// meta (id/name/categories/files/generated/sourceUrl) plus the .lst/.dat/.stp BLOBS
+// the joiner's boot template scan reads.  Lets a joiner install the pack as a SPARSE
+// record (menu + scan complete, heavy geometry deferred) in one bundle without a full
+// byte pull.  Works for a SPARSE local record too (its meta blobs are present), so a
+// meta-only joiner can re-serve.  Returns { record, blobs:{sha256:bytes} } or null --
+// null if a meta blob is missing, so we never ship a record the joiner can't materialize.
+async function packMetaBundleForHost(id) {
+  const rec = await opfs.getRecord(id);
+  if (!rec || !rec.files) return null;
+  const blobs = {};
+  for (const f of rec.files) {
+    if (!PINNED_EXT.test(f.path)) continue; // only the .lst/.dat/.stp the scan reads
+    try { blobs[f.sha256] = await opfs.getBlob(f.sha256); }
+    catch (e) { return null; }
+  }
+  const record = { id: rec.id, name: rec.name, categories: rec.categories || [], files: rec.files, generated: rec.generated || [] };
+  if (rec.sourceUrl) record.sourceUrl = rec.sourceUrl;
+  return { record, blobs };
+}
+
+// JOINER (multiplayer, Step 1): install a host's packs as SPARSE records from one
+// metadata bundle (fetchMetaBundle).  The bundle is a zip of records.json (per-pack
+// meta) + blob/<sha256> entries (the .lst/.dat/.stp the boot scan reads).  For each
+// pack we verify every meta blob's sha256, store it, write a sparse record (sparse:
+// true, enabled), and materialize its listing so the engine's scan + menu see the
+// pack -- WITHOUT the heavy geometry (deferred; until a later lazy fetch those
+// aircraft render broken, the same degraded state as a timed-out best-effort pull).
+// Best-effort PER PACK: an incomplete/forged/failed pack is skipped, never aborts the
+// batch.  Returns { installed:[ids] }.
+async function installMetaBundle(zipBytes) {
+  if (!adapter && !setupFS()) return { installed: [] };
+  let files;
+  try { files = unzipSync(zipBytes instanceof Uint8Array ? zipBytes : new Uint8Array(zipBytes)); }
+  catch (e) { console.warn('[packs] meta bundle unzip failed: ' + (e && e.message ? e.message : e)); return { installed: [] }; }
+  const recsRaw = files['records.json'];
+  if (!recsRaw) return { installed: [] };
+  let records;
+  try { records = JSON.parse(new TextDecoder().decode(recsRaw)); } catch (e) { return { installed: [] }; }
+  const installed = [];
+  for (const rec of (records || [])) {
+    if (!rec || !rec.id || !Array.isArray(rec.files)) continue;
+    try {
+      // The bundle must carry every .lst/.dat/.stp blob (the scan reads these); verify
+      // each against its advertised hash before storing, then write the sparse record.
+      const metaFiles = rec.files.filter((f) => PINNED_EXT.test(f.path));
+      let ok = true, bytes = 0;
+      for (const f of metaFiles) {
+        const blob = files['blob/' + f.sha256];
+        if (!blob) { ok = false; break; }
+        if (await webSha256(blob) !== f.sha256) { ok = false; break; } // integrity: bytes must match the hash
+        await opfs.putBlob(f.sha256, blob);
+        bytes += blob.length;
+      }
+      if (!ok) { console.warn('[packs] meta bundle: incomplete/forged meta for ' + rec.id + ' -- skipped'); continue; }
+      const record = {
+        id: rec.id, name: rec.name, categories: rec.categories || [],
+        bytes, enabled: true, installedAt: Date.now(), source: 'p2p-meta',
+        files: rec.files, generated: rec.generated || [], sparse: true,
+      };
+      if (rec.sourceUrl) record.sourceUrl = rec.sourceUrl;
+      await opfs.putRecord(record);
+      // Materialize the listing NOW: materializeEnabled (the boot-wide pass) has
+      // usually already run by the time this pre-boot network sync resolves, so a
+      // late-arriving sparse pack must write its own .lst/.dat/.stp + generated lists
+      // or the scan would miss it.
+      await opfs.materialize(record, adapter, { metaOnly: true });
+      cacheUpsert({ id: record.id, name: record.name, enabled: true, bytes: record.bytes, categories: record.categories });
+      installed.push(record.id);
+    } catch (e) {
+      console.warn('[packs] meta bundle: install failed for ' + (rec && rec.id) + ': ' + (e && e.message ? e.message : e));
+    }
+  }
+  return { installed };
+}
+
 function init() {
   const M = window.Module;
   if (!setupFS()) return;
@@ -1145,6 +1222,8 @@ window.ysfwPacks = {
   materializeEnabled,
   packFilesForHost, // multiplayer host: serve a complete pack from OPFS (not lazy MEMFS)
   packMetaForHost,  // multiplayer host: advertise sourceUrl from OPFS (not lazy MEMFS)
+  packMetaBundleForHost, // multiplayer host (Step 1): serve a pack's .lst/.dat/.stp meta bundle
+  installMetaBundle,     // multiplayer joiner (Step 1): sparse-install many packs from one meta bundle
   memfsStats: () => (lru ? lru.stats() : null), // layer3 LRU observability (smoke/debug)
 };
 window.ysfwPacksInit = init;

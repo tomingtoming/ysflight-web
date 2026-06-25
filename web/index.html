@@ -404,6 +404,29 @@
           }
           gateReleased = true;
         }
+        // packs-ui.js / pack-net.js are deferred <script type="module">.  On a WARM
+        // cache the engine (.data/.wasm cache-hit) can run THIS preRun BEFORE those
+        // modules execute and publish window.ysfwPacks / ysfwPacksInit / ysfwPackNet,
+        // so the pre-boot materialize and join-sync below would silently no-op and the
+        // engine would boot with NO packs — a returning joiner gets none of the host's
+        // add-ons ("host fine, clients get no packs", which is exactly the symptom this
+        // branch chased).  The boot gate is already held here, so wait (briefly,
+        // bounded) for the module to publish its API before using it.  Cold loads
+        // (slow .data download) always win the race; this only closes the warm path.
+        function whenModule(test, timeoutMs) {
+          if (test()) return Promise.resolve(true);
+          return new Promise(function (resolve) {
+            var waited = 0, step = 30, cap = timeoutMs || 8000;
+            var iv = setInterval(function () {
+              if (test()) { clearInterval(iv); resolve(true); }
+              else if ((waited += step) >= cap) { clearInterval(iv); resolve(false); }
+            }, step);
+          });
+        }
+        function initPackUi() {
+          whenModule(function () { return window.ysfwPacksInit; }).then(function (ok) { if (ok) { try { window.ysfwPacksInit(); } catch (e) {} } });
+          whenModule(function () { return window.ysfwReplaysInit; }).then(function (ok) { if (ok) { try { window.ysfwReplaysInit(); } catch (e) {} } });
+        }
         try {
           var q = new URLSearchParams(location.search);
           var joinRoom = Module.ysfwJoinRoom;
@@ -436,7 +459,8 @@
             if (document.getElementById('ysfw-pack-panel')) return;
             statusEl.textContent = TXT.materializing(done, total);
           };
-          Promise.resolve(window.ysfwPacks && window.ysfwPacks.materializeEnabled && window.ysfwPacks.materializeEnabled(matProgress))
+          whenModule(function () { return window.ysfwPacks && window.ysfwPacks.materializeEnabled; })
+            .then(function (ok) { return ok ? window.ysfwPacks.materializeEnabled(matProgress) : null; })
             .catch(function (e) { console.warn('[packs] pre-boot materialize: ' + (e && e.message ? e.message : e)); })
             .then(function () { clearTimeout(matBackstop); finishMaterialize(); });
           if (joinRoom) {
@@ -449,8 +473,7 @@
             Module.__ysfwGateHeld = true;
             Module.__ysfwJoinSync = true;
             window.__ysfwFsReady = true;
-            if (window.ysfwPacksInit) window.ysfwPacksInit();
-            if (window.ysfwReplaysInit) window.ysfwReplaysInit();
+            initPackUi();
             // Solo = abandon the join: drop the -client args (set by the join IIFE
             // below) so the engine boots single-player rather than connecting to a
             // host whose required field we could not obtain, then release the gate.
@@ -474,9 +497,11 @@
                 if (gateReleased) return;
                 statusEl.textContent = total ? TXT.joinProgress(done, total) : TXT.joinSyncing;
               };
-              var doSync = (window.ysfwPackNet && window.ysfwPackNet.syncAsJoiner)
-                ? window.ysfwPackNet.syncAsJoiner(joinRoom, onProgress)
-                : Promise.resolve(null);
+              var doSync = whenModule(function () { return window.ysfwPackNet && window.ysfwPackNet.syncAsJoiner && window.ysfwPacks && window.ysfwPacks.list; })
+                .then(function (ok) {
+                  if (gateReleased) return null;
+                  return ok ? window.ysfwPackNet.syncAsJoiner(joinRoom, onProgress) : null;
+                });
               return doSync.then(function (r) {
                 // If the gate already went (backstop fired, or the user chose Solo
                 // on a prior attempt), a late-resolving sync must not pop a panel
@@ -519,8 +544,7 @@
               if (Module.__ysfwGateHeld && !Module.__ysfwPanelShown) releaseGate();
             }, 5000);
             window.__ysfwFsReady = true;
-            if (window.ysfwPacksInit) window.ysfwPacksInit();
-            if (window.ysfwReplaysInit) window.ysfwReplaysInit();
+            initPackUi();
           } else {
             // freeflight OR replay: boot straight in (no gate).  For a freeflight,
             // remember the launched triple so the top page can offer a one-tap "Fly
@@ -529,8 +553,7 @@
             // an uninstalled add-on).  Storage may throw (private mode) -> guard.
             try { if (freeflight) localStorage.setItem('ysfwLastFlight', freeflight); } catch (e) {}
             window.__ysfwFsReady = true;
-            if (window.ysfwPacksInit) window.ysfwPacksInit();
-            if (window.ysfwReplaysInit) window.ysfwReplaysInit();
+            initPackUi();
           }
         } catch (e) {
           releaseGate();
