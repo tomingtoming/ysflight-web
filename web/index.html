@@ -432,6 +432,13 @@
           var joinRoom = Module.ysfwJoinRoom;
           var freeflight = q.get('freeflight');
           var replay = q.get('replay');
+          // v1 スコープ: ホスト→joiner の「追加パック配信(同期)」は一旦スコープ外。
+          // 同期パス(Option A/B・メタ束・必須ゲート・Retry/Soloパネル)は既定で無効化し、
+          // joiner は -client のまま即ブートして base＋自分のローカル取り込みパックだけで
+          // ホストに接続する(vanilla YSFLIGHT と同じ「事前に同じ物を入れておく」契約)。
+          // ?packsync=1 で再有効化 — v2 で配信を再設計するときのテスト用スイッチ。
+          // 注: ローカルパックの materialize(ソロ取り込み)は別経路で下に残してある。
+          var MP_PACK_SYNC = /[?&]packsync=1\b/.test(location.search);
           Module.__ysfwUserDir = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
           try { FS.mkdirTree(Module.__ysfwUserDir); } catch (e) {}
           // Path A pack storage: payload lives in OPFS (on disk, deduped).  Mount
@@ -463,7 +470,7 @@
             .then(function (ok) { return ok ? window.ysfwPacks.materializeEnabled(matProgress) : null; })
             .catch(function (e) { console.warn('[packs] pre-boot materialize: ' + (e && e.message ? e.message : e)); })
             .then(function () { clearTimeout(matBackstop); finishMaterialize(); });
-          if (joinRoom) {
+          if (joinRoom && MP_PACK_SYNC) {
             // M6/M7: hold the gate and OBTAIN the host's enabled packs before
             // main() — Option B (self-fetch each pack's advertised URL) with a
             // fallback to Option A (host P2P push).  A missing REQUIRED field is
@@ -544,7 +551,7 @@
               if (!gateReleased && !Module.__ysfwJoinFailureShown) bootSolo();
             }, 90000);
             runJoinSync();
-          } else if (!freeflight && !replay) {
+          } else if (!joinRoom && !freeflight && !replay) {
             // Manual launch: show the pack panel; packs-ui.js releases on "play".
             Module.addRunDependency('ysfw-packs');
             Module.__ysfwGateHeld = true;
@@ -555,7 +562,10 @@
             window.__ysfwFsReady = true;
             initPackUi();
           } else {
-            // freeflight OR replay: boot straight in (no gate).  For a freeflight,
+            // freeflight OR replay OR a join with pack-sync descoped (MP_PACK_SYNC
+            // off): boot straight in (no gate).  A joiner keeps its -client args and
+            // connects to the host on base + locally-imported packs only.  For a
+            // freeflight,
             // remember the launched triple so the top page can offer a one-tap "Fly
             // again" next visit (read in packs-ui renderPanel, gated there to bundled
             // renderPanel, gated there to bundled presets so it never deep-links into
