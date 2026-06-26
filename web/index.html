@@ -499,8 +499,17 @@
               };
               var doSync = whenModule(function () { return window.ysfwPackNet && window.ysfwPackNet.syncAsJoiner && window.ysfwPacks && window.ysfwPacks.list; })
                 .then(function (ok) {
-                  if (gateReleased) return null;
-                  return ok ? window.ysfwPackNet.syncAsJoiner(joinRoom, onProgress) : null;
+                  if (gateReleased || !ok) return null;
+                  // Wait (briefly) for /turn so the pack DataChannel is built WITH the
+                  // TURN relay rather than STUN-only — a restrictive-NAT (mobile/CGNAT)
+                  // joiner otherwise can't reach the host and times out with zero packs.
+                  // Cap the wait so a dead/slow /turn never delays boot past the sync's
+                  // own 30s legs; if it lands later, Retry rebuilds the PCs with it.
+                  var turnGate = Promise.race([
+                    window.__ysfwTurnReady || Promise.resolve(),
+                    new Promise(function (res) { setTimeout(res, 8000); })
+                  ]);
+                  return turnGate.then(function () { return window.ysfwPackNet.syncAsJoiner(joinRoom, onProgress); });
                 });
               return doSync.then(function (r) {
                 // If the gate already went (backstop fired, or the user chose Solo
@@ -672,7 +681,10 @@
   (function () {
     if (new URLSearchParams(location.search).get('turn') === '0') return;
     try {
-      fetch('/turn', { method: 'POST' })
+      // Expose the mint as a promise so the pre-boot JOIN sync can wait for it before
+      // building the pack DataChannel — otherwise a warm-cache joiner races ahead and
+      // connects STUN-only (no relay), stranding restrictive-NAT peers (see runJoinSync).
+      window.__ysfwTurnReady = fetch('/turn', { method: 'POST' })
         .then(function (r) {
           if (r.ok) return r.json();
           // 204 = TURN secrets unset (graceful STUN-only); 502 = upstream mint failed.

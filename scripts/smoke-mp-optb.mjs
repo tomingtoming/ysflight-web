@@ -96,10 +96,16 @@ async function startHost(room, installFn, installArg, who) {
   // The joiner must RECORD the sourceUrl on its self-fetched pack so that, if it
   // later hosts, it can re-advertise the URL and offload its own joiners (the
   // Option-B chain must survive past one hop).
-  const joinerUrl = await join.p.evaluate((id) => {
+  // Read sourceUrl through the SAME function a re-hosting joiner uses to re-advertise
+  // (packMetaForHost -> durable OPFS record), NOT a MEMFS packs/<id>/manifest.json:
+  // under the lazy-pack scheme the install path keeps geometry (and the manifest) in
+  // OPFS until materialized and never writes that MEMFS file, so a Module.FS probe
+  // spuriously ENOENTs even though the Option-B chain is intact.  This asserts the
+  // real chain — exactly what startPackHost reads to re-advertise the URL.
+  const joinerUrl = await join.p.evaluate(async (id) => {
     try {
-      const raw = window.Module.FS.readFile(window.Module.__ysfwUserDir + '/packs/' + id + '/manifest.json', { encoding: 'binary' });
-      return JSON.parse(new TextDecoder().decode(raw)).sourceUrl || null;
+      const meta = await window.ysfwPacks.packMetaForHost(id);
+      return (meta && meta.sourceUrl) || null;
     } catch (e) { return 'ERR:' + e; }
   }, hostId);
   if (!joinerUrl || !/test-pack\.zip/.test(joinerUrl)) die('case1: joiner did not record sourceUrl on its self-fetched pack (chain breaks): ' + joinerUrl, join.logs);
@@ -222,7 +228,18 @@ async function startHost(room, installFn, installArg, who) {
   await waitForLog(join, /\[pack-net join\] pre-boot sync:/, 90000, 'case4 join');
   const panelUp = await join.p.evaluate(() => !!document.getElementById('ysfw-join-failure'));
   if (panelUp) die('case4: obtain-failure panel appeared for a BEST-EFFORT pack (should not hold the gate)', join.logs);
-  if (await listIds(join).then((ids) => ids && ids.includes(hostId))) die('case4: corrupt transfer somehow installed; test is not exercising the failure path', join.logs);
+  // The corrupt FULL pull MUST have failed — that is the failure path this case guards.
+  // Under metadata-first a best-effort pack whose full pull failed may STILL surface via
+  // a SPARSE meta-bundle install (menu complete, geometry deferred), by design, so
+  // "appears in list()" is no longer a valid proxy for "fully installed".  Assert on the
+  // sync result's installed[] (full installs) instead, which corruption must keep empty.
+  const sync = (() => {
+    const line = [...join.logs].reverse().find((l) => /pre-boot sync:/.test(l));
+    try { return line ? JSON.parse(line.slice(line.indexOf('{'))) : null; } catch (e) { return null; }
+  })();
+  if (!sync) die('case4: could not read the pre-boot sync result', join.logs);
+  if ((sync.installed || []).includes(hostId)) die('case4: corrupt FULL transfer was fully installed; failure path not exercised', join.logs);
+  console.log('case4 corrupt full pull failed as designed (installed=' + JSON.stringify(sync.installed) + ' metaInstalled=' + JSON.stringify(sync.metaInstalled) + ')');
   await join.p.waitForFunction(() => { const ov = document.getElementById('overlay'); return ov && ov.classList.contains('hidden'); }, { timeout: 90000 })
     .catch(() => die('case4: gate did not release on a best-effort failure (engine never booted)', join.logs));
   if (join.logs.some((l) => FATAL.some((re) => re.test(l)))) die('case4: fatal after best-effort-failure boot', join.logs);

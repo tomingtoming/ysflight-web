@@ -184,7 +184,7 @@ export class SignalHub {
           if (old && old !== ws) { try { old.close(); } catch (e) {} } // its stale-close is guarded below
           conn.role = 'host';
           conn.room = m.room;
-          if (hasManifest) existing.manifest = manifest; // refresh; absent -> keep prior
+          if (hasManifest) { existing.manifest = manifest; existing.manifestDropped = dropped; } // refresh; absent -> keep prior
           this.send(ws, hostOk(m.room));
           this.log('host-reclaim', m.room, { peers: existing.peers.size, packs: Array.isArray(existing.manifest) ? existing.manifest.length : 0 });
           return;
@@ -195,7 +195,7 @@ export class SignalHub {
       }
       conn.role = 'host';
       conn.room = m.room;
-      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, token });
+      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, manifestDropped: dropped, token });
       this.send(ws, hostOk(m.room));
       // packs: how many add-on packs the host advertised; dropped: the manifest
       // exceeded the hub cap and was discarded (a prime suspect when a joiner
@@ -211,7 +211,10 @@ export class SignalHub {
       r.peers.set(conn.peerId, ws);
       // Echo the host's pack manifest so the joiner can diff it against its local
       // packs BEFORE the WebRTC/log-on handshake (see web/pack-net.js).
-      this.send(ws, { t: 'join-ok', peer: conn.peerId, manifest: r.manifest || null });
+      // manifestDropped tells the joiner the host DID advertise packs but the hub
+      // discarded the list for exceeding its size cap — distinct from a host with no
+      // packs, so the joiner can surface it instead of silently joining pack-less.
+      this.send(ws, { t: 'join-ok', peer: conn.peerId, manifest: r.manifest || null, manifestDropped: r.manifestDropped || undefined });
       this.send(r.host, { t: 'peer', peer: conn.peerId });
       this.log('join', m.room, { result: 'join-ok', peer: conn.peerId, packs: Array.isArray(r.manifest) ? r.manifest.length : 0 });
 

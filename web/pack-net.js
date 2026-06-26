@@ -569,7 +569,15 @@ export function fetchHostManifest(gameRoom, opts) {
     ws.addEventListener('open', () => { try { ws.send(JSON.stringify({ t: 'join', room })); } catch (e) {} });
     ws.addEventListener('message', (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      if (m.t === 'join-ok') { const mf = m.manifest || []; log('manifest: ' + mf.length + ' pack(s)'); finish(mf); }
+      if (m.t === 'join-ok') {
+        const mf = m.manifest || [];
+        // The hub dropped an over-cap manifest: the host HAS packs but we can't
+        // enumerate them (no P2P enumerate op).  Flag it so syncPacksAsJoiner surfaces
+        // an obtain failure rather than booting as if the host had zero packs.
+        if (m.manifestDropped) { mf.dropped = true; log('host manifest DROPPED by hub size cap — cannot enumerate host packs'); }
+        log('manifest: ' + mf.length + ' pack(s)');
+        finish(mf);
+      }
       else if (m.t === 'no-room') { log('no pack host for room'); finish(null); }
     });
     setTimeout(() => finish(null), timeoutMs);
@@ -636,7 +644,18 @@ export async function fetchPackFromUrl(pack, opts) {
 export async function syncPacksAsJoiner(gameRoom, opts) {
   const { list, log = () => {}, onProgress, setEnabled } = opts;
   const manifest = await fetchHostManifest(gameRoom, opts);
-  if (!manifest || manifest.length === 0) return { installed: [], failed: [], missing: 0, conflicts: [], requiredFailed: [], disabledLocal: [] };
+  if (!manifest || manifest.length === 0) {
+    // A host that genuinely has no packs is fine to boot pack-less.  But a manifest the
+    // hub DROPPED for exceeding its size cap means we cannot enumerate the host's packs
+    // at all — booting silently as a -client would desync (or FATAL on a host-required
+    // field) in-session.  Surface it as an obtain failure so the user gets the Retry/Solo
+    // panel instead of a silent broken join.
+    if (manifest && manifest.dropped) {
+      log('host pack manifest dropped by hub cap — surfacing as obtain failure (cannot sync)');
+      return { installed: [], failed: [], missing: 0, conflicts: [], requiredFailed: [{ id: '', name: '(host has too many packs to sync)', categories: [] }], disabledLocal: [], manifestDropped: true };
+    }
+    return { installed: [], failed: [], missing: 0, conflicts: [], requiredFailed: [], disabledLocal: [] };
+  }
   const localIndex = (await list()) || [];
   const { missing, conflicts } = diffManifest(manifest, localIndex);
   if (missing.length === 0) { log('all host packs already present'); return { installed: [], failed: [], missing: 0, conflicts, requiredFailed: [], disabledLocal: [] }; }

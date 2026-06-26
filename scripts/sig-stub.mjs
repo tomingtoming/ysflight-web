@@ -39,7 +39,7 @@ wss.on('connection', (ws) => {
           if (old && old !== ws) { try { old.close(); } catch (e) {} }
           conn.role = 'host';
           conn.room = m.room;
-          if (hasManifest) existing.manifest = manifest;
+          if (hasManifest) { existing.manifest = manifest; existing.manifestDropped = dropped; }
           send(ws, hostOk(m.room));
         } else {
           send(ws, { t: 'host-taken' });
@@ -48,7 +48,7 @@ wss.on('connection', (ws) => {
       }
       conn.role = 'host';
       conn.room = m.room;
-      rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, token });
+      rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, manifestDropped: dropped, token });
       send(ws, hostOk(m.room));
 
     } else if (m.t === 'join' && typeof m.room === 'string') {
@@ -58,7 +58,7 @@ wss.on('connection', (ws) => {
       conn.room = m.room;
       conn.peerId = r.nextPeer++;
       r.peers.set(conn.peerId, ws);
-      send(ws, { t: 'join-ok', peer: conn.peerId, manifest: r.manifest || null });
+      send(ws, { t: 'join-ok', peer: conn.peerId, manifest: r.manifest || null, manifestDropped: r.manifestDropped || undefined });
       send(r.host, { t: 'peer', peer: conn.peerId });
 
     } else if ((m.t === 'sdp' || m.t === 'ice') && conn.room) {
