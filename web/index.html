@@ -230,8 +230,8 @@
       packsSkipped: function (n, names) { return n + ' 個のアドオンを読み込めませんでした（取り込みデータの解析に失敗）。再取り込みをお試しください。' + (names ? '：' + names : ''); },
       help: {
         title: '操作 / Controls',
-        toggleTitle: '操作ガイド（? キーで開閉）',
-        openHint: '? 操作',
+        toggleTitle: 'ヘルプ（? キーで開閉）',
+        openHint: '? ヘルプ',
         close: '閉じる',
         fsOpen: '⛶ 全画面',
         fsTitle: '全画面切替（F11 / ⌃⌘F）',
@@ -711,6 +711,30 @@
     document.body.appendChild(s);
   }
 
+  // ---- Bottom-right control row --------------------------------------------
+  // ONE right-aligned HORIZONTAL row pinned to the bottom-right corner, so all the
+  // shell controls line up on a single line instead of being scattered (was: help
+  // bottom-left, Room chip top-right) or stacked.  Left-to-right by CSS `order`:
+  //   order 0 : Room chip (hosting) / connection badge (menu) -- MUTUALLY EXCLUSIVE,
+  //             so they share the leftmost slot and never both show
+  //   order 1 : "? ヘルプ" help button
+  //   order 2 : "⛶ 全画面" fullscreen button (right end = the corner)
+  // The row's right edge is pinned (right:8px) and it grows leftward, so the
+  // rightmost item (fullscreen) holds the corner while items to its left appear/
+  // disappear with no position jump.  align-items:flex-end keeps unequal-height
+  // items on a common bottom; order fixes left/right independent of which IIFE
+  // appends each child.  The container is click-through (pointer-events:none,
+  // re-enabled per child) so the gaps don't swallow canvas clicks.
+  function ysfwBRStack() {
+    var s = document.getElementById('ysfw-br-stack');
+    if (s) return s;
+    s = document.createElement('div');
+    s.id = 'ysfw-br-stack';
+    s.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99999;display:flex;flex-direction:row;align-items:flex-end;gap:6px;pointer-events:none';
+    document.body.appendChild(s);
+    return s;
+  }
+
   // ---- On-screen multiplayer UI: connection badge + invite link ------------
   // Three states, driven by globalThis.ysfwInFlight (set by the engine's
   // ChangeRunMode) and globalThis.ysfwRtc.host (set while this browser hosts):
@@ -746,7 +770,9 @@
       if (chip) return chip;
       chip = document.createElement('div');
       chip.id = 'ysfw-room-chip';
-      chip.style.cssText = 'position:fixed;top:8px;right:8px;z-index:31;background:rgba(10,14,20,.85);color:#cfd8e3;padding:8px 14px;border-radius:6px;font:14px monospace;cursor:pointer;user-select:none;display:none';
+      // Leftmost slot (order:0) of the bottom-right row, shared with the connection
+      // badge (mutually exclusive: chip only while hosting, badge only in the menu).
+      chip.style.cssText = 'order:0;pointer-events:auto;background:rgba(10,14,20,.85);color:#cfd8e3;padding:8px 14px;border-radius:6px;font:14px monospace;cursor:pointer;user-select:none;display:none';
       chip.title = TXT.chipCopyTitle;
       chip.onclick = function () {
         var R = globalThis.ysfwRtc;
@@ -767,7 +793,7 @@
           ta.remove(); done();
         }
       };
-      document.body.appendChild(chip);
+      ysfwBRStack().appendChild(chip);
       return chip;
     }
     function renderChip(code, connecting) {
@@ -784,24 +810,24 @@
       if (badge) return badge;
       badge = document.createElement('button');
       badge.id = 'ysfw-conn-badge';
-      // Bottom-right, immediately LEFT of the always-on fullscreen button
-      // (#ysfw-fs-btn).  right is set dynamically in positionBadge() because the
-      // fullscreen button's width depends on its (localized) label.
-      badge.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:20;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
+      // Leftmost slot (order:0) of the bottom-right row.  Shares that slot with the
+      // Room chip, which is fine: the badge shows only in the MENU and the chip only
+      // while HOSTING, so they are never visible at once.  flex lays it out — no more
+      // manual right-edge math (positionBadge is now a no-op).
+      badge.style.cssText = 'order:0;pointer-events:auto;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer;display:none';
       badge.title = TXT.badgeTitle;
       badge.onclick = function () { if (checkState !== 'running') runCheck(); };
-      document.body.appendChild(badge);
+      ysfwBRStack().appendChild(badge);
       return badge;
     }
     // Park the badge just left of the fullscreen button by measuring that button's
     // live left edge (its width varies with the localized label).  If the button is
     // absent (Fullscreen API unsupported -> it is never created) fall back to the
     // bottom-right corner with the same 8px margin.
-    function positionBadge() {
-      var b = ensureBadge();
-      var fs = document.getElementById('ysfw-fs-btn');
-      b.style.right = (fs ? (window.innerWidth - fs.getBoundingClientRect().left + 6) : 8) + 'px';
-    }
+    // No-op: the badge now lays out as a flex child of the bottom-right row, so its
+    // position is automatic.  Kept (callable) so the render loop's call site is
+    // unchanged; ensureBadge() is still needed there to create the element.
+    function positionBadge() { ensureBadge(); }
     function setBadge(text, title) {
       var b = ensureBadge();
       b.textContent = text;
@@ -861,7 +887,7 @@
       if (!inFlight) {
         // MENU: connection badge only.
         ensureBadge().style.display = 'block';
-        positionBadge();  // re-anchor left of the fullscreen button (label width may differ)
+        positionBadge();  // ensures the badge exists; layout is handled by the flex row
         if (checkState === 'idle') runCheck();
         if (chip) chip.style.display = 'none';
         if (roomEl) roomEl.style.display = 'none';
@@ -1007,9 +1033,12 @@
     fsBtn.id = 'ysfw-fs-btn';
     fsBtn.textContent = TXT.help.fsOpen;
     fsBtn.title = TXT.help.fsTitle;
-    fsBtn.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
+    // Right end (order:2) of the bottom-right row: the corner anchor the rest line
+    // up against.  Was independently position:fixed at right:8/bottom:8; now a flex
+    // child so "? ヘルプ" and the Room chip sit to its LEFT on the same line.
+    fsBtn.style.cssText = 'order:2;pointer-events:auto;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
     fsBtn.onclick = function () { toggle(); };
-    document.body.appendChild(fsBtn);
+    ysfwBRStack().appendChild(fsBtn);
   })();
 
   // ---- Controls legend overlay ---------------------------------------------
@@ -1066,18 +1095,20 @@
     // PC (the mouse-as-stick fallback is non-obvious); see the freeflight IIFE.
     window.__ysfwHelpToggle = toggle;
     // Floating "?" button so touch / no-keyboard users can open it too.  Bottom-LEFT:
-    // the engine's native menu bar lives at the TOP, so a top-left button overlaps it
-    // (and its submenus).  Bottom-left is clear in menus and on desktop; on a touch
-    // device IN FLIGHT the on-screen stick occupies this corner, so the in-flight
-    // touch-HUD toggle below hides this button while the stick is up (mutually
-    // exclusive states: menu vs. flying).
+    // Lives in the bottom-right row (order:1 = middle, between the Room/badge slot
+    // and the "⛶ 全画面" button), so "Room: …", "? ヘルプ" and fullscreen line up on
+    // one right-aligned line at the bottom-right corner.  The engine's native menu
+    // bar is at the TOP, so the
+    // bottom corner is always clear of it.  On a touch device IN FLIGHT the
+    // on-screen stick/HUD takes over, so the in-flight touch-HUD toggle below hides
+    // this button (mutually exclusive states: menu vs. flying).
     var btn = document.createElement('button');
     btn.id = 'ysfw-help-btn';
     btn.textContent = H.openHint;
     btn.title = H.toggleTitle;
-    btn.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
+    btn.style.cssText = 'order:1;pointer-events:auto;z-index:99999;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
     btn.onclick = function () { toggle(); };
-    document.body.appendChild(btn);
+    ysfwBRStack().appendChild(btn);
     function typing() {
       var el = document.activeElement;
       if (!el) return false;
