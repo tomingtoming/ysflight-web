@@ -11,6 +11,13 @@
 > ブラウザA (サーバモード) + ブラウザB (Room ID で接続) の2ページ構成で、
 > ログオン → ロビー → 飛行参加まで E2E 検証。ゲームデータは DataChannel で直結。
 
+> **v1 ステータス（2026-06-27）**: ゲーム対戦の P2P トランスポート（本書の主題）は v1 で稼働中。
+> ただし**追加パックのホスト→クライアント自動配信は v1 ではスコープ外＝既定 OFF**（`MP_PACK_SYNC`、
+> `?packsync=1` で再有効。commit `ae6fb81`）。v1 は原典同様の **vanilla 契約**（各プレイヤーが同じ
+> パックを事前にローカル導入）で、joiner は base ＋自分のパックだけで即接続する。本書中の「パック同期
+> channel」記述（NAT/TURN 節の `pack-net.js` 等）はこの v2 先送りの配信機構を指す。配信状況の詳細は
+> [addon-packs.md](addon-packs.md) §5、現状仕様の通しは [overview.md](overview.md)。
+
 ```
 [browser host (server mode)] <--- WebRTC DataChannel (P2P) ---> [browser client]
               \                                                 /

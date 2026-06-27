@@ -1,8 +1,16 @@
 # ysflight-web 追加パック設計 (Add-on Packs Design)
 
-> ステータス: **設計提案 (未実装)**。本ドキュメントは実装前の合意形成用。
-> 調査根拠の file:line は upstream エンジン (`upstream/YSFLIGHT`, emscripten ブランチ) と
-> 本リポジトリのものを併記する。
+> ステータス（2026-06-27 更新）: 本書は追加パックの**全設計**。実装状況は2分割:
+> - **シングルプレイのパック管理（§1〜§4：取り込み・OPFS・遅延 materialize・有効無効・削除）は
+>   実装済み・稼働中。**
+> - **マルチプレイのホスト→クライアント配信（§5・§9）は実装済みだが v1 ではスコープ外＝既定 OFF**
+>   （`web/index.html` の `MP_PACK_SYNC`、`?packsync=1` で再有効。commit `ae6fb81`）。v1 は原典同様の
+>   **vanilla 契約**（各プレイヤーが同じパックを事前にローカル導入）で、配信は **v2 で再設計**する
+>   （実機テストで DataChannel 確立後にストール＝30〜90秒ハング。筆頭根因仮説＝`PACK_CHUNK=60KB` が
+>   相互運用安全値 16KB を超過）。
+>
+> v1 現状仕様の通しは [overview.md](overview.md)。調査根拠の file:line は upstream エンジン
+> (`upstream/YSFLIGHT`, emscripten ブランチ) と本リポジトリのものを併記する。
 
 ## 概要
 
@@ -134,6 +142,11 @@ export が必要（`EXPORTED_RUNTIME_METHODS` は現状 `FS,IDBFS,UTF8ToString,s
 のみ、`CMakeLists.txt:605`）＝ビルド変更が要る。**run-dependency 方式の方が無改造で済むので優先。**
 
 ## 5. マルチプレイ: ホスト→クライアント配信
+
+> **v1 ステータス（2026-06-27）**: 本章と §9 の配信機構は実装済みだが **v1 ではスコープ外＝既定 OFF**
+> （`MP_PACK_SYNC`、`?packsync=1` で再有効）。実機で DataChannel 確立後にストールしたため、配信は **v2 で
+> 再設計**する（根因仮説＝`PACK_CHUNK=60KB`>16KB）。v1 は §5.1 が述べる **vanilla 契約**（両端が同じ
+> add-on を各自事前ロード）そのままで運用する。以下は v2 配信設計の記録として読むこと。
 
 ### 5.1 ネットコードの現実（ここが設計を決める）
 
