@@ -3,7 +3,7 @@
 > ステータス: **v1 現状仕様（2026-06-27 時点）**。原典 [captainys/YSFLIGHT](http://www.ysflight.com)
 > （C++ デスクトップ機）を Emscripten で WASM 化し、ブラウザシェル＋PWA で包んだ非公式移植。
 > 本書は v1 の **通し仕様の正本**。各論の詳細は個別設計書を参照:
-> [multiplayer.md](multiplayer.md) / [addon-packs.md](addon-packs.md) /
+> [personas.md](personas.md)（誰のために作るか）/ [multiplayer.md](multiplayer.md) / [addon-packs.md](addon-packs.md) /
 > [asyncify-lazy-pack.md](asyncify-lazy-pack.md) / [rearchitecture.md](rearchitecture.md) / [../README.md](../README.md)。
 
 全要素は3分類で整理できる:
@@ -161,6 +161,7 @@ wasm32 ~2GB メモリ天井（遅延パックの実容量上限。LRU で緩和�
 
 ## 関連ドキュメント
 
+- [personas.md](personas.md) — ターゲットユーザー / ペルソナ（第一ターゲット＝旧YSFLIGHTの既存ファン）と、スコープ判断の根拠
 - [multiplayer.md](multiplayer.md) — マルチプレイ（WebRTC P2P / シグナリング / TURN）の詳細設計
 - [addon-packs.md](addon-packs.md) — 追加パックの全設計（取り込み・OPFS・MP 配信設計）
 - [asyncify-lazy-pack.md](asyncify-lazy-pack.md) — OPFS 遅延 materialize（無制限パック）の詳細
