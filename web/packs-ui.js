@@ -45,6 +45,8 @@ const S = ({
     bulkDone: (ok, fail) => '✓ ' + ok + ' 件取り込み' + (fail ? '  ／  ⚠ ' + fail + ' 件失敗（下記）' : ''),
     notZip: '(.zip ではないのでスキップ)',
     panelTitle: '追加パック',
+    packToggle0: '手持ちのアドオンを追加',
+    packToggleN: (n) => '追加パック (' + n + ')',
     quickTitle: '🛫 今すぐ飛ぶ',
     quickHint: 'クリックでそのまま離陸（追加パック不要）',
     touchHint: 'スマホ対応：離陸すると画面に操縦スティックが出ます',
@@ -96,6 +98,8 @@ const S = ({
     bulkDone: (ok, fail) => '✓ ' + ok + ' imported' + (fail ? '  /  ⚠ ' + fail + ' failed (below)' : ''),
     notZip: '(skipped: not a .zip)',
     panelTitle: 'Add-on packs',
+    packToggle0: 'Add your own add-ons',
+    packToggleN: (n) => 'Add-on packs (' + n + ')',
     quickTitle: '🛫 Quick flight',
     quickHint: 'Click to take off right away (no add-on needed)',
     touchHint: 'Touch-ready: an on-screen stick appears once you take off.',
@@ -144,6 +148,15 @@ let adapter = null;
 // openat hook transparently re-materializes on next open.
 let lru = null;
 let listEl = null;
+// Collapsible add-on section: Quick Flight + Play stay above it; this is collapsed by
+// default and auto-expanded once the visitor turns out to have installed packs (see
+// renderList).  Most visitors fly a Quick Flight or hit Play and never open it.
+let packToggleEl = null, packBodyEl = null, packCount = 0, packAutoExpanded = false;
+function updatePackToggleLabel() {
+  if (!packToggleEl) return;
+  const open = packBodyEl && packBodyEl.style.display !== 'none';
+  packToggleEl.textContent = (open ? '▾ ' : '▸ ') + (packCount > 0 ? S.packToggleN(packCount) : S.packToggle0);
+}
 let storageEl = null;
 // In-memory source of truth for the installed-pack list shown in the panel.
 // Loaded ONCE from OPFS (ensureCache), then kept up to date in memory on
@@ -292,6 +305,19 @@ async function storageInfo() {
 // post-bulk OPFS directory re-enumeration).
 function renderList(packs) {
   if (!listEl) return;
+  // Keep the collapsible add-on section in sync: update its label's count and, the
+  // first time the visitor turns out to have installed packs, auto-expand it (a
+  // returning modder's packs shouldn't stay hidden).  Manual toggling sets
+  // packAutoExpanded so a later refresh never fights the user's choice.
+  packCount = packs.length;
+  if (packToggleEl) {
+    if (!packAutoExpanded && packs.length > 0) {
+      packBodyEl.style.display = 'block';
+      packToggleEl.setAttribute('aria-expanded', 'true');
+      packAutoExpanded = true;
+    }
+    updatePackToggleLabel();
+  }
   listEl.innerHTML = '';
   if (packs.length === 0) {
     const empty = document.createElement('div');
@@ -662,23 +688,66 @@ function renderPanel() {
   quickWrap.appendChild(qGrid);
   panel.appendChild(quickWrap);
 
-  const title = document.createElement('div');
-  title.textContent = S.panelTitle;
-  title.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:10px';
-  panel.appendChild(title);
+  // ▶ Play (primary CTA) sits directly under Quick Flight — ABOVE the add-on
+  // management — so it isn't buried at the bottom under a panel most visitors never
+  // touch.  Order: Quick Flight -> Play -> (collapsible) add-on management.
+  const playBtn = document.createElement('button');
+  playBtn.id = 'ysfw-pack-play';
+  playBtn.textContent = S.playBtn;
+  playBtn.style.cssText =
+    'margin-top:14px;width:100%;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';' +
+    'color:#04101f;font-size:15px;font-weight:700;cursor:pointer';
+  playBtn.addEventListener('click', start);
+  panel.appendChild(playBtn);
+  // Disambiguate the two "start" affordances: the Quick Flight cards above take off
+  // instantly on a fixed preset, whereas Play opens the engine menu — the route to
+  // pick your own aircraft/maps or host multiplayer.  One quiet line under the button.
+  const playHint = document.createElement('div');
+  playHint.textContent = S.playHint;
+  playHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
+  panel.appendChild(playHint);
+
+  // Add-on management, COLLAPSED by default (auto-expanded once the visitor has
+  // installed packs; see renderList).  Opening it is a deliberate "I want to add or
+  // manage add-ons" act — the label invites exactly that when empty.
+  const packSection = document.createElement('div');
+  packSection.style.cssText = 'margin-top:16px;border-top:1px solid #1d2633;padding-top:12px';
+  const packToggle = document.createElement('button');
+  packToggle.id = 'ysfw-pack-toggle';
+  packToggle.setAttribute('aria-expanded', 'false');
+  packToggle.style.cssText =
+    'width:100%;text-align:left;background:none;border:0;color:#cfe0f5;font-size:13px;' +
+    'font-weight:600;letter-spacing:.02em;cursor:pointer;padding:2px 0';
+  const packBody = document.createElement('div');
+  packBody.id = 'ysfw-pack-body';
+  packBody.style.cssText = 'display:none;margin-top:10px';
+  packToggle.addEventListener('click', () => {
+    const willOpen = packBody.style.display === 'none';
+    packBody.style.display = willOpen ? 'block' : 'none';
+    packToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    packAutoExpanded = true; // user took control; a later refresh won't re-toggle
+    updatePackToggleLabel();
+  });
+  packToggleEl = packToggle;
+  packBodyEl = packBody;
+  packSection.appendChild(packToggle);
+  packSection.appendChild(packBody);
+  panel.appendChild(packSection);
+  updatePackToggleLabel();
+
   // Where do installed packs show up?  The biggest modder drop-off is not knowing
   // the aircraft/maps appear under the engine's Simulation -> Create Flight.
   const postPlay = document.createElement('div');
   postPlay.textContent = S.postPlayHint;
-  postPlay.style.cssText = 'color:#7d93b0;font-size:11px;margin:-4px 0 10px;line-height:1.5';
-  panel.appendChild(postPlay);
+  postPlay.style.cssText = 'color:#7d93b0;font-size:11px;margin:0 0 10px;line-height:1.5';
+  packBody.appendChild(postPlay);
 
   listEl = document.createElement('div');
   listEl.id = 'ysfw-pack-list';
   // Cap the installed-pack list and scroll it internally, so importing hundreds of
   // packs keeps the panel (drop zone, status, Play button) within the viewport.
   listEl.style.cssText = 'max-height:40vh;overflow-y:auto';
-  panel.appendChild(listEl);
+  packBody.appendChild(listEl);
 
   // Drop zone + file picker.
   const drop = document.createElement('label');
@@ -710,11 +779,11 @@ function renderPanel() {
   drop.addEventListener('drop', (e) => {
     if (e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
   });
-  panel.appendChild(drop);
+  packBody.appendChild(drop);
   const dropHintEl = document.createElement('div');
   dropHintEl.textContent = S.dropHint;
   dropHintEl.style.cssText = 'color:#7d93b0;font-size:10.5px;margin-top:4px;text-align:center';
-  panel.appendChild(dropHintEl);
+  packBody.appendChild(dropHintEl);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
   // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
@@ -763,32 +832,16 @@ function renderPanel() {
   urlIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doUrl(); } });
   urlRow.appendChild(urlIn);
   urlRow.appendChild(urlBtn);
-  panel.appendChild(urlRow);
+  packBody.appendChild(urlRow);
 
   const status = document.createElement('div');
   status.id = 'ysfw-pack-status';
   status.style.cssText = 'color:#8fa3bb;font-size:12px;min-height:1.2em;margin-top:8px;white-space:pre-line;max-height:7.5em;overflow:auto';
-  panel.appendChild(status);
+  packBody.appendChild(status);
 
   storageEl = document.createElement('div');
   storageEl.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:4px';
-  panel.appendChild(storageEl);
-
-  const playBtn = document.createElement('button');
-  playBtn.id = 'ysfw-pack-play';
-  playBtn.textContent = S.playBtn;
-  playBtn.style.cssText =
-    'margin-top:14px;width:100%;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';' +
-    'color:#04101f;font-size:15px;font-weight:700;cursor:pointer';
-  playBtn.addEventListener('click', start);
-  panel.appendChild(playBtn);
-  // Disambiguate the two "start" affordances: the Quick Flight cards above take off
-  // instantly on a fixed preset, whereas Play opens the engine menu — the route to
-  // pick your own aircraft/maps or host multiplayer.  One quiet line under the button.
-  const playHint = document.createElement('div');
-  playHint.textContent = S.playHint;
-  playHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
-  panel.appendChild(playHint);
+  packBody.appendChild(storageEl);
 
   // On touch devices, put the Quick Flight panel ABOVE the Room-ID join form so the
   // primary action is the first thing a thumb reaches (the join form renders earlier,
