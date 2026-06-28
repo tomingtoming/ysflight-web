@@ -68,6 +68,7 @@ const S = ({
       noEntries: 'パックのリストに有効なエントリがありませんでした',
     },
     playBtn: '▶ プレイ開始',
+    playHint: '機体・マップを自分で選ぶ／対戦をホストするときはこちら（エンジンのメニューが開きます）',
     flyAgain: '↻ 続きから',
     joinFailTitle: '⚠ 必須パックを取得できませんでした',
     joinFailDesc: (names) => 'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
@@ -118,6 +119,7 @@ const S = ({
       noEntries: 'The pack lists contained no usable entries',
     },
     playBtn: '▶ Play',
+    playHint: 'Choose your own aircraft & maps, or host multiplayer — this opens the engine menu',
     flyAgain: '↻ Fly again',
     joinFailTitle: '⚠ Couldn’t obtain required packs',
     joinFailDesc: (names) => 'Couldn’t obtain the host’s required field' + (names.length ? ' “' + names.join(', ') + '”' : '') +
@@ -294,7 +296,7 @@ function renderList(packs) {
   if (packs.length === 0) {
     const empty = document.createElement('div');
     empty.textContent = S.emptyList;
-    empty.style.cssText = 'color:#5d7290;font-size:13px;padding:6px 0';
+    empty.style.cssText = 'color:#7d93b0;font-size:13px;padding:6px 0';
     listEl.appendChild(empty);
   } else {
     for (const p of packs) {
@@ -583,7 +585,7 @@ function renderPanel() {
   quickWrap.appendChild(qTitle);
   const qHint = document.createElement('div');
   qHint.textContent = S.quickHint;
-  qHint.style.cssText = 'color:#5d7290;font-size:11px;margin-bottom:8px';
+  qHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:8px';
   quickWrap.appendChild(qHint);
   // On touch devices, surface the taster value (on-screen stick after takeoff) ON the
   // top page, not only once already in flight.  Inline the coarse-pointer test (no
@@ -626,7 +628,7 @@ function renderPanel() {
       const tag = document.createElement('div');
       tag.textContent = p.tag;
       tag.style.cssText = 'margin-top:5px;font-size:10px;' +
-        (p.recommended ? 'color:' + ACCENT + ';font-weight:700' : 'color:#5d7290');
+        (p.recommended ? 'color:' + ACCENT + ';font-weight:700' : 'color:#7d93b0');
       card.appendChild(tag);
     }
     card.addEventListener('click', () => {
@@ -668,7 +670,7 @@ function renderPanel() {
   // the aircraft/maps appear under the engine's Simulation -> Create Flight.
   const postPlay = document.createElement('div');
   postPlay.textContent = S.postPlayHint;
-  postPlay.style.cssText = 'color:#5d7290;font-size:11px;margin:-4px 0 10px;line-height:1.5';
+  postPlay.style.cssText = 'color:#7d93b0;font-size:11px;margin:-4px 0 10px;line-height:1.5';
   panel.appendChild(postPlay);
 
   listEl = document.createElement('div');
@@ -711,7 +713,7 @@ function renderPanel() {
   panel.appendChild(drop);
   const dropHintEl = document.createElement('div');
   dropHintEl.textContent = S.dropHint;
-  dropHintEl.style.cssText = 'color:#5d7290;font-size:10.5px;margin-top:4px;text-align:center';
+  dropHintEl.style.cssText = 'color:#7d93b0;font-size:10.5px;margin-top:4px;text-align:center';
   panel.appendChild(dropHintEl);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
@@ -769,7 +771,7 @@ function renderPanel() {
   panel.appendChild(status);
 
   storageEl = document.createElement('div');
-  storageEl.style.cssText = 'color:#5d7290;font-size:11px;margin-top:4px';
+  storageEl.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:4px';
   panel.appendChild(storageEl);
 
   const playBtn = document.createElement('button');
@@ -780,6 +782,13 @@ function renderPanel() {
     'color:#04101f;font-size:15px;font-weight:700;cursor:pointer';
   playBtn.addEventListener('click', start);
   panel.appendChild(playBtn);
+  // Disambiguate the two "start" affordances: the Quick Flight cards above take off
+  // instantly on a fixed preset, whereas Play opens the engine menu — the route to
+  // pick your own aircraft/maps or host multiplayer.  One quiet line under the button.
+  const playHint = document.createElement('div');
+  playHint.textContent = S.playHint;
+  playHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
+  panel.appendChild(playHint);
 
   // On touch devices, put the Quick Flight panel ABOVE the Room-ID join form so the
   // primary action is the first thing a thumb reaches (the join form renders earlier,

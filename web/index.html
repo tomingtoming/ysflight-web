@@ -4,18 +4,18 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#0a0e14">
-<meta name="description" content="Fly YSFLIGHT in your browser — a free WebAssembly port of the classic flight sim. No install, instant multiplayer.">
+<meta name="description" content="Fly YSFLIGHT in your browser — a free, unofficial WebAssembly port of the classic flight sim. No install, instant multiplayer.">
 <!-- Social link-preview (Open Graph + Twitter): shared Room/invite links are the
      growth loop, so they must unfurl with a title, blurb and image — not a bare URL. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="YSFLIGHT web">
 <meta property="og:title" content="YSFLIGHT web — fly in your browser">
-<meta property="og:description" content="A free WebAssembly port of YSFLIGHT. No install — instant flight and multiplayer, right in the browser.">
+<meta property="og:description" content="A free, unofficial WebAssembly port of YSFLIGHT. No install — instant flight and multiplayer, right in the browser.">
 <meta property="og:url" content="https://ysflight-web.toming.app/">
 <meta property="og:image" content="https://ysflight-web.toming.app/icons/icon-512.png">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="YSFLIGHT web — fly in your browser">
-<meta name="twitter:description" content="A free WebAssembly port of YSFLIGHT. No install — instant flight and multiplayer, right in the browser.">
+<meta name="twitter:description" content="A free, unofficial WebAssembly port of YSFLIGHT. No install — instant flight and multiplayer, right in the browser.">
 <meta name="twitter:image" content="https://ysflight-web.toming.app/icons/icon-512.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
@@ -97,7 +97,7 @@
     animation: ysfw-shimmer 1.4s ease-in-out infinite;
   }
   /* Loading skeleton: a non-interactive preview of the Quick Flight grid, painted
-     immediately during the (~23MB) .data download so the wait shows its destination
+     immediately during the (~25MB) .data download so the wait shows its destination
      instead of a bare bar.  Removed by renderPanel() at manual launch, or hidden with
      the overlay at boot (?join / ?freeflight). */
   #ysfw-skeleton {
@@ -134,6 +134,12 @@
     #progress::after, #ysfw-skeleton .sk-card::after { animation: none; }
     #overlay, #progress > div { transition: none; }
   }
+  /* Touch targets: the bottom-right shell row (Room chip, ? Help, fullscreen,
+     connection badge) uses compact 12px buttons; lift them to the 44px minimum on
+     coarse pointers so a thumb can hit them (esp. the Room chip = invite-link copy). */
+  @media (pointer: coarse) {
+    #ysfw-br-stack > * { min-height: 44px; min-width: 44px; box-sizing: border-box; }
+  }
   #status {
     margin-top: 12px;
     font-size: 13px;
@@ -143,13 +149,13 @@
   #note {
     margin-top: 28px;
     font-size: 12px;
-    color: #5d7290;
+    color: #7d93b0;
     max-width: 480px;
     text-align: center;
     line-height: 1.6;
   }
   /* One-line value proposition under the loading bar — what this is + how to start.
-     Static DOM so it paints immediately during the (~23MB) .data download, before
+     Static DOM so it paints immediately during the (~25MB) .data download, before
      any CTA renders.  Brighter than the attribution #note, dimmer than #status. */
   #pitch {
     margin-top: 14px;
@@ -160,21 +166,34 @@
     line-height: 1.65;
     padding: 0 16px;
   }
+  /* "Why am I waiting?" — first-load weight plus the payoff (instant + offline next
+     time).  Static DOM so it paints during the ~25MB .data download, dimmer than
+     #pitch and above the attribution #note. */
+  #loadhint {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #7d93b0;
+    max-width: 460px;
+    text-align: center;
+    line-height: 1.5;
+    padding: 0 16px;
+  }
 </style>
 </head>
 <body>
 <div id="overlay">
   <h1>YSFLIGHT web</h1>
-  <div id="progress"><div id="bar"></div></div>
-  <div id="status">loading...</div>
+  <div id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="loading"><div id="bar"></div></div>
+  <div id="status" role="status" aria-live="polite">loading...</div>
   <div id="pitch"></div>
+  <div id="loadhint"></div>
   <div id="ysfw-skeleton" aria-hidden="true">
     <div class="sk-card sk-hero"></div>
     <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
     <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
   </div>
   <div id="note">
-    YS FLIGHT SIMULATOR (c) Soji Yamakawa (CaptainYS) — WebAssembly port.<br>
+    YS FLIGHT SIMULATOR (c) Soji Yamakawa (CaptainYS) — an unofficial, fan-made WebAssembly port.<br>
     <span id="note-src">元データ・ソースコード: </span><a href="https://github.com/captainys/YSFLIGHT" style="color:#4da3ff">captainys/YSFLIGHT</a>
   </div>
 </div>
@@ -185,6 +204,7 @@
 
   var overlay = document.getElementById('overlay');
   var bar = document.getElementById('bar');
+  var progressEl = document.getElementById('progress');
   var statusEl = document.getElementById('status');
   var booted = false;
 
@@ -200,7 +220,8 @@
   var TXT = ({
     ja: {
       note: '元データ・ソースコード: ',
-      pitch: 'ブラウザで動く無料フライトシム。「今すぐ飛ぶ」で機体を選べば即離陸（スマホ対応）。',
+      pitch: 'あの YSFLIGHT が無料でブラウザに——飛行感覚は原典そのまま。手持ちのアドオンもソロで読み込めます。インストール不要、URL を開くだけ（スマホ対応）。',
+      loadHint: '初回だけ約25MBを読み込みます（2回目以降は瞬時・オフラインでも起動）。',
       chipCopyTitle: 'クリックで招待リンクをコピー',
       chipCopied: '✓ 招待リンクをコピーしました',
       connecting: '（接続中…）',
@@ -256,13 +277,15 @@
         steps: [
           '「▶ プレイ開始」を押してゲームを起動',
           'ゲーム内メニューで Network → Start Server を選ぶ',
-          'ホストで飛び始めると画面右上に「Room: 番号 📋」が出ます。クリックで招待リンクをコピーし、友達に送って参加してもらいましょう',
+          'ホストで飛び始めると画面右下に「Room: 番号 📋」が出ます。クリックで招待リンクをコピーし、友達に送って参加してもらいましょう',
         ],
+        note: '※ カスタム機体・マップで対戦するときは、参加者全員が同じアドオンを各自で事前に取り込んでください（v1では自動配信されません）。',
       },
     },
     en: {
       note: 'Source & assets: ',
-      pitch: 'A free flight sim, right in your browser — pick a Quick Flight aircraft to take off (touch-friendly).',
+      pitch: 'The YSFLIGHT you know, free in your browser — same flight feel as the original. Load your own add-ons in solo. No install, just open the URL (touch-friendly).',
+      loadHint: 'First load fetches about 25MB once — instant and offline-ready afterwards.',
       chipCopyTitle: 'Click to copy the invite link',
       chipCopied: '✓ Invite link copied',
       connecting: ' (connecting…)',
@@ -318,8 +341,9 @@
         steps: [
           'Press “▶ Play” to launch the game',
           'In the engine menu, open Network → Start Server',
-          'Once you’re flying as host, a “Room: <id> 📋” chip appears top-right — click it to copy the invite link and send it to your friends',
+          'Once you’re flying as host, a “Room: <id> 📋” chip appears bottom-right — click it to copy the invite link and send it to your friends',
         ],
+        note: '* For custom aircraft or maps, every player must import the same add-ons beforehand (v1 does not auto-distribute them).',
       },
     },
   })[window.ysfwLang];
@@ -327,6 +351,7 @@
   (function () {
     var n = document.getElementById('note-src'); if (n) n.textContent = TXT.note;
     var p = document.getElementById('pitch'); if (p) p.textContent = TXT.pitch;
+    var lh = document.getElementById('loadhint'); if (lh) lh.textContent = TXT.loadHint;
   })();
 
   var Module = {
@@ -588,7 +613,9 @@
       if (booted) return;
       var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
       if (m) {
-        bar.style.width = (100 * parseFloat(m[2]) / parseFloat(m[4])) + '%';
+        var pct = 100 * parseFloat(m[2]) / parseFloat(m[4]);
+        bar.style.width = pct + '%';
+        if (progressEl) progressEl.setAttribute('aria-valuenow', Math.round(pct));
         statusEl.textContent = m[1].trim();
       } else {
         statusEl.textContent = text || '';
@@ -1447,6 +1474,12 @@
         row.textContent = (i + 1) + '. ' + s;
         card.appendChild(row);
       });
+      if (H.note) {
+        var noteRow = document.createElement('div');
+        noteRow.style.cssText = 'color:#7d93b0;font-size:11.5px;line-height:1.5;margin-top:4px';
+        noteRow.textContent = H.note;
+        card.appendChild(noteRow);
+      }
       var toggle = document.createElement('button');
       toggle.textContent = H.toggle;
       toggle.style.cssText = 'background:none;border:0;color:#8fa3bb;font-size:13px;cursor:pointer;padding:4px;text-decoration:underline';
