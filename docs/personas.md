@@ -100,3 +100,4 @@ YSFLIGHT を知らず、カジュアルに「ブラウザで飛行機を飛ば�
 - [overview.md](overview.md) — v1 通し仕様の正本
 - [addon-packs.md](addon-packs.md) — 追加パックの全設計（ソロ稼働 / MP 配信は v2）
 - [multiplayer.md](multiplayer.md) — WebRTC P2P / シグナリング / TURN
+- [toppage-review.md](toppage-review.md) — 本ペルソナを軸にしたトップページ改善レビュー（実装済み＋バックログ）
