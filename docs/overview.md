@@ -84,7 +84,8 @@ wasm32 ~2GB メモリ天井（遅延パックの実容量上限。LRU で緩和�
 - **シグナリング**: 同一オリジンの **Cloudflare Worker + Durable Object**（`worker/signal.js`、単一グローバルハブ）。
   SDP/ICE のみ中継し、**ゲームデータは一切通らない**。8桁数字ルーム、招待リンク `?join=12345678`、
   host 切断時の **token 付き再取得（reclaim）**で既存 peer を保持。
-- **ICE**: 公開 STUN ＋ **Cloudflare Realtime TURN**（`/turn` が短命クレデンシャル TTL24h を配布。
+- **ICE**: 公開 STUN ＋ **Cloudflare Realtime TURN**（`/turn` が短命クレデンシャル TTL4h を配布。
+  POST 限定・同一 Origin 検査・IP ごと 10回/分のレート制限つき＝悪用対策、詳細は multiplayer.md。
   未設定なら 204 で STUN 一本にフォールバック）。`?turn=0` で強制 STUN。直結不可ペア（対称 NAT / CGNAT /
   モバイル）は TURN 中継。**20秒**で ICE 未確立なら接続失敗を可視化。
 - **2系統の DataChannel**: エンジンゲーム用 `'ysf'`（原典プロトコル）と、シェル所有のパック用

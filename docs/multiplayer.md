@@ -113,7 +113,15 @@ TURN は繋がらないときだけ中継に使われる。メニューの接続
 
 - **配信**: Worker の `/turn` (`worker/signal.js`) が Cloudflare の
   `POST /v1/turn/keys/{KEY_ID}/credentials/generate-ice-servers` を叩いて短命
-  (TTL 24h) の iceServers を返す。長期クレデンシャルは配らない。
+  (TTL 4h) の iceServers を返す。長期クレデンシャルは配らない。
+- **悪用対策** (公開エンドポイント × 中継は従量課金、なので必須): `/turn` は
+  **POST 限定** (GET は 405)・**Origin ヘッダがある場合は同一オリジンのみ** (他サイトの
+  ページからは 403。Origin を送らない非ブラウザは次のレート制限側で受ける)・
+  **IP ごとレート制限 10回/分** (`wrangler.jsonc` の `TURN_RATE` ratelimit binding、
+  超過は 429)。クライアントの取得はページ読込ごとに 1 回なので正規プレイには余裕。
+  TTL 4h は「そのページ読込から始まる長めのプレイセッション」は覆いつつ、漏れた
+  クレデンシャルの寿命を 1 日→半日未満に縮める。TTL 失効後に接続を試みた場合は
+  TURN allocate が失敗して STUN 一本に劣化するだけ (未設定時 204 と同じ挙動)。
 - **クライアント**: `web/index.html` が起動時に `/turn` を取得し、engine
   (`Module.ysfwIceServers` → `yssocket` の `R.iceServers()`) とパック同期
   (`window.ysfwPackIce` → `pack-net.js`) の両 channel に流す。

@@ -11,6 +11,8 @@
   //     wrangler secret put TURN_KEY_ID       (Realtime TURN key id)
   //     wrangler secret put TURN_API_TOKEN    (that key's API token)
   //   Unconfigured -> /turn returns 204 and clients fall back to STUN-only.
+  //   Hardened against abuse (relay traffic is metered): POST-only, same-origin
+  //   Origin check, per-IP rate limit (TURN_RATE binding below), ttl 4h.
   //
   // The DO is declared as a SQLite-backed class (new_sqlite_classes), which is
   // available on the Workers Free plan.  It uses no storage (in-memory room
@@ -41,6 +43,23 @@
   "durable_objects": {
     "bindings": [
       { "name": "SIGNAL", "class_name": "SignalHub" }
+    ]
+  },
+  // Per-IP rate limit for /turn (worker/signal.js turnCredentials) via the
+  // Workers Rate Limiting binding (open beta, available on the Free plan).
+  // The client mints credentials once per page load, so 10/min/IP is generous
+  // for legit players (even several behind one NAT) while cutting off
+  // credential-harvesting loops -- TURN relay traffic is metered, so handing
+  // out unlimited 4h credentials is a direct cost exposure.  namespace_id is
+  // an arbitrary per-account label for this limiter, not a resource id.
+  "unsafe": {
+    "bindings": [
+      {
+        "name": "TURN_RATE",
+        "type": "ratelimit",
+        "namespace_id": "1001",
+        "simple": { "limit": 10, "period": 60 }
+      }
     ]
   },
   "migrations": [
