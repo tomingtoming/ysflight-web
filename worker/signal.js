@@ -47,7 +47,7 @@ export default {
       return env.SIGNAL.get(id).fetch(request);
     }
     if (url.pathname === '/turn') {
-      return turnCredentials(env);
+      return turnCredentials(request, env);
     }
     // Non-signaling paths: serve the static game assets (dist/).
     return env.ASSETS.fetch(request);
@@ -66,7 +66,36 @@ export default {
 //                               wrangler secret put TURN_API_TOKEN
 // (the Realtime TURN key id and that key's API token).  When either is unset we
 // return 204 so the client cleanly falls back to STUN-only.
-async function turnCredentials(env) {
+//
+// Abuse hardening (the endpoint is public and TURN relay traffic is metered):
+//   - POST only, mirroring the sole legit caller (web/index.html); GET scrapers,
+//     crawlers and link prefetchers get 405.
+//   - When a browser sends an Origin it must match this deployment's own origin
+//     (custom domain, workers.dev preview and wrangler dev alike), so OTHER
+//     websites can't mint relay credentials off this endpoint from their pages.
+//     Non-browser clients omit Origin (e.g. scripts/smoke-mp-pack-turn.mjs) and
+//     are governed by the rate limit instead -- a script can spoof Origin anyway,
+//     so requiring it would only break legit tools without slowing an attacker.
+//   - Per-IP rate limit (TURN_RATE ratelimit binding, wrangler.jsonc).  The
+//     client mints ONCE per page load, so the cap is generous even for several
+//     players behind one NAT, while a credential-harvesting loop hits 429.
+//     Binding absent (older deploy config) or failing -> fail OPEN: a broken
+//     limiter must degrade to the pre-hardening behavior, not take TURN down.
+async function turnCredentials(request, env) {
+  if (request.method !== 'POST') {
+    return new Response('POST only', { status: 405, headers: { 'Allow': 'POST' } });
+  }
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== new URL(request.url).origin) {
+    return new Response(null, { status: 403 });
+  }
+  if (env.TURN_RATE && typeof env.TURN_RATE.limit === 'function') {
+    try {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      const { success } = await env.TURN_RATE.limit({ key: ip });
+      if (!success) return new Response(null, { status: 429, headers: { 'Retry-After': '60' } });
+    } catch (e) {}
+  }
   const keyId = env.TURN_KEY_ID;
   const apiToken = env.TURN_API_TOKEN;
   if (!keyId || !apiToken) return new Response(null, { status: 204 });
@@ -76,8 +105,12 @@ async function turnCredentials(env) {
       {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + apiToken, 'Content-Type': 'application/json' },
-        // TTL comfortably exceeds a play session; creds are minted once per load.
-        body: JSON.stringify({ ttl: 86400 }),
+        // 4h: covers a long play session started from this page load (creds are
+        // minted once per load), while a leaked/harvested credential dies the
+        // same afternoon instead of working for a day.  If a tab sits open past
+        // the TTL before connecting, the TURN allocate simply fails and the
+        // client degrades to STUN-only -- same as /turn unconfigured, page unhurt.
+        body: JSON.stringify({ ttl: 14400 }),
       },
     );
     if (!resp.ok) return new Response(null, { status: 502 });
