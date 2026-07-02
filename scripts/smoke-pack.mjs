@@ -49,13 +49,13 @@ const res = await page
   .evaluate(async () => {
     const r = await fetch('/test-pack.zip');
     const b = new Uint8Array(await r.arrayBuffer());
-    return await window.ysfwPacks.installFromBytes(b, 'toming');
+    return await window.ysfwPacks.installFromBytes(b, 'testpack');
   })
   .catch((e) => die('install threw: ' + e.message));
 
 console.log('installed: ' + JSON.stringify(res));
 if (!res || !/^[0-9a-f]{16}$/.test(res.id)) die('install returned no valid pack id');
-if (res.templates !== 2) die('expected 2 templates (amp+domo), got ' + res.templates);
+if (res.templates !== 2) die('expected 2 templates (test1+test2), got ' + res.templates);
 if (JSON.stringify(res.categories) !== JSON.stringify(['aircraft'])) {
   die('expected categories [aircraft], got ' + JSON.stringify(res.categories));
 }
@@ -114,7 +114,7 @@ console.log('SW-cached reload booted cleanly (run-dependency ordering guarded)')
 // "Airplane:<name>" ONLY when freeflight resolved the aircraft to a loaded
 // template (negative control: with no pack, freeflight=YSFW_TEST1 prints
 // "Field:..." but NO "Airplane:" line).  So that line is proof of load.
-async function freeflightLoadsYSFW_TEST1() {
+async function freeflightLoadsTest1() {
   logs.length = 0;
   const ff = new URL(url);
   ff.searchParams.set('freeflight', 'YSFW_TEST1,ATSUGI_AIRBASE,NORTH3000');
@@ -137,7 +137,7 @@ async function freeflightLoadsYSFW_TEST1() {
 }
 
 // 4. Enabled pack -> the engine loads it with no reload.
-if (!(await freeflightLoadsYSFW_TEST1())) {
+if (!(await freeflightLoadsTest1())) {
   die('engine never set up a flight with pack-only aircraft "YSFW_TEST1" — the persisted pack was not loaded');
 }
 if (fatal.length) die('engine logged a fatal / Cannot-Load while loading the pack');
@@ -155,7 +155,7 @@ const disabled = await page.evaluate(async (id) => {
 }, res.id);
 if (!disabled || disabled.enabled !== false) die('setEnabled(false) did not update the index');
 
-if (await freeflightLoadsYSFW_TEST1()) {
+if (await freeflightLoadsTest1()) {
   die('disabled pack was STILL loaded — the .lst.off rename was not honored by the engine');
 }
 console.log('disabled pack: engine did NOT load "YSFW_TEST1" (.lst.off honored)');

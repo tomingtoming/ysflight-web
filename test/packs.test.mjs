@@ -1,8 +1,9 @@
 // Unit tests for the add-on pack engine (web/packs.js).  Runs in plain node
 // with `node --test` (or scripts/test.sh) — no browser, no Emscripten.  The FS
-// adapter is backed by a temp directory, and the realistic fixture is the
-// `testpack.zip` community pack (two aircraft, model files under user/toming/,
-// list paths in the wrong case, CRLF endings, and __MACOSX/.DS_Store cruft).
+// adapter is backed by a temp directory, and the realistic fixture is
+// `testpack.zip`, a synthetic community-style pack (two aircraft under
+// user/toming/, list paths in the wrong case, CRLF endings, and
+// __MACOSX/.DS_Store cruft — see test/fixtures/README.md for provenance).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -80,7 +81,7 @@ test('installs the real toming pack into the isolated, registered layout', async
 
   assert.match(res.id, /^[0-9a-f]{16}$/, 'pack id is a 16-hex content hash');
   assert.deepEqual(res.categories, ['aircraft']);
-  assert.equal(res.templates, 2, 'amp + domo');
+  assert.equal(res.templates, 2, 'test1 + test2');
   assert.deepEqual(res.lists, [`aircraft/air${res.id}.lst`]);
 
   // The generated list is in the scanned dir and points into packs/<id>/.
@@ -100,7 +101,7 @@ test('installs the real toming pack into the isolated, registered layout', async
   // Payload landed under packs/<id>/ with the original (lower) case + size.
   assert.ok(await fs.exists(`packs/${res.id}/user/toming/test1.dnm`));
   const amp = await fs.readFile(`packs/${res.id}/user/toming/test1.dnm`);
-  assert.equal(amp.length, 122069);
+  assert.equal(amp.length, 30124);
 
   // No archive cruft made it to disk.
   const all = await walk(fs.root);
@@ -121,7 +122,7 @@ test('installs the real toming pack into the isolated, registered layout', async
   assert.equal(manifest.schema, 1);
   const ampEntry = manifest.files.find((f) => f.path === 'user/toming/test1.dnm');
   assert.ok(ampEntry, 'manifest lists test1.dnm');
-  assert.equal(ampEntry.size, 122069);
+  assert.equal(ampEntry.size, 30124);
   assert.match(ampEntry.sha256, /^[0-9a-f]{64}$/);
 });
 
