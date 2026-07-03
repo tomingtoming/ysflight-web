@@ -22,6 +22,29 @@
 // close.  Together these stop a brief host-socket loss from permanently deleting
 // the room and stranding late joiners on no-room.
 //
+// Host-loss GRACE: when the CURRENT host socket closes, the room is NOT deleted
+// immediately -- it goes hostless for GRACE_MS awaiting the host's reclaim.  A
+// join during the grace window is accepted (join-ok) and queued; the reclaim
+// flushes the queued {t:'peer'} events to the returning host so those joiners
+// connect without retrying.  A {t:'host'} with a DIFFERENT token is allowed to
+// take over a HOSTLESS room (the host reloaded its page: pinRoomUrl keeps
+// ?room=<code> so the code is reused but the token is fresh) -- queued joiners
+// are handed to the new host; peers of the dead host get host-left.  Only when
+// the grace expires with no host does the room die (host-left to peers).
+// Before this, the deleted-on-close room turned the host's transient socket
+// loss (background-tab timer throttling delaying its keepalive pings) into
+// "?join=<room> hangs / no-room" for invite links -- the reported bug.
+//
+// KEEPALIVE: the hub pings every connected socket every KEEPALIVE_MS.  The
+// clients' own 25s pings run on setInterval, which browsers throttle to 60s+
+// in background tabs -- past the network idle timeout, killing the host socket
+// while its owner reads another tab.  Server-driven pings are immune to tab
+// throttling, so idle rooms survive a backgrounded host.  Clients ignore
+// unknown message types, so {t:'ping'} downstream is compatible with every
+// deployed client.
+//
+// Both knobs are env-overridable for tests: SIGNAL_GRACE_MS, SIGNAL_KEEPALIVE_MS.
+//
 // manifest (optional) is the host's add-on-pack list (ids+hashes+categories,
 // tiny control metadata) stored in room state and echoed to joiners; pack BYTES
 // are transferred P2P over a separate 'ysf-pack' DataChannel (see pack-net.js).
@@ -136,8 +159,16 @@ const MAX_MANIFEST_BYTES = 256 * 1024;
 export class SignalHub {
   constructor(state, env) {
     this.state = state;
-    // room -> { host: WebSocket, peers: Map<peerId, WebSocket>, nextPeer: number, manifest: object|null }
+    // room -> { host: WebSocket|null, peers: Map<peerId, WebSocket>, nextPeer: number,
+    //           manifest: object|null, manifestDropped: boolean, token: string|null,
+    //           pending: Set<peerId>, graceTimer: number|null }
+    // host === null means the room is in the host-loss grace window (see header);
+    // pending holds peers who joined while hostless, flushed as {t:'peer'} on reclaim.
     this.rooms = new Map();
+    this.graceMs = Number(env && env.SIGNAL_GRACE_MS) > 0 ? Number(env.SIGNAL_GRACE_MS) : 90000;
+    this.keepaliveMs = Number(env && env.SIGNAL_KEEPALIVE_MS) > 0 ? Number(env.SIGNAL_KEEPALIVE_MS) : 30000;
+    this.conns = new Set();      // every open server-side socket, for keepalive pings
+    this.keepalive = null;       // interval handle; live only while conns is non-empty
   }
 
   async fetch(request) {
@@ -145,12 +176,32 @@ export class SignalHub {
     const client = pair[0];
     const server = pair[1];
     server.accept();
+    this.trackConn(server);
     // Per-connection state (mirrors signal.mjs's per-socket role/room/peerId).
     const conn = { role: null, room: null, peerId: 0, closed: false };
     server.addEventListener('message', (ev) => this.onMessage(server, conn, ev.data));
     server.addEventListener('close', () => this.onClose(server, conn));
     server.addEventListener('error', () => this.onClose(server, conn));
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  // Server-driven keepalive (see header).  The interval runs only while sockets
+  // are open, so an idle hub with no connections holds no timer and can wind down.
+  trackConn(ws) {
+    this.conns.add(ws);
+    if (!this.keepalive) {
+      this.keepalive = setInterval(() => {
+        for (const s of this.conns) this.send(s, { t: 'ping' });
+      }, this.keepaliveMs);
+    }
+  }
+
+  untrackConn(ws) {
+    this.conns.delete(ws);
+    if (this.conns.size === 0 && this.keepalive) {
+      clearInterval(this.keepalive);
+      this.keepalive = null;
+    }
   }
 
   send(ws, obj) {
@@ -209,8 +260,7 @@ export class SignalHub {
         // Re-host (reclaim): a host whose signaling socket dropped (mobile freeze,
         // transient network, page resume) reconnects and re-sends {t:'host'} with
         // the SAME token to reclaim its room -- WITHOUT disturbing already-joined
-        // peers (keep the peers Map + nextPeer so live peerIds stay valid).  Without
-        // a matching token an existing room is a genuine code collision -> taken.
+        // peers (keep the peers Map + nextPeer so live peerIds stay valid).
         if (token && existing.token && token === existing.token) {
           const old = existing.host;
           existing.host = ws;                          // adopt the fresh socket
@@ -219,7 +269,29 @@ export class SignalHub {
           conn.room = m.room;
           if (hasManifest) { existing.manifest = manifest; existing.manifestDropped = dropped; } // refresh; absent -> keep prior
           this.send(ws, hostOk(m.room));
-          this.log('host-reclaim', m.room, { peers: existing.peers.size, packs: Array.isArray(existing.manifest) ? existing.manifest.length : 0 });
+          const flushed = this.reclaimRoom(existing, ws);
+          this.log('host-reclaim', m.room, { peers: existing.peers.size, flushed, packs: Array.isArray(existing.manifest) ? existing.manifest.length : 0 });
+          return;
+        }
+        // Token mismatch on a HOSTLESS room (grace window): the host reloaded its
+        // page -- pinRoomUrl keeps ?room=<code> in the URL, so the reload re-hosts
+        // the same code with a FRESH token.  Allow the takeover: peers of the dead
+        // engine instance get host-left (their P2P died with that page), while
+        // joiners still waiting for their first offer are handed to the new host.
+        // A token mismatch on a room with a LIVE host stays a genuine collision.
+        if (!existing.host) {
+          for (const [id, pws] of existing.peers) {
+            if (!existing.pending.has(id)) { this.send(pws, { t: 'host-left' }); existing.peers.delete(id); }
+          }
+          existing.host = ws;
+          existing.token = token;
+          existing.manifest = manifest;       // the new page's manifest, even if absent
+          existing.manifestDropped = dropped;
+          conn.role = 'host';
+          conn.room = m.room;
+          this.send(ws, hostOk(m.room));
+          const flushed = this.reclaimRoom(existing, ws);
+          this.log('host-takeover', m.room, { flushed, packs: Array.isArray(manifest) ? manifest.length : 0 });
           return;
         }
         this.send(ws, { t: 'host-taken' });
@@ -228,7 +300,7 @@ export class SignalHub {
       }
       conn.role = 'host';
       conn.room = m.room;
-      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, manifestDropped: dropped, token });
+      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, manifestDropped: dropped, token, pending: new Set(), graceTimer: null });
       this.send(ws, hostOk(m.room));
       // packs: how many add-on packs the host advertised; dropped: the manifest
       // exceeded the hub cap and was discarded (a prime suspect when a joiner
@@ -248,8 +320,12 @@ export class SignalHub {
       // discarded the list for exceeding its size cap — distinct from a host with no
       // packs, so the joiner can surface it instead of silently joining pack-less.
       this.send(ws, { t: 'join-ok', peer: conn.peerId, manifest: r.manifest || null, manifestDropped: r.manifestDropped || undefined });
-      this.send(r.host, { t: 'peer', peer: conn.peerId });
-      this.log('join', m.room, { result: 'join-ok', peer: conn.peerId, packs: Array.isArray(r.manifest) ? r.manifest.length : 0 });
+      // Hostless (grace window): queue the peer instead of notifying a dead socket;
+      // the host's reclaim/takeover flushes the {t:'peer'} so this joiner connects
+      // without having to retry.
+      if (r.host) this.send(r.host, { t: 'peer', peer: conn.peerId });
+      else r.pending.add(conn.peerId);
+      this.log('join', m.room, { result: 'join-ok', peer: conn.peerId, hostless: r.host ? undefined : true, packs: Array.isArray(r.manifest) ? r.manifest.length : 0 });
 
     } else if ((m.t === 'sdp' || m.t === 'ice') && conn.room) {
       const r = this.rooms.get(conn.room);
@@ -271,25 +347,55 @@ export class SignalHub {
     }
   }
 
+  // Shared tail of reclaim and takeover: hand the queued hostless-window joiners
+  // to the (re)claiming host socket and disarm the grace timer.  Returns how many
+  // {t:'peer'} events were flushed (for the log).
+  reclaimRoom(r, ws) {
+    if (r.graceTimer !== null) { clearTimeout(r.graceTimer); r.graceTimer = null; }
+    let flushed = 0;
+    for (const id of r.pending) {
+      if (r.peers.has(id)) { this.send(ws, { t: 'peer', peer: id }); flushed++; }
+    }
+    r.pending.clear();
+    return flushed;
+  }
+
   onClose(ws, conn) {
+    this.untrackConn(ws);
     if (conn.closed || !conn.room) return;
     conn.closed = true;
     const r = this.rooms.get(conn.room);
     if (!r) return;
     if (conn.role === 'host') {
-      // Only the CURRENT host socket tears the room down.  If the host already
+      // Only the CURRENT host socket affects the room.  If the host already
       // reconnected and reclaimed the room with a fresh socket (r.host !== ws),
       // this is the delayed close of the OLD socket -- ignore it, or it would
       // clobber the freshly reclaimed room and strand the reconnected host (the
       // bug behind "after idle, late joiners get no-room").
       if (r.host !== ws) { this.log('host-close-stale', conn.room); return; }
-      for (const [, pws] of r.peers) this.send(pws, { t: 'host-left' });
-      this.rooms.delete(conn.room);
-      this.log('host-left', conn.room, { peers: r.peers.size });
+      // Grace window (see header): keep the room hostless awaiting the host's
+      // reclaim instead of deleting it -- deleting here turned every transient
+      // host-socket loss into no-room for invite links.  Peers are NOT told
+      // host-left yet: their P2P DataChannels are independent of signaling and
+      // stay up through the blip.
+      r.host = null;
+      const room = conn.room;
+      r.graceTimer = setTimeout(() => this.expireRoom(room), this.graceMs);
+      this.log('host-grace', room, { peers: r.peers.size, graceMs: this.graceMs });
     } else {
       r.peers.delete(conn.peerId);
-      this.send(r.host, { t: 'peer-left', peer: conn.peerId });
+      r.pending.delete(conn.peerId);
+      if (r.host) this.send(r.host, { t: 'peer-left', peer: conn.peerId });
       this.log('peer-left', conn.room, { peer: conn.peerId });
     }
+  }
+
+  // Grace expired with no reclaim: the host is genuinely gone, tear the room down.
+  expireRoom(room) {
+    const r = this.rooms.get(room);
+    if (!r || r.host) return;  // reclaimed (or already gone) in the meantime
+    for (const [, pws] of r.peers) this.send(pws, { t: 'host-left' });
+    this.rooms.delete(room);
+    this.log('host-left', room, { peers: r.peers.size, graceExpired: true });
   }
 }

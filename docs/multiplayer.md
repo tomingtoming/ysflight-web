@@ -58,13 +58,40 @@ JSON メッセージ。`worker/signal.js` と wasm 側
 
 | 向き | メッセージ |
 |---|---|
-| host → | `{t:'host', room}` / `{t:'sdp'\|'ice', peer, data}` |
+| host → | `{t:'host', room, token?}` / `{t:'sdp'\|'ice', peer, data}` |
 | → host | `{t:'host-ok', room}` / `{t:'host-taken'}` / `{t:'peer', peer}` / `{t:'sdp'\|'ice', peer, data}` / `{t:'peer-left', peer}` |
 | peer → | `{t:'join', room}` / `{t:'sdp'\|'ice', data}` (peer は付けない=サーバが接続から推定) |
 | → peer | `{t:'no-room'}` / `{t:'join-ok', peer}` / `{t:'sdp'\|'ice', peer, data}` / `{t:'host-left'}` |
+| ハブ → 全員 | `{t:'ping'}` (サーバ主導 keep-alive。クライアントは無視してよい) |
 
 確立後はゲームデータが P2P (DataChannel) で流れ、シグナリングは新規参加・追加
 ICE・切断通知のみに使われる。
+
+### ホスト切断への耐性 (grace / reclaim / keepalive)
+
+ホストのシグナリング WebSocket は、タブがバックグラウンドになるとブラウザの
+タイマースロットリングで 25 秒間隔の keep-alive ping が 60 秒以上に間延びし、
+アイドル切断されることがある。これが従来「ホストは無事なのに招待リンクが
+no-room で繋がらない」の主因だった。対策は 3 段構え (`worker/signal.js`):
+
+1. **サーバ主導 keep-alive**: ハブが全接続へ 30 秒ごとに `{t:'ping'}` を送る。
+   サーバ側のタイマーはタブのスロットリングと無関係なので、バックグラウンドの
+   ホストでもソケット (＝room) が生き続ける。
+2. **ホスト喪失 grace (90秒)**: それでもホストのソケットが切れた場合、room を
+   即削除せず 90 秒間「ホスト不在」のまま保持する。この間の `join` は受理して
+   保留 (join-ok は即返す) し、ホストが同じ `token` で再接続 (reclaim) した瞬間に
+   保留中の `{t:'peer', peer}` をまとめて流す。参加者はリトライ不要で接続に進む。
+3. **ホスト不在 room の乗っ取り (takeover)**: grace 中に別 token の `{t:'host'}`
+   が来た場合は「ホストがページをリロードした」ケース (URL に `?room=` が固定
+   されるので room コードは同じ・token は新規) として乗っ取りを許可する。旧
+   ホストと接続済みだった peer には `host-left` を送り、保留中の joiner は新
+   ホストへ引き渡す。ホストが生きている room への別 token は従来どおり
+   `host-taken`。
+
+grace が切れても reclaim が無ければ room は削除され、peer へ `host-left`、以後の
+join は `no-room` (従来挙動)。時間は env `SIGNAL_GRACE_MS` / `SIGNAL_KEEPALIVE_MS`
+で上書き可 (テスト用)。契約は `scripts/smoke-mp-reconnect.mjs` が検証し、
+`scripts/sig-stub.mjs` (テスト用 Node ミラー) も同じ挙動を実装する。
 
 ## NAT 越え / STUN・TURN
 
