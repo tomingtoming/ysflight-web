@@ -39,6 +39,15 @@ const S = ({
     errorPrefix: 'エラー: ',
     uninstallTitle: 'アンインストール',
     confirmDelete: (n) => '「' + n + '」を削除しますか？',
+    disableAllBtn: '全部無効化', enableAllBtn: '全部有効化', deleteAllBtn: '全部削除',
+    disableAllTitle: '全パックを一括で無効化（原典YSFLIGHTに戻す。あとで有効化できます）',
+    enableAllTitle: '全パックを一括で有効化',
+    deleteAllTitle: '全パックを一括でアンインストール（元に戻せません）',
+    confirmDeleteAll: (n) => '追加パック ' + n + ' 個をすべて削除しますか？\nこの操作は元に戻せません（各パックは再インポートが必要になります）。',
+    bulkDisabled: (n) => '✓ ' + n + ' 個を無効化しました（原典YSFLIGHTに戻りました）',
+    bulkEnabled: (n) => '✓ ' + n + ' 個を有効化しました',
+    bulkRemoved: (n) => '✓ ' + n + ' 個を削除しました',
+    bulkWorking: '処理中…',
     storage: (u, q, p) => '使用容量 ' + u + (q ? ' / ' + q : '') + ' ・ 永続化 ' + (p ? 'ON' : 'OFF'),
     installing: '取り込み中: ',
     bulkProgress: (done, total) => '取り込み中 ' + done + '/' + total + ' …',
@@ -92,6 +101,15 @@ const S = ({
     errorPrefix: 'Error: ',
     uninstallTitle: 'Uninstall',
     confirmDelete: (n) => 'Delete “' + n + '”?',
+    disableAllBtn: 'Disable all', enableAllBtn: 'Enable all', deleteAllBtn: 'Delete all',
+    disableAllTitle: 'Disable every pack at once (back to plain YSFLIGHT; you can re-enable later)',
+    enableAllTitle: 'Enable every pack at once',
+    deleteAllTitle: 'Uninstall every pack at once (cannot be undone)',
+    confirmDeleteAll: (n) => 'Delete all ' + n + ' add-on packs?\nThis cannot be undone (each pack would need to be re-imported).',
+    bulkDisabled: (n) => '✓ Disabled ' + n + ' pack(s) — back to plain YSFLIGHT',
+    bulkEnabled: (n) => '✓ Enabled ' + n + ' pack(s)',
+    bulkRemoved: (n) => '✓ Deleted ' + n + ' pack(s)',
+    bulkWorking: 'Working…',
     storage: (u, q, p) => 'Storage ' + u + (q ? ' / ' + q : '') + ' · Persisted ' + (p ? 'ON' : 'OFF'),
     installing: 'Installing: ',
     bulkProgress: (done, total) => 'Importing ' + done + '/' + total + '…',
@@ -158,6 +176,8 @@ function updatePackToggleLabel() {
   packToggleEl.textContent = (open ? '▾ ' : '▸ ') + (packCount > 0 ? S.packToggleN(packCount) : S.packToggle0);
 }
 let storageEl = null;
+// Bulk-action bar (disable/enable all, delete all).  Shown only when packs exist.
+let bulkBarEl = null, bulkToggleBtn = null, bulkDeleteBtn = null;
 // In-memory source of truth for the installed-pack list shown in the panel.
 // Loaded ONCE from OPFS (ensureCache), then kept up to date in memory on
 // install/enable/uninstall.  The panel renders from this -- never from a fresh
@@ -318,6 +338,7 @@ function renderList(packs) {
     }
     updatePackToggleLabel();
   }
+  updateBulkBar(packs);
   listEl.innerHTML = '';
   if (packs.length === 0) {
     const empty = document.createElement('div');
@@ -386,6 +407,21 @@ function renderList(packs) {
       row.appendChild(ctl);
       listEl.appendChild(row);
     }
+  }
+}
+
+// Show the bulk bar only when packs exist, and make the toggle button reflect state:
+// if any pack is enabled it offers "disable all" (the common case: get to plain
+// YSFLIGHT); if all are already disabled it offers "enable all" (restore).
+function updateBulkBar(packs) {
+  if (!bulkBarEl) return;
+  if (!packs.length) { bulkBarEl.style.display = 'none'; return; }
+  bulkBarEl.style.display = 'flex';
+  const anyEnabled = packs.some((p) => p.enabled !== false);
+  if (bulkToggleBtn) {
+    bulkToggleBtn.dataset.enableAll = anyEnabled ? '' : '1';
+    bulkToggleBtn.textContent = anyEnabled ? S.disableAllBtn : S.enableAllBtn;
+    bulkToggleBtn.title = anyEnabled ? S.disableAllTitle : S.enableAllTitle;
   }
 }
 
@@ -462,19 +498,26 @@ async function installFromBytes(bytes, name, sourceUrl) {
   return res;
 }
 
-async function setEnabled(id, enabled) {
-  if (!adapter) throw new Error('pack layer not ready');
+// Per-pack enable/disable, WITHOUT the syncfs + panel re-render.  Split out so the
+// bulk "disable all / enable all" path can run it across hundreds of packs and pay
+// the one-time syncfs + refresh cost ONCE at the end (same reason handleFiles batches).
+async function setEnabledCore(id, enabled) {
   const rec = await opfs.setEnabled(id, enabled);
   if (enabled) await opfs.materialize(rec, adapter, { metaOnly: true }); // write listing only; payload on demand
   else for (const g of rec.generated) await adapter.rmrf(g.file);        // drop lists -> engine won't scan it
   cacheUpdate(id, { enabled: !!enabled });
+}
+
+async function setEnabled(id, enabled) {
+  if (!adapter) throw new Error('pack layer not ready');
+  await setEnabledCore(id, enabled);
   await sync();
   await refresh();
   return { id, enabled: !!enabled };
 }
 
-async function uninstall(id) {
-  if (!adapter) throw new Error('pack layer not ready');
+// Per-pack uninstall, WITHOUT the gc + syncfs + re-render (batched by uninstallAll).
+async function uninstallCore(id) {
   const rec = await opfs.getRecord(id);
   if (rec) {
     // Remove the record FIRST: a ysfwMaterializeForOpen that has not yet resolved its
@@ -485,12 +528,47 @@ async function uninstall(id) {
     await adapter.rmrf('packs/' + id);                          // remove materialized payload (MEMFS)
     if (lru) lru.forgetPrefix('packs/' + id + '/');             // drop its LRU accounting
     forgetPrefetchForId(id);                                    // and its prefetch guard entries
-    await opfs.gc();                                            // reclaim now-unreferenced blobs
   }
   cacheRemove(id);
+}
+
+async function uninstall(id) {
+  if (!adapter) throw new Error('pack layer not ready');
+  await uninstallCore(id);
+  await opfs.gc();     // reclaim now-unreferenced blobs
   await sync();
   await refresh();
   return { id, removed: true };
+}
+
+// Bulk enable/disable EVERY installed pack in one pass.  A first release doesn't
+// push add-ons, so a returning modder with hundreds of packs needs a one-click way
+// back to plain YSFLIGHT (and back again) instead of toggling each row.  Failures on
+// a single bad pack don't abort the sweep; the syncfs + re-render happen once.
+async function setEnabledAll(enabled) {
+  if (!adapter) throw new Error('pack layer not ready');
+  const targets = (await listInstalled()).filter((p) => (p.enabled !== false) !== enabled);
+  let done = 0;
+  for (const p of targets) {
+    try { await setEnabledCore(p.id, enabled); done++; } catch (e) { /* skip a bad pack, keep going */ }
+  }
+  await sync();
+  await refresh();
+  return { changed: done, total: targets.length };
+}
+
+// Bulk uninstall EVERY installed pack (payload + lists + index) in one pass.
+async function uninstallAll() {
+  if (!adapter) throw new Error('pack layer not ready');
+  const packs = await listInstalled();
+  let removed = 0;
+  for (const p of packs) {
+    try { await uninstallCore(p.id); removed++; } catch (e) { /* skip a bad pack, keep going */ }
+  }
+  await opfs.gc();     // reclaim all now-unreferenced blobs once
+  await sync();
+  await refresh();
+  return { removed, total: packs.length };
 }
 
 function start() {
@@ -741,6 +819,52 @@ function renderPanel() {
   postPlay.textContent = S.postPlayHint;
   postPlay.style.cssText = 'color:#7d93b0;font-size:11px;margin:0 0 10px;line-height:1.5';
   packBody.appendChild(postPlay);
+
+  // Bulk actions (hidden until packs exist).  A first release doesn't push add-ons,
+  // so a returning modder needs one click back to plain YSFLIGHT (disable all) and,
+  // separately, a way to wipe the whole library (delete all, with confirm).
+  const bulkBar = document.createElement('div');
+  bulkBar.id = 'ysfw-pack-bulk';
+  bulkBar.style.cssText = 'display:none;justify-content:flex-end;gap:6px;margin:0 0 8px';
+  const bulkStatusFor = () => document.getElementById('ysfw-pack-status');
+  const runBulk = async (fn, done) => {
+    const st = bulkStatusFor();
+    if (bulkToggleBtn) bulkToggleBtn.disabled = true;
+    if (bulkDeleteBtn) bulkDeleteBtn.disabled = true;
+    if (st) st.textContent = S.bulkWorking;
+    try {
+      const r = await fn();
+      if (st) st.textContent = done(r);
+    } catch (e) {
+      if (st) st.textContent = S.errorPrefix + (e && e.message ? e.message : e);
+    } finally {
+      if (bulkToggleBtn) bulkToggleBtn.disabled = false;
+      if (bulkDeleteBtn) bulkDeleteBtn.disabled = false;
+    }
+  };
+  bulkToggleBtn = document.createElement('button');
+  bulkToggleBtn.textContent = S.disableAllBtn;
+  bulkToggleBtn.style.cssText =
+    'font-size:12px;padding:5px 11px;border-radius:5px;cursor:pointer;border:1px solid ' +
+    ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT;
+  bulkToggleBtn.addEventListener('click', () => {
+    const enableAll = bulkToggleBtn.dataset.enableAll === '1';
+    runBulk(() => window.ysfwPacks.setEnabledAll(enableAll),
+      (r) => (enableAll ? S.bulkEnabled : S.bulkDisabled)(r.changed));
+  });
+  bulkDeleteBtn = document.createElement('button');
+  bulkDeleteBtn.textContent = S.deleteAllBtn;
+  bulkDeleteBtn.title = S.deleteAllTitle;
+  bulkDeleteBtn.style.cssText =
+    'font-size:12px;padding:5px 11px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#c75d6a';
+  bulkDeleteBtn.addEventListener('click', () => {
+    if (!self.confirm(S.confirmDeleteAll(packCount))) return;
+    runBulk(() => window.ysfwPacks.uninstallAll(), (r) => S.bulkRemoved(r.removed));
+  });
+  bulkBar.appendChild(bulkToggleBtn);
+  bulkBar.appendChild(bulkDeleteBtn);
+  bulkBarEl = bulkBar;
+  packBody.appendChild(bulkBar);
 
   listEl = document.createElement('div');
   listEl.id = 'ysfw-pack-list';
@@ -1276,6 +1400,8 @@ window.ysfwPacks = {
   installFromBytes,
   setEnabled,
   uninstall,
+  setEnabledAll,        // bulk: enable/disable every installed pack (one syncfs+refresh)
+  uninstallAll,         // bulk: uninstall every installed pack (one gc+syncfs+refresh)
   list: listInstalled,
   start,
   refresh,
