@@ -160,5 +160,45 @@ if (await freeflightLoadsTest1()) {
 }
 console.log('disabled pack: engine did NOT load "YSFW_TEST1" (.lst.off honored)');
 
+// 6. Bulk actions (setEnabledAll / uninstallAll): the one-click "back to plain
+//    YSFLIGHT" and "wipe the library" the panel exposes.  Drive the API directly.
+//    Each freeflightLoadsTest1() navigates, so re-wait for the pack layer (fsReady)
+//    before every evaluate that follows a navigation.
+const waitFsReady = () => page
+  .waitForFunction(() => window.ysfwPacks && window.ysfwPacks.fsReady === true, { timeout: 30000 })
+  .catch(() => die('pack layer not ready for bulk ops'));
+await waitFsReady();
+
+// 6a. setEnabledAll(true) re-enables everything -> the pack loads again.
+const bulkEnabled = await page.evaluate(async () => {
+  const r = await window.ysfwPacks.setEnabledAll(true);
+  const list = await window.ysfwPacks.list();
+  return { r, allOn: list.length > 0 && list.every((p) => p.enabled !== false) };
+});
+if (!bulkEnabled.allOn) die('setEnabledAll(true) did not re-enable every pack: ' + JSON.stringify(bulkEnabled));
+if (!(await freeflightLoadsTest1())) die('after setEnabledAll(true) the engine did not load "YSFW_TEST1"');
+console.log('bulk enable: setEnabledAll(true) re-enabled all packs; engine loaded "YSFW_TEST1"');
+
+// 6b. setEnabledAll(false) -> plain YSFLIGHT (no pack aircraft).
+await waitFsReady();
+const bulkDisabled = await page.evaluate(async () => {
+  await window.ysfwPacks.setEnabledAll(false);
+  const list = await window.ysfwPacks.list();
+  return list.length > 0 && list.every((p) => p.enabled === false);
+});
+if (!bulkDisabled) die('setEnabledAll(false) did not disable every pack');
+if (await freeflightLoadsTest1()) die('after setEnabledAll(false) the engine STILL loaded "YSFW_TEST1"');
+console.log('bulk disable: setEnabledAll(false) disabled all packs; engine did NOT load "YSFW_TEST1"');
+
+// 6c. uninstallAll() -> empty index, and the payload aircraft is gone.
+await waitFsReady();
+const bulkRemoved = await page.evaluate(async () => {
+  const r = await window.ysfwPacks.uninstallAll();
+  return { r, remaining: (await window.ysfwPacks.list()).length };
+});
+if (bulkRemoved.remaining !== 0) die('uninstallAll() left packs behind: ' + JSON.stringify(bulkRemoved));
+if (await freeflightLoadsTest1()) die('after uninstallAll() the engine STILL loaded "YSFW_TEST1"');
+console.log('bulk uninstall: uninstallAll() emptied the index; engine did NOT load "YSFW_TEST1"');
+
 console.log('SMOKE-PACK PASSED');
 await browser.close();
