@@ -259,6 +259,10 @@
         close: '閉じる',
         fsOpen: '⛶ 全画面',
         fsTitle: '全画面切替（F11 / ⌃⌘F）',
+        vrEnter: '🥽 VR',
+        vrExit: '🥽 VR終了',
+        vrTitle: 'VRヘッドセットで飛ぶ（WebXR・実験的機能）。頭の向きが視点になります。HUD・計器・メニューはVR中は表示されません',
+        vrFail: 'VRセッションを開始できませんでした',
         intro: 'ジョイスティック未接続なら マウスが操縦桿 です。',
         rows: [
           ['マウス移動', '操縦桿（上下＝ピッチ / 左右＝ロール）'],
@@ -323,6 +327,10 @@
         close: 'Close',
         fsOpen: '⛶ Fullscreen',
         fsTitle: 'Toggle fullscreen (F11 / ⌃⌘F)',
+        vrEnter: '🥽 VR',
+        vrExit: '🥽 Exit VR',
+        vrTitle: 'Fly in a VR headset (WebXR, experimental). Head tracking drives the view; HUD, instruments and menus are not shown in VR',
+        vrFail: 'Could not start the VR session',
         intro: 'With no joystick, your mouse is the control stick.',
         rows: [
           ['Move mouse', 'Control stick (up/down = pitch, left/right = roll)'],
@@ -1091,6 +1099,45 @@
     fsBtn.style.cssText = 'order:2;pointer-events:auto;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer';
     fsBtn.onclick = function () { toggle(); };
     ysfwBRStack().appendChild(fsBtn);
+  })();
+
+  // ---- VR (WebXR) entry button ----------------------------------------------
+  // Shown only when BOTH are true: the browser has an immersive-vr WebXR runtime
+  // (Module.ysfwVr.supported, set by the engine's WebXR glue in
+  // src/port/platform_emscripten/fswebxr.cpp) AND a flight is running
+  // (globalThis.ysfwInFlight) -- the 2D menus are not presented in VR, so
+  // offering the button in the menu would strand the user in a black void.
+  // Clicking during a session (desktop VR, where the 2D page stays visible)
+  // exits it.  order:1 next to the help button; fullscreen keeps the corner.
+  (function () {
+    var vrBtn = document.createElement('button');
+    vrBtn.id = 'ysfw-vr-btn';
+    vrBtn.textContent = TXT.help.vrEnter;
+    vrBtn.title = TXT.help.vrTitle;
+    vrBtn.style.cssText = 'order:1;pointer-events:auto;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer;display:none';
+    var inVr = false;
+    vrBtn.onclick = function () {
+      var vr = Module.ysfwVr;
+      if (!vr) return;
+      if (vr.session) { vr.exit(); return; }
+      vrBtn.disabled = true;
+      vr.enter().catch(function () {
+        vrBtn.disabled = false;
+        var n = document.createElement('div');
+        n.textContent = TXT.help.vrFail;
+        n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(60,16,16,.92);color:#f5d5d5;border:1px solid #5a2a2a;border-radius:8px;padding:8px 14px;font-size:12px';
+        document.body.appendChild(n);
+        setTimeout(function () { if (n.parentNode) n.remove(); }, 5000);
+      });
+    };
+    Module.onVrStart = function () { inVr = true; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrExit; };
+    Module.onVrEnd = function () { inVr = false; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrEnter; };
+    ysfwBRStack().appendChild(vrBtn);
+    setInterval(function () {
+      var vr = Module.ysfwVr;
+      var show = !!(vr && vr.supported && (globalThis.ysfwInFlight || inVr));
+      vrBtn.style.display = show ? '' : 'none';
+    }, 500);
   })();
 
   // ---- Controls legend overlay ---------------------------------------------

@@ -48,8 +48,13 @@ void FsBeforeOpenWindow(const class FsOption &,const class FsFlightConfig &)
 	fsConsole.useStdout=YSTRUE;
 }
 
+void YsfwSetUpWebXR(void);  // fswebxr.cpp
+
 void FsAfterOpenWindow(const class FsOption &,const class FsFlightConfig &)
 {
+	// The WebGL context exists at this point; expose the WebXR entry points
+	// (Module.ysfwVr) to the hosting page.
+	YsfwSetUpWebXR();
 }
 
 void FsSetTopMostWindow(YSBOOL)

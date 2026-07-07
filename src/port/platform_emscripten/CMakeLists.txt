@@ -6,6 +6,7 @@ set(TARGET_NAME ysflight_platform_emscripten)
 
 add_library(${TARGET_NAME}
 	fsplatform_emscripten.cpp
+	fswebxr.cpp
 	${CMAKE_SOURCE_DIR}/sounddll/yswavfile/yswavfile.cpp
 	fsairsound_emscripten.cpp
 )

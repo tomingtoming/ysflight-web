@@ -120,6 +120,34 @@ static void MainLoopTick(void)
 	}
 }
 
+// ----------------------------------------------------------------------------
+// External drive (WebXR).
+//
+// While an immersive session runs, frames must be produced from
+// XRSession.requestAnimationFrame -- the window rAF loop is paused (on
+// standalone headsets it stops firing anyway).  The WebXR glue
+// (platform_emscripten/fswebxr.cpp) calls these from JS.
+
+extern "C" void EMSCRIPTEN_KEEPALIVE YsfwExternalTick(void)
+{
+	if(true!=busy)
+	{
+		MainLoopTick();
+	}
+}
+
+extern "C" void EMSCRIPTEN_KEEPALIVE YsfwSetExternalDrive(int externalDrive)
+{
+	if(0!=externalDrive)
+	{
+		emscripten_pause_main_loop();
+	}
+	else
+	{
+		emscripten_resume_main_loop();
+	}
+}
+
 int main(int ac,char *av[])
 {
 	auto appPtr=FsLazyWindowApplicationBase::GetApplication();
