@@ -1,211 +1,241 @@
 # ysflight-web
 
-**YS FLIGHT SIMULATOR をWebブラウザで** — [captainys/YSFLIGHT](https://github.com/captainys/YSFLIGHT) の
-WebAssembly (Emscripten) 移植です。
-
 YSFLIGHT web is a WebAssembly port of Soji Yamakawa (CaptainYS)'s
 [YS FLIGHT SIMULATOR](https://ysflight.org), runnable in any modern browser
 with WebGL — no installation required.
 
-**▶ プレイ / Play: https://ysflight-web.toming.app**
+**▶ Play: https://ysflight-web.toming.app**
 
-## 構成 / Architecture
+> 日本語: [YS FLIGHT SIMULATOR](https://ysflight.org)（CaptainYS 氏作）を
+> Web ブラウザで遊べるようにした WebAssembly (Emscripten) 移植です。
+> インストール不要、上のリンクからそのまま遊べます。設計ドキュメント
+> （`docs/`）は日本語で書かれています。
+
+## Architecture
 
 ```
-upstream/YSFLIGHT   tomingtoming/YSFLIGHT の emscripten ブランチ (captainys/YSFLIGHT のフォーク)
-upstream/public     tomingtoming/public  の emscripten ブランチ (captainys/public のフォーク)
-src/port/           本リポジトリで新規に書いたプラットフォーム層
+upstream/YSFLIGHT   emscripten branch of tomingtoming/YSFLIGHT (fork of captainys/YSFLIGHT)
+upstream/public     emscripten branch of tomingtoming/public   (fork of captainys/public)
+src/port/           platform layer written for this repository
   fssimplewindow/     Emscripten backend (WebGL context, DOM input events, timers)
   fslazywindow/       emscripten_set_main_loop driver
-web/                index.html シェル (ローディングUI, IDBFS永続化, 言語設定)
-worker/             WebRTC シグナリング (Cloudflare Worker + Durable Object)
+web/                index.html shell (loading UI, IDBFS persistence, language setting)
+worker/             WebRTC signaling (Cloudflare Worker + Durable Object)
 scripts/            build.sh / smoke-test.sh / serve.mjs
-docs/               設計ドキュメント (multiplayer.md ほか)
+docs/               design documents (multiplayer.md and others; written in Japanese)
 ```
 
-上流への変更は、フォークの `emscripten` ブランチ上に**テーマ別の通常コミット**
-として管理しています (旧方式の `patches/*.patch` は廃止)。上流との差分は
+Changes to the upstream engine are managed as **ordinary, theme-scoped commits**
+on the forks' `emscripten` branches (the old `patches/*.patch` scheme is gone).
+The delta against upstream is listable with
 
 ```sh
 git -C upstream/YSFLIGHT log --oneline master..emscripten
 git -C upstream/public   log --oneline master..emscripten
 ```
 
-で一覧でき、上流が更新されたら `git fetch upstream && git rebase upstream/master`
-で追従します。上流にPR可能な純粋バグ修正 (例: ysgl のsampler uniformバグ) は
-独立コミットとして分離してあり、そのまま cherry-pick して提案できます。
+and when upstream moves, we follow with `git fetch upstream && git rebase
+upstream/master`. Pure bug fixes that could be PRed upstream (e.g. the ysgl
+sampler-uniform bug) are kept as separate commits so they can be cherry-picked
+and proposed as-is.
 
-技術的な要点:
+Technical highlights:
 
-- 描画は YSFLIGHT 既存の **OpenGL ES 2.0 バックエンド** (`graphics/gl2.0`, Android移植用)
-  をそのまま WebGL 1.0 で使用 (`-sFULL_ES2`)
-- メインループは `fslazywindow` のコールバック構造を `requestAnimationFrame` に接続
-- ゲームデータ (`runtime/`, 約25MB) は `--preload-file` で `.data` にパッケージ
-- ユーザ設定 (`/home/web_user/Documents`) は **IndexedDB (IDBFS)** で永続化
-- **シミュレーションは単一スレッド実行** — `-pthread` を使うと (`-sPROXY_TO_PTHREAD`
-  無しでは) `main()` とメインループがブラウザのメインスレッド上で動き、`YsThreadPool`
-  がワーカー完了を `condition_variable` で待ってメインスレッドをブロックする。ワーカーが
-  遅延・停止するとページ全体が凍結する (rAF 停止) ため、Web では単一スレッドで実行する。
-  これにより SharedArrayBuffer / COOP+COEP は不要 (再有効化には
-  `-sPROXY_TO_PTHREAD` + OffscreenCanvas が必要)
-- **PWA**: Service Worker によるオフラインプレイ・2回目以降の即時起動。
-  アセットはコンテンツハッシュ付きファイル名で配信されるため、
-  更新時のキャッシュ問題なし (`_headers` で immutable キャッシュ指定)
-- **バックグラウンドタブ対応**: タブ非表示中も Web Worker 駆動で
-  シミュレーションが継続 (マルチプレイ中の切断を防止。描画はスキップ)
+- Rendering uses YSFLIGHT's existing **OpenGL ES 2.0 backend**
+  (`graphics/gl2.0`, originally for the Android port) directly on WebGL 1.0
+  (`-sFULL_ES2`)
+- The main loop connects `fslazywindow`'s callback structure to
+  `requestAnimationFrame`
+- Game data (`runtime/`, ~25MB) is packaged into a `.data` file with
+  `--preload-file`
+- User settings (`/home/web_user/Documents`) persist via **IndexedDB (IDBFS)**
+- **The simulation runs single-threaded** — with `-pthread` (and without
+  `-sPROXY_TO_PTHREAD`), `main()` and the main loop run on the browser's main
+  thread, and `YsThreadPool` blocks it on a `condition_variable` waiting for
+  workers; a delayed or stalled worker then freezes the whole page (rAF stops).
+  So the web build runs single-threaded, which also means no
+  SharedArrayBuffer / COOP+COEP requirement (re-enabling threads would need
+  `-sPROXY_TO_PTHREAD` + OffscreenCanvas)
+- **PWA**: Service Worker gives offline play and instant startup after the
+  first visit. Assets are served under content-hashed file names, so updates
+  never fight the cache (`_headers` marks them immutable)
+- **Background-tab support**: while the tab is hidden the simulation keeps
+  running driven by a Web Worker (prevents disconnects during multiplayer;
+  rendering is skipped)
 
-## ビルド / Build
+## Build
 
-必要なもの: [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html), CMake 3.20+, Node.js
+Prerequisites: [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html), CMake 3.20+, Node.js
 
 ```sh
 git clone --recursive git@github.com:tomingtoming/ysflight-web.git
 cd ysflight-web
-scripts/build.sh           # パッチ適用 → emcmake configure → build → dist/ に出力
-node scripts/serve.mjs     # dist/ をローカル配信 (素の静的配信。COOP/COEP 不要)
+scripts/build.sh           # emcmake configure -> build -> staged into dist/
+node scripts/serve.mjs     # serve dist/ locally (plain static serving; no COOP/COEP needed)
 ```
 
-`dist/` の中身 (`index.html` + `ysflight32_gl2.{js,wasm,data}`) を
-そのまま静的ホスティングに置けば動きます。
+Drop the contents of `dist/` (`index.html` + `ysflight32_gl2.{js,wasm,data}`)
+onto any static hosting and it runs. Nothing in the runtime depends on this
+project's infrastructure, so anyone can re-host their own instance.
 
-### スモークテスト / Smoke test
+### Smoke test
 
 ```sh
-scripts/smoke-test.sh            # default(ソフトウェアGPU) + strict(実GPU/Mesa GL)
+scripts/smoke-test.sh            # default (software GPU) + strict (real GPU / Mesa GL)
 ```
 
-`strict` はシステムの Chrome を **headed** で起動し、ネイティブ Mesa GL
-(`--use-angle=gl`) 上でブートを検証します。実ドライバは mediump を fp16 に
-降格するため、ソフトウェアラスタライザでは検出できないシェーダの
-精度不一致リンクエラーを push 前に捕捉できます (要ディスプレイ +
-google-chrome)。CI では `default` のみ実行されます。
-**レンダラ周りを変更したら push 前に必ず実行してください。**
+`strict` launches the system Chrome **headed** on native Mesa GL
+(`--use-angle=gl`) and verifies boot. Real drivers lower mediump to fp16, so
+this catches shader precision-mismatch link errors that software rasterizers
+silently tolerate (needs a display + google-chrome). CI runs `default` only.
+**Always run this before pushing renderer changes.**
 
-## デプロイ / Deploy
+## Deploy
 
-本番 URL は **https://ysflight-web.toming.app**（Cloudflare Workers のカスタムドメイン）。
+The production URL is **https://ysflight-web.toming.app** (a Cloudflare
+Workers custom domain).
 
-本番は **Cloudflare Workers**（設定は `wrangler.jsonc`）。Worker 本体は
-`worker/signal.js`（`/signal` の WebRTC シグナリング＝Durable Object `SignalHub`）で、
-ゲーム本体（`dist/`）は同じ Worker から **Workers Static Assets**
-（`assets.directory: ./dist`）として配信されます。**Pages ではありません**
-（旧 Pages 運用からの移行済み）。
+Production runs on **Cloudflare Workers** (configured in `wrangler.jsonc`).
+The Worker itself is `worker/signal.js` (WebRTC signaling at `/signal`, a
+Durable Object `SignalHub`), and the game (`dist/`) is served from the same
+Worker as **Workers Static Assets** (`assets.directory: ./dist`). It is
+**not Pages** (migrated off the old Pages setup).
 
-**Workers Builds**（Worker の Git integration）で repository を接続し、Build
-settings を以下に：
+Connect the repository with **Workers Builds** (the Worker's Git integration)
+and set the build settings to:
 
 - Build command: `scripts/build.sh`
-- Deploy command（production ブランチ）: `npx wrangler deploy`
-- Deploy command（非production ブランチ＝プレビュー）: `npx wrangler versions upload`
+- Deploy command (production branch): `npx wrangler deploy`
+- Deploy command (non-production branches = previews): `npx wrangler versions upload`
 
-Cloudflare の build image には Emscripten が入っていないため、`scripts/build.sh`
-は `emcmake` が見つからない場合に `emsdk` を `$HOME/opt/emsdk` へ自動インストール
-します（CMake も同様に自前取得）。固定したい場合は環境変数 `EMSDK_VERSION`
-（既定: `6.0.0`）。YSFLIGHT を wasm にフルコンパイルするのでビルドは数分かかります。
+Cloudflare's build image does not ship Emscripten, so `scripts/build.sh`
+auto-installs `emsdk` into `$HOME/opt/emsdk` when `emcmake` is missing (CMake
+is fetched the same way). Pin with the `EMSDK_VERSION` environment variable
+(default: `6.0.0`). The build fully compiles YSFLIGHT to wasm, so it takes a
+few minutes.
 
-> **CI とデプロイは別系統**。GitHub Actions（[`.github/workflows/build.yml`](.github/workflows/build.yml)）は
-> push / PR で `scripts/build.sh` → unit + シグナリング/ブラウザ smoke を回す
-> **ビルド＋テスト専用**で、デプロイはしません。本番への反映は上記 **Cloudflare Workers
-> Builds が main への push を契機に自動実行**します（GitHub 側に `wrangler deploy`
-> ステップは無い）。手動デプロイは接続先アカウントの認証で `npx wrangler deploy`。
-> `wrangler deployments list` に出る Author は接続先 Cloudflare アカウントの
-> メールアドレス（リポジトリのコミッタ `tomingtoming` と表記が違って見えるが
-> 誤設定ではない）、Source は `Unknown (deployment)` と表示されます。
+> **CI and deploy are separate pipelines.** GitHub Actions
+> ([`.github/workflows/build.yml`](.github/workflows/build.yml)) runs
+> `scripts/build.sh` → unit + signaling/browser smokes on push / PR — it
+> builds and tests but never deploys. Production updates happen via the
+> **Cloudflare Workers Builds hook on pushes to main** (there is no
+> `wrangler deploy` step on the GitHub side). Manual deploys:
+> `npx wrangler deploy` with the connected account's credentials. In
+> `wrangler deployments list` the Author is the connected Cloudflare
+> account's email address (it differs from the repository committer
+> `tomingtoming`; that is not a misconfiguration) and the Source shows as
+> `Unknown (deployment)`.
 
-### PR プレビュー URL
+### PR preview URLs
 
-非production ブランチ（PR）のビルドは `wrangler versions upload` で**プレビュー版**
-を作り、各バージョンに次の形のプレビュー URL が割り当たります：
+Builds of non-production branches (PRs) create **preview versions** via
+`wrangler versions upload`, and each version gets a preview URL of the form:
 
 ```
 https://<version-prefix>-ysflight-web.<subdomain>.workers.dev
 ```
 
-（`<version-prefix>` はバージョン ID の先頭 8 桁。**前提**＝Worker の Preview URLs が
-有効。dashboard → Workers & Pages → `ysflight-web` → Settings → Domains & Routes
-（UI 版により Triggers 配下）→ **Preview URLs**、`*.workers.dev` サブドメインも有効。）
+(`<version-prefix>` is the first 8 characters of the version ID.
+**Precondition**: the Worker's Preview URLs are enabled — dashboard →
+Workers & Pages → `ysflight-web` → Settings → Domains & Routes (under
+Triggers in some UI versions) → **Preview URLs**, with the `*.workers.dev`
+subdomain also enabled.)
 
-**URL の探し方**——**Workers Builds は Pages と違い、このURLを PR にコメントしません**。
-次のどちらかで確認します：
+**Finding the URL** — unlike Pages, **Workers Builds does not comment the
+URL on the PR**. Check either:
 
-- ビルドログ末尾の `Version Preview URL:` 行（Workers Builds のチェックのリンク先）
-- dashboard の **デプロイ（Deployments）タブ** → 各バージョンのプレビュー URL リンク
+- the `Version Preview URL:` line at the end of the build log (linked from
+  the Workers Builds check)
+- the dashboard's **Deployments tab** → the preview URL link on each version
 
-GitHub の PR に付くのは pass/fail の「Workers Builds」チェック1個だけです。
+The only thing attached to the GitHub PR is the single pass/fail
+"Workers Builds" check.
 
-> 注意: プレビュー URL が割り当たるのは **Preview URLs を有効化した後**にアップした
-> バージョンだけ。有効化前のビルドのプレビュー URL は 404 になります（その場合は再ビルド
-> すれば付きます）。
+> Note: preview URLs are only assigned to versions uploaded **after Preview
+> URLs were enabled**. Preview URLs of earlier builds 404 (rebuild and it
+> gets one).
 
-### デプロイ状況の確認 / Verifying a live deploy
+### Verifying a live deploy
 
-main への push 後、Workers Builds が wasm フルビルドを回すので反映まで数分かかります。
-実際に本番へ載ったかは次で確認します（`deployments list` の Message は常に `-`＝git SHA は
-記録されないので、**どのコミットが載っているかは中身を突き合わせる**のが確実）：
+After a push to main, Workers Builds runs the full wasm build, so it takes a
+few minutes to land. To confirm what is actually live (the Message column of
+`deployments list` is always `-` — the git SHA is not recorded — so
+**comparing content is the reliable way** to know which commit is live):
 
-- `npx wrangler deployments status` … アクティブな version とその作成時刻
-- `npx wrangler deployments list` … 履歴（Author = 接続アカウント、Message `-`）
-- **静的アセット**: `curl -s https://ysflight-web.toming.app/pack-net.js` を取得し、手元の
-  `web/pack-net.js`（`dist/<file>` はそのコピー）と `diff` ＝バイト一致なら反映済み
-- **Worker（`/signal`）**: アセットと同じ `wrangler deploy` で**原子的に同時更新**される
-  （1 コミット = `worker/signal.js` ＋ `dist/` を一括）。挙動で確かめるなら
-  `wss://ysflight-web.toming.app/signal` に `{t:'host',room,manifest}` を送って `host-ok`
-  応答を見る（ルームは in-memory・切断で消える）
+- `npx wrangler deployments status` … the active version and its creation time
+- `npx wrangler deployments list` … history (Author = connected account, Message `-`)
+- **Static assets**: fetch `curl -s https://ysflight-web.toming.app/pack-net.js`
+  and `diff` it against your local `web/pack-net.js` (`dist/<file>` is a copy
+  of it) — byte-identical means deployed
+- **The Worker (`/signal`)**: updated **atomically together with the assets**
+  by the same `wrangler deploy` (one commit = `worker/signal.js` + `dist/` in
+  one shot). To probe behavior, send `{t:'host',room,manifest}` to
+  `wss://ysflight-web.toming.app/signal` and look for the `host-ok` response
+  (rooms are in-memory and vanish on disconnect)
 
-GitHub Pages は repository settings の Pages で無効化してください。
+Disable GitHub Pages in the repository settings.
 
-## 操作 / Controls
+## Controls
 
-本家YSFLIGHTと同じキーボード操作です (矢印キー: 操縦桿, Q/A: スロットル,
-Z/X: ラダー, G: ギア, Space: 機銃, etc.)。メニューから Simulation → Create Flight で
-フライト開始。本家同様、ジョイスティック未接続時は**マウスが操縦桿**として機能します
-(画面中心がニュートラル)。
+Same keyboard controls as desktop YSFLIGHT (arrow keys: stick, Q/A:
+throttle, Z/X: rudder, G: gear, Space: guns, etc.). Start a flight from the
+menu via Simulation → Create Flight. As on desktop, with no joystick
+connected **the mouse acts as the stick** (screen center is neutral).
 
-**ゲームパッド/ジョイスティック対応** (Gamepad API): 接続して何かボタンを押すと
-ブラウザがパッドを公開し、ゲームから利用可能になります (Gamepad API の仕様)。
-軸・ボタンの割り当ては Option → Config Key/Mouse/Joystick Assignment で変更可能。
-standardマッピングのD-padはPOVハットとして扱われます。
+**Gamepad / joystick support** (Gamepad API): connect a pad and press any
+button — the browser then exposes it and the game can use it (that is how
+the Gamepad API works). Axis/button assignments can be changed under
+Option → Config Key/Mouse/Joystick Assignment. The standard-mapping D-pad is
+treated as a POV hat.
 
-## マルチプレイ / Multiplayer
+## Multiplayer
 
-ブラウザ同士の **WebRTC P2P** で対戦します。1人が「サーバ開始」でホストになり
-(画面右上に `Room: 12345678` の 8 桁数字を表示)、他の参加者は招待リンク
-(`?join=12345678`) を開いて名前を入力すれば自動参加、またはネットワーク→
-クライアントの「Room ID」欄に 8 桁を入力して参加。ゲームデータは WebRTC
-DataChannel の P2P で直結し、NAT 越えは Cloudflare Realtime TURN
-(STUN + 直結不可ペア向けの TURN リレー) を Worker の `/turn` から配信します。
-ホストのブラウザがサーバ権威です (web 版はチャット・ポート設定なし、P2P/Room ID のみ)。
+Browser-to-browser **WebRTC P2P**. One player clicks "Start server" to host
+(an 8-digit `Room: 12345678` code appears at the top right of the screen);
+others either open the invite link (`?join=12345678`) and enter a name to
+join automatically, or type the 8 digits into the "Room ID" field under
+Network → Client. Game data flows directly over a P2P WebRTC DataChannel;
+NAT traversal uses Cloudflare Realtime TURN (STUN + a TURN relay for pairs
+that cannot connect directly), with credentials served by the Worker's
+`/turn`. The host's browser is the server authority (the web build has no
+chat or port settings — P2P/Room ID only).
 
-シグナリング (SDP/ICE 交換のみ。ゲームデータは流れない) は、サイト自身の
-`/signal` エンドポイント = **Cloudflare Worker + Durable Object**
-(`worker/signal.js`) が担います。配信元と同一オリジンの `wss://` なので、別途
-シグナリングサーバを立てる必要も、TLS 証明書や mixed-content の調整も不要です。
-`?signal=wss://...` で上書き、`?room=` でルームコード固定、`?join=` で参加先指定も可。
+Signaling (SDP/ICE exchange only; no game data passes through it) is handled
+by the site's own `/signal` endpoint — a **Cloudflare Worker + Durable
+Object** (`worker/signal.js`). Because it is `wss://` on the same origin as
+the site, there is no separate signaling server to run and no TLS
+certificate or mixed-content juggling. Override with `?signal=wss://...`,
+pin a room code with `?room=`, or specify a join target with `?join=`.
 
-詳細は [docs/multiplayer.md](docs/multiplayer.md)。
+Details: [docs/multiplayer.md](docs/multiplayer.md) (Japanese).
 
-> **NAT 越え / 接続性**: 多くの家庭回線同士なら STUN だけで直結します。両者が
-> ともにモバイル / CGNAT / 対称NAT (例: Starlink の IPv4) で直結できない場合は
-> **Cloudflare Realtime TURN** リレー経由で接続します (Worker の `/turn` が短命
-> クレデンシャルを配信。未設定時は STUN 一本にフォールバック)。メニューの接続バッジで
-> 自分側が直結可能かを事前確認できます。両者が IPv6 なら直結できることが多いです。
-> 設定・コストは [docs/multiplayer.md](docs/multiplayer.md) を参照。
+> **NAT traversal / connectivity**: most residential connections connect
+> directly with STUN alone. When both sides are mobile / CGNAT / symmetric
+> NAT (e.g. Starlink IPv4) and cannot connect directly, the connection goes
+> through the **Cloudflare Realtime TURN** relay (the Worker's `/turn` issues
+> short-lived credentials; without configuration it falls back to plain
+> STUN). The connectivity badge in the menu shows in advance whether your
+> side can connect directly. Two IPv6 peers can usually connect directly.
+> Setup and cost: [docs/multiplayer.md](docs/multiplayer.md).
 
-## 既知の制限 / Known limitations
+## Known limitations
 
-- サウンドは OpenAL (Web Audio) 実装済み。ATC音声(ボイス)は未実装
-- 日本語UI対応済み (Canvas 2D によるシステムフォント描画)。
-  言語はブラウザのロケールから自動選択、`?lang=ja` / `?lang=en` で強制可能
-- クリップボード・IME 未対応
-- シミュレーションは単一スレッド実行 (Web のメインスレッドをブロックしないため)。
-  ネイティブのような並列シミュレーションは行わない
+- Sound is implemented via OpenAL (Web Audio). ATC voice is not implemented
+- Japanese UI is supported (system-font rendering via Canvas 2D). The
+  language is auto-selected from the browser locale; force with `?lang=ja` /
+  `?lang=en`
+- No clipboard / IME support
+- The simulation runs single-threaded (to avoid blocking the web main
+  thread). No native-style parallel simulation
 
 ## License
 
-- 上流 YSFLIGHT のソースコードとランタイムデータ: 3-clause BSD (`upstream/YSFLIGHT/LICENSE`)
-- 上流 public ライブラリ群: 各ソースファイルヘッダに記載の 2-clause BSD
-- 本リポジトリの追加コード (`src/port`, `web`, `server`, `scripts`, `patches`):
-  同じく 2-clause BSD ライセンス
+- Upstream YSFLIGHT source code and runtime data: 3-clause BSD
+  (`upstream/YSFLIGHT/LICENSE`)
+- Upstream `public` libraries: 2-clause BSD as stated in each source file
+  header
+- Code added by this repository (`src/port`, `web`, `worker`, `scripts`,
+  `test`): 2-clause BSD as well
 
 YS FLIGHT SIMULATOR is (c) Soji Yamakawa (CaptainYS, http://www.ysflight.com).
 This is an unofficial community port.
