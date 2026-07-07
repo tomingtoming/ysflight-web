@@ -19,3 +19,11 @@ A synthetic community-style aircraft add-on pack used by the unit tests
   carries `__MACOSX/` AppleDouble entries and `.DS_Store` files.
 - One aircraft has 3 `.lst` tokens (dat/dnm/coll), the other 4 (+cockpit), so
   list rewriting is exercised for both shapes.
+
+## scnpack.zip
+
+Scenery-only pack for the multiplayer field-sync smoke
+(`scripts/smoke-mp-scenery.sh`): the stock `ocean` field from the engine's
+runtime data (3-clause BSD, `upstream/YSFLIGHT/runtime/scenery/ocean.{fld,stp}`)
+repackaged under the test-unique ident `YSFW_TEST_OCEAN` so assertions can
+never match a stock field.

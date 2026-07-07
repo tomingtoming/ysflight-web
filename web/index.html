@@ -839,6 +839,12 @@
         var code = (R && R.host && R.host.room) || Module.ysfwRoomCode;
         if (!code) return;
         var url = location.origin + '/?join=' + code;
+        // A host who opted into pack sync (?packsync=1 on their own URL) hands
+        // the same opt-in to joiners, so invited players receive the host's
+        // add-on packs (fields included) before boot instead of joining a
+        // server whose field they don't have.  Without the host's explicit
+        // opt-in the invite stays vanilla (packs are never auto-distributed).
+        if (/[?&]packsync=1\b/.test(location.search)) url += '&packsync=1';
         var done = function () {
           chip._copied = true;
           chip.textContent = TXT.chipCopied;
