@@ -180,8 +180,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 		//   foveation Quest fixed foveation 0..1 (1 = strongest periphery cut)
 		//   frameRate preferred XR refresh rate (72 needs 13.9ms, 90 needs 11.1ms)
 		//   antialias MSAA on the XR framebuffer (default off; expensive on mobile)
+		// Default the XR framebuffer to 0.7x per axis (~half the pixels).  A
+		// standalone Quest's native XR framebuffer is ~2k x 2.2k per eye; at
+		// full scale the single-threaded engine drawing that twice per frame
+		// blew the headset browser's per-tab memory budget (renderer killed =
+		// white page + crash mark, reproducing on every subsequent flight
+		// start).  0.7 keeps it well under the ceiling and roughly halves
+		// fill-rate too.  ?vrscale=1.0 opts back into full resolution.
 		var opts=Module.ysfwVrOptions||{};
-		var scale=(0<opts.scale ? opts.scale : 1.0);
+		var scale=(0<opts.scale ? opts.scale : 0.7);
 		var foveation=(undefined!==opts.foveation ? opts.foveation : 1.0);
 		var frameRate=(0<opts.frameRate ? opts.frameRate : 72);
 		var antialias=(undefined!==opts.antialias ? !!opts.antialias : false);
