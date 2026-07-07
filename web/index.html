@@ -1110,6 +1110,19 @@
   // Clicking during a session (desktop VR, where the 2D page stays visible)
   // exits it.  order:1 next to the help button; fullscreen keeps the corner.
   (function () {
+    // VR perf knobs for on-headset A/B testing (read by the WebXR glue at
+    // session start): ?vrscale=0.5 halves the XR framebuffer per axis,
+    // ?vrfov=0..1 sets Quest fixed foveation, ?vrfps=72|90 the target refresh
+    // rate, ?vraa=1 re-enables MSAA.
+    (function () {
+      var q = new URLSearchParams(location.search);
+      var o = {};
+      if (q.get('vrscale')) o.scale = parseFloat(q.get('vrscale'));
+      if (q.get('vrfov') !== null && q.get('vrfov') !== '') o.foveation = parseFloat(q.get('vrfov'));
+      if (q.get('vrfps')) o.frameRate = parseFloat(q.get('vrfps'));
+      if (q.get('vraa')) o.antialias = q.get('vraa') === '1';
+      Module.ysfwVrOptions = o;
+    })();
     var vrBtn = document.createElement('button');
     vrBtn.id = 'ysfw-vr-btn';
     vrBtn.textContent = TXT.help.vrEnter;
@@ -1131,7 +1144,20 @@
       });
     };
     Module.onVrStart = function () { inVr = true; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrExit; };
-    Module.onVrEnd = function () { inVr = false; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrEnter; };
+    Module.onVrEnd = function () {
+      inVr = false; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrEnter;
+      // Post-session fps summary: the practical readout for headset A/B runs,
+      // where the browser console is out of reach.
+      var st = Module.ysfwVr && Module.ysfwVr.stats;
+      if (st && st.avgFps) {
+        var n = document.createElement('div');
+        n.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps (avg, ' + st.seconds.toFixed(0) + 's)';
+        n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(13,20,29,.92);color:#cfe0f5;border:1px solid #2a3647;border-radius:8px;padding:8px 14px;font-size:13px';
+        n.onclick = function () { if (n.parentNode) n.remove(); };
+        document.body.appendChild(n);
+        setTimeout(function () { if (n.parentNode) n.remove(); }, 12000);
+      }
+    };
     ysfwBRStack().appendChild(vrBtn);
     setInterval(function () {
       var vr = Module.ysfwVr;

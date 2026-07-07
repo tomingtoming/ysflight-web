@@ -118,6 +118,27 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		session.requestAnimationFrame(onXRFrame);
 
+		// Frame-rate statistics: the primary instrument for perf work on a
+		// headset, where devtools are awkward.  Rolling 2s console log plus a
+		// session summary (vr.stats, shown by the shell after exit).
+		var st=vr.stats;
+		if(0===st.frames)
+		{
+			st.t0=t;
+			st.tWindow=t;
+			st.framesWindow=0;
+		}
+		++st.frames;
+		++st.framesWindow;
+		st.t1=t;
+		if(2000<=t-st.tWindow)
+		{
+			st.fps=1000*st.framesWindow/(t-st.tWindow);
+			console.log('[vr] '+st.fps.toFixed(1)+' fps');
+			st.tWindow=t;
+			st.framesWindow=0;
+		}
+
 		// The engine may be suspended mid-frame (ASYNCIFY lazy-pack fetch);
 		// re-entering would corrupt the unwound stack.  Skip the frame.
 		if(typeof Asyncify!=='undefined' && 0!==Asyncify.state)
@@ -153,13 +174,51 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			return Promise.reject(new Error('VR not available'));
 		}
+		// Perf knobs, overridable from the shell (Module.ysfwVrOptions, wired
+		// to ?vrscale= etc. in web/index.html):
+		//   scale     XRWebGLLayer framebufferScaleFactor (fill-rate lever)
+		//   foveation Quest fixed foveation 0..1 (1 = strongest periphery cut)
+		//   frameRate preferred XR refresh rate (72 needs 13.9ms, 90 needs 11.1ms)
+		//   antialias MSAA on the XR framebuffer (default off; expensive on mobile)
+		var opts=Module.ysfwVrOptions||{};
+		var scale=(0<opts.scale ? opts.scale : 1.0);
+		var foveation=(undefined!==opts.foveation ? opts.foveation : 1.0);
+		var frameRate=(0<opts.frameRate ? opts.frameRate : 72);
+		var antialias=(undefined!==opts.antialias ? !!opts.antialias : false);
+		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0};
 		return navigator.xr.requestSession('immersive-vr',{requiredFeatures:['local']}).then(function(session)
 		{
 			vr.session=session;
 			return GLctx.makeXRCompatible().then(function()
 			{
-				var layer=new XRWebGLLayer(session,GLctx);
+				var layer=new XRWebGLLayer(session,GLctx,{framebufferScaleFactor:scale,antialias:antialias});
+				try
+				{
+					if('fixedFoveation' in layer)
+					{
+						layer.fixedFoveation=foveation;
+					}
+				}catch(e){}
 				session.updateRenderState({baseLayer:layer,depthNear:0.5,depthFar:40000.0});
+				try
+				{
+					// Prefer the highest supported rate not above the request.
+					if(session.frameRates && session.updateTargetFrameRate)
+					{
+						var best=0;
+						session.frameRates.forEach(function(r){ if(r<=frameRate && best<r){ best=r; } });
+						if(0===best)
+						{
+							session.frameRates.forEach(function(r){ if(0===best || r<best){ best=r; } });
+						}
+						if(0<best)
+						{
+							session.updateTargetFrameRate(best).catch(function(){});
+						}
+					}
+				}catch(e){}
+				console.log('[vr] layer '+layer.framebufferWidth+'x'+layer.framebufferHeight+
+				            ' scale='+scale+' foveation='+foveation+' aa='+antialias);
 				return session.requestReferenceSpace('local');
 			}).then(function(refSpace)
 			{
@@ -182,6 +241,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 				session.addEventListener('end',function()
 				{
+					var st=vr.stats;
+					if(st && 100<st.t1-st.t0)
+					{
+						st.seconds=(st.t1-st.t0)/1000;
+						st.avgFps=(st.frames-1)/st.seconds;
+						console.log('[vr] session avg '+st.avgFps.toFixed(1)+' fps over '+st.seconds.toFixed(1)+'s');
+					}
 					vr.session=null;
 					vr.refSpace=null;
 					vr.xrFb=null;

@@ -97,6 +97,16 @@ static bool UserWantToCloseProgram(void *)
 	return false;
 }
 
+// CPU cost per tick (Interval+Draw, ms), exponential moving average.
+// Read from JS via YsfwGetTickMs() -- the instrument for measuring the
+// engine's main-thread cost independent of vsync/rAF pacing.
+static double tickMsAvg=0.0;
+
+extern "C" double EMSCRIPTEN_KEEPALIVE YsfwGetTickMs(void)
+{
+	return tickMsAvg;
+}
+
 static void MainLoopTick(void)
 {
 	auto appPtr=FsLazyWindowApplicationBase::GetApplication();
@@ -108,6 +118,8 @@ static void MainLoopTick(void)
 		return;
 	}
 
+	const double t0=emscripten_get_now();
+
 	FsPollDevice();
 
 	busy=true;
@@ -118,6 +130,9 @@ static void MainLoopTick(void)
 	{
 		appPtr->Draw();
 	}
+
+	const double tickMs=emscripten_get_now()-t0;
+	tickMsAvg=(0.0==tickMsAvg ? tickMs : tickMsAvg*0.95+tickMs*0.05);
 }
 
 // ----------------------------------------------------------------------------
