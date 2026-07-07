@@ -63,3 +63,11 @@ jobs:
       - name: MP pack transfer smoke (PR only)
         if: github.event_name == 'pull_request'
         run: scripts/smoke-mp-pack.sh
+
+      # MP scenery-pack sync (PR only): a joiner with the pack-sync opt-in
+      # (?join&packsync=1) receives the host's scenery pack pre-boot and can fly
+      # ON the pack's field -- the dead-client bug when a host picks an add-on
+      # field.  Guards the sync path end-to-end for the FIELD category.
+      - name: MP scenery-pack sync smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: scripts/smoke-mp-scenery.sh

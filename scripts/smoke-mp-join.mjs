@@ -81,7 +81,10 @@ console.log('host advertising pack ' + hostId + ' on the pack-room for ' + ROOM)
 
 // ---- JOINER: open the invite link; the pre-boot gate must sync the pack -------
 const join = await newPage();
-await join.p.goto(url('join=' + ROOM + '&name=Tester'));
+// packsync=1: the pre-boot pack sync is opt-in since the v1 descope
+// (index.html MP_PACK_SYNC); without it the joiner boots vanilla and this
+// smoke's whole subject never runs.
+await join.p.goto(url('join=' + ROOM + '&name=Tester&packsync=1'));
 await waitForLog(join, /\[pack-net join\] pre-boot sync:/, 90000, 'join'); // sync ran + persisted
 const ids = await listIds(join);
 if (!ids || !ids.includes(hostId)) die('joiner did not install the host pack via ?join pre-boot sync: ' + JSON.stringify(ids), join.logs);

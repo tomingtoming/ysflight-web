@@ -126,7 +126,13 @@ export function prioritizeMissing(missing) {
 // requested id (integrity by content-addressing — a corrupted transfer yields a
 // different id, or fails to unzip, and is rejected).
 
-const PACK_CHUNK = 60 * 1024; // <= the safe single-message size for a DataChannel
+// 16KiB, NOT 60KiB: RFC 8831 (WebRTC data channels) sec 6.6 caps interoperable
+// message size at 16KiB -- larger messages can stall or kill the channel on a
+// real network path (v1 field reports: DataChannel opened, then the transfer
+// hung 30-90s; docs/addon-packs.md names the 60KiB chunk as the prime suspect).
+// Loopback tolerated 60KiB, which is why the smokes stayed green while real
+// joins stalled.  Keep chunks strictly within the interop limit.
+const PACK_CHUNK = 16 * 1024;
 const PACK_BUFFER_HIGH = 8 * 1024 * 1024; // pause sending above this bufferedAmount
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 const enc = new TextEncoder();
