@@ -192,8 +192,23 @@ const META_EXT = /\.(lst|dat|stp)$/i;
 
 export async function materialize(record, fsAdapter, { withLists = record.enabled !== false, metaOnly = false } = {}) {
   assertOPFS();
+  // Aircraft .dat files covered by a generated .lst.idx sidecar are NOT needed
+  // during the boot scan (the engine registers those templates from the sidecar)
+  // -- skip them in metaOnly and let the openat hook materialize them on demand
+  // at flight time, like any payload.  Packs without a sidecar (imported before
+  // this feature, or with non-ASCII identities) keep the old bulk-copy behavior.
+  const idxCovered = new Set();
+  const idPrefix = 'packs/' + record.id + '/';
+  for (const g of record.generated || []) {
+    if (!/\.lst\.idx$/i.test(g.file)) continue;
+    for (const ln of g.text.split('\n')) {
+      const tab = ln.indexOf('\t');
+      if (tab > 0 && ln.startsWith(idPrefix)) idxCovered.add(ln.slice(idPrefix.length, tab));
+    }
+  }
   for (const f of record.files) {
     if (metaOnly && !META_EXT.test(f.path)) continue; // heavy payload deferred to materializeFile
+    if (metaOnly && /\.dat$/i.test(f.path) && idxCovered.has(f.path)) continue; // sidecar-covered
     const dest = 'packs/' + record.id + '/' + f.path;
     await fsAdapter.mkdirp(parentDir(dest));
     await fsAdapter.writeFile(dest, await getBlob(f.sha256));

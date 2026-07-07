@@ -85,7 +85,11 @@ function listFilesForCategory(id, categoryKey) {
   const c = CATEGORIES.find((x) => x.key === categoryKey);
   if (!c) return null;
   const base = `${c.dir}/${c.prefix}${id}.lst`;
-  return { on: base, off: base + '.off' };
+  // idx: the importer-generated template-identity sidecar (aircraft only; see
+  // parseDatIdentity).  setEnabled never renames it -- the engine only reads
+  // '<lst>.idx', so an .off list leaves the sidecar unreachable -- but
+  // uninstall must delete it.
+  return { on: base, off: base + '.off', idx: base + '.idx' };
 }
 
 const listRe = (c) => new RegExp(`^${c.dir}/${c.prefix}[^/]*\\.lst$`, 'i');
@@ -148,6 +152,38 @@ function buildResolver(files) {
 }
 
 // aircraft / ground: every token is a file path.
+// Extract IDENTIFY/CATEGORY from an aircraft .dat so the engine can register the
+// template at boot WITHOUT opening the .dat (see the engine-side sidecar loader in
+// fsworld.cpp LoadAirplaneTemplateList).  ASCII-only by design: a Shift-JIS name
+// must keep taking the engine's raw-.dat path so the registered id bytes stay
+// byte-identical with a desktop client in multiplayer.  Returns null when either
+// token is missing or non-ASCII -- the engine then falls back to reading the .dat.
+function parseDatIdentity(bytes) {
+  const n = Math.min(bytes.length, 65536); // IDENTIFY/CATEGORY sit in the head
+  let identify = null, category = null;
+  let lineStart = 0;
+  for (let i = 0; i <= n && (!identify || !category); i++) {
+    if (i !== n && bytes[i] !== 10) continue;
+    let line = '', ascii = true;
+    for (let j = lineStart; j < i; j++) {
+      const b = bytes[j];
+      if (b === 13) continue;
+      if (b < 32 || b > 126) { ascii = false; break; }
+      line += String.fromCharCode(b);
+    }
+    lineStart = i + 1;
+    if (!ascii) continue;
+    if (line.startsWith('IDENTIFY')) {
+      const t = tokenize(line);
+      if (t.length >= 2 && t[1].value && !t[1].value.includes('\t')) identify = t[1].value;
+    } else if (line.startsWith('CATEGORY')) {
+      const t = tokenize(line);
+      if (t.length >= 2 && t[1].value && !t[1].value.includes('\t')) category = t[1].value;
+    }
+  }
+  return identify && category ? { identify, category } : null;
+}
+
 function rewriteFilesLine(line, resolve, prefixDir) {
   const toks = tokenize(line);
   if (toks.length === 0) return null;
@@ -240,13 +276,14 @@ function deriveName(lists) {
 
 // Turn the located lists into the regenerated, path-rewritten lists we will
 // drop into the scanned dirs.  Returns [{category, file, text, entries}].
-function buildGeneratedLists(lists, resolve, id) {
+function buildGeneratedLists(lists, resolve, id, datIdentity) {
   const prefixDir = `packs/${id}`;
   const generated = [];
   for (const c of CATEGORIES) {
     const catLists = lists.filter((l) => l.category.key === c.key);
     if (catLists.length === 0) continue;
     const outLines = [];
+    const idxLines = []; // aircraft template-identity sidecar (datPath\tIDENTIFY\tCATEGORY)
     for (const l of catLists) {
       for (const rawLine of l.text.split(/\r?\n/)) {
         const line = rawLine.trim();
@@ -257,6 +294,12 @@ function buildGeneratedLists(lists, resolve, id) {
         // YSFLIGHT requires >= 3 tokens per usable entry; skip anything shorter.
         if (!rw || rw.tokens < 3) continue;
         outLines.push(rw.line);
+        if (c.prefix === 'air' && datIdentity) {
+          const first = tokenize(line)[0];
+          const actual = first ? resolve(first.value) : null;
+          const idn = actual ? datIdentity.get(actual) : null;
+          if (idn) idxLines.push(`${prefixDir}/${actual}\t${idn.identify}\t${idn.category}`);
+        }
       }
     }
     if (outLines.length === 0) continue;
@@ -266,6 +309,18 @@ function buildGeneratedLists(lists, resolve, id) {
       text: outLines.join('\n') + '\n',
       entries: outLines.length,
     });
+    if (idxLines.length > 0) {
+      // Written/updated by the same paths that write the .lst (install,
+      // materialize); excluded from the content-hash id like every generated
+      // file, so a pack imported before/after this feature keeps the same id.
+      generated.push({
+        category: c.key,
+        file: `${c.dir}/${c.prefix}${id}.lst.idx`,
+        text: idxLines.join('\n') + '\n',
+        entries: idxLines.length,
+        idx: true,
+      });
+    }
   }
   return generated;
 }
@@ -389,8 +444,16 @@ export async function analyzePack(zipBytes, opts) {
   const id = idDigest.slice(0, 16);
 
   const resolve = buildResolver(files);
-  const generated = buildGeneratedLists(lists, resolve, id);
-  if (generated.length === 0) throw new Error('pack lists contained no usable entries');
+  const datIdentity = new Map();
+  for (const f of files) {
+    if (/\.dat$/i.test(f.path)) {
+      const idn = parseDatIdentity(f.bytes);
+      if (idn) datIdentity.set(f.path, idn);
+    }
+  }
+  const generated = buildGeneratedLists(lists, resolve, id, datIdentity);
+  const scanned = generated.filter((g) => !g.idx); // engine-globbed .lst only
+  if (scanned.length === 0) throw new Error('pack lists contained no usable entries');
 
   const packName = name || deriveName(lists);
   const manifest = {
@@ -399,10 +462,10 @@ export async function analyzePack(zipBytes, opts) {
     name: packName,
     source,
     installedAt: now,
-    categories: generated.map((g) => g.category),
+    categories: scanned.map((g) => g.category),
     bytes: total,
     files: hashed,
-    lists: generated.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
+    lists: scanned.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
   };
   // Remember where a pack came from so a HOST can re-advertise that URL and let
   // joiners self-fetch it (Option B) instead of pulling the bytes P2P.  Kept out
@@ -435,6 +498,7 @@ export async function analyzePackStreaming(zipBytes, opts) {
 
   const hashed = [];          // {path, size, sha256} for every payload file
   const listEntries = [];     // {path, bytes} for the .lst files only (kept for list generation)
+  const datIdentityRaw = new Map(); // pre-reroot path -> {identify, category}
   let total = 0;
   await unzipEachAsync(buf, async (rawPath, bytes) => {
     if (isCruft(rawPath)) return;
@@ -448,6 +512,12 @@ export async function analyzePackStreaming(zipBytes, opts) {
     await putBlob(sha, bytes);                 // persist content-addressed; bytes freed after this entry
     hashed.push({ path, size: bytes.length, sha256: sha });
     if (listFnameRe.test(baseOf(path))) listEntries.push({ path, bytes }); // keep any list by filename (pre-reroot)
+    // .dat bytes are freed after this entry, so template identity (for the
+    // aircraft sidecar) must be extracted here, keyed pre-reroot.
+    if (/\.dat$/i.test(path)) {
+      const idn = parseDatIdentity(bytes);
+      if (idn) datIdentityRaw.set(path, idn);
+    }
   });
   if (hashed.length === 0) throw new Error('pack is empty (no files after removing archive cruft)');
 
@@ -465,14 +535,21 @@ export async function analyzePackStreaming(zipBytes, opts) {
   const id = (await sha256(strToBytes(hashed.map((h) => `${h.path}\0${h.sha256}`).join('\n')))).slice(0, 16);
 
   const resolve = buildResolver(hashed); // buildResolver only reads .path
-  const generated = buildGeneratedLists(lists, resolve, id);
-  if (generated.length === 0) throw new Error('pack lists contained no usable entries');
+  const datIdentity = new Map();
+  for (const [rawPath, idn] of datIdentityRaw) {
+    if (!layout.prefix || rawPath.startsWith(layout.prefix)) {
+      datIdentity.set(layout.prefix ? rawPath.slice(layout.prefix.length) : rawPath, idn);
+    }
+  }
+  const generated = buildGeneratedLists(lists, resolve, id, datIdentity);
+  const scanned = generated.filter((g) => !g.idx); // engine-globbed .lst only
+  if (scanned.length === 0) throw new Error('pack lists contained no usable entries');
 
   const packName = name || deriveName(lists);
   const manifest = {
     schema: 1, id, name: packName, source, installedAt: now,
-    categories: generated.map((g) => g.category), bytes: total, files: hashed,
-    lists: generated.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
+    categories: scanned.map((g) => g.category), bytes: total, files: hashed,
+    lists: scanned.map((g) => ({ category: g.category, file: g.file, entries: g.entries })),
   };
   if (sourceUrl) manifest.sourceUrl = sourceUrl;
 
@@ -530,8 +607,8 @@ export async function installPack(zipBytes, opts) {
     name: packName,
     categories: manifest.categories,
     bytes: total,
-    templates: generated.reduce((n, g) => n + g.entries, 0),
-    lists: generated.map((g) => g.file),
+    templates: generated.filter((g) => !g.idx).reduce((n, g) => n + g.entries, 0),
+    lists: generated.filter((g) => !g.idx).map((g) => g.file),
   };
 }
 
@@ -567,7 +644,7 @@ export async function uninstall(id, opts) {
   for (const cat of cats) {
     const lf = listFilesForCategory(id, cat);
     if (!lf) continue;
-    for (const f of [lf.on, lf.off]) if (await fs.exists(f)) await fs.rmrf(f);
+    for (const f of [lf.on, lf.off, lf.idx]) if (await fs.exists(f)) await fs.rmrf(f);
   }
   if (await fs.exists(`packs/${id}`)) await fs.rmrf(`packs/${id}`);
   await saveIndex(fs, index.filter((e) => e.id !== id));
