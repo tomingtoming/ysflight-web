@@ -478,7 +478,7 @@ async function installCore(bytes, name, sourceUrl) {
   }
   return {
     id: a.id, name: a.name, categories: a.categories, bytes: a.total,
-    templates: a.generated.reduce((n, g) => n + g.entries, 0), lists: a.generated.map((g) => g.file),
+    templates: a.generated.filter((g) => !g.idx).reduce((n, g) => n + g.entries, 0), lists: a.generated.filter((g) => !g.idx).map((g) => g.file),
   };
 }
 
