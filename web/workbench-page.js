@@ -44,6 +44,12 @@ const S = ({
     stagedAddTitle: '機体組み立てのファイルに加える',
     stagedEmpty: '（まだありません — 🧊 でモデルを作って保存すると届きます）',
     stagedAdded: (n) => '✓ ' + n + ' を組み立てに追加しました',
+    stagedDl: '⬇', stagedDlTitle: 'ダウンロード（手元に保存）',
+    stagedSend: '＋ ファイルを送る',
+    stagedSendTitle: '手持ちの .srf/.dnm/.dat をモデラと組み立ての共有領域に入れる',
+    stagedSent: (n) => '✓ ' + n + ' 件を送りました（モデラでは次回起動時に File→Open で見えます）',
+    libModeler: '🧊', libModelerTitle: 'この機体のモデルをモデラに送る（次回起動の File→Open で開けます）',
+    libModelerSent: (n) => '✓ モデルを ' + n + ' 件モデラに送りました。🧊 を開くと File→Open で見えます',
     modelerLink: '🧊 3Dモデラを開く（Polygon Crest）',
     modelerLinkTitle: 'YSFLIGHT公式の3Dモデルエディタ（実験版）。保存したモデルはここに届きます',
     slotDat: '飛行特性 (.dat) ※必須',
@@ -116,6 +122,12 @@ const S = ({
     stagedAddTitle: 'Add to the aircraft assembly files',
     stagedEmpty: '(Nothing yet — make and save a model in 🧊 and it lands here)',
     stagedAdded: (n) => '✓ Added ' + n + ' to the assembly',
+    stagedDl: '⬇', stagedDlTitle: 'Download a copy',
+    stagedSend: '＋ Send a file',
+    stagedSendTitle: 'Put your own .srf/.dnm/.dat into the shared modeler/assembly area',
+    stagedSent: (n) => '✓ Sent ' + n + ' file(s) (visible in the modeler’s File→Open on its next start)',
+    libModeler: '🧊', libModelerTitle: 'Send this aircraft’s model to the modeler (File→Open on its next start)',
+    libModelerSent: (n) => '✓ Sent ' + n + ' model file(s) to the modeler — open 🧊 and use File→Open',
     modelerLink: '🧊 Open the 3D modeler (Polygon Crest)',
     modelerLinkTitle: 'YSFLIGHT’s official model editor (experimental). Saved models arrive here',
     slotDat: 'Flight model (.dat) — required',
@@ -383,6 +395,19 @@ function creationsCard() {
           else location.href = flyUrl(lastAircraftIdentify || DEFAULT_FLY_AIRCRAFT, it.sceneryIdent, SCENERY_START);
         });
       }
+      // Send an aircraft's model files to the modeler (via staging) for editing.
+      if (it.kind === 'aircraft') {
+        const toModeler = btn(S.libModeler, S.libModelerTitle, false);
+        toModeler.addEventListener('click', async () => {
+          const payload = (await packPayload(it.id, 'aircraft/')).filter((f) => /\.(dnm|srf)$/i.test(f.name));
+          for (const f of payload) await putStaged(f.name, f.bytes);
+          const st = document.createElement('div');
+          st.textContent = S.libModelerSent(payload.length);
+          st.className = 'msg';
+          rowEl.after(st);
+          setTimeout(() => st.remove(), 5000);
+        });
+      }
       if (it.recipeSha) {
         const ed = btn(S.libEdit, S.libEditTitle, false);
         ed.addEventListener('click', async () => {
@@ -576,15 +601,51 @@ function aircraftCard() {
           msg.textContent = S.stagedAdded(s.name);
         } catch (e) { msg.textContent = S.errorPrefix + ((e && e.message) || e); }
       });
+      const dl = el('button', null, S.stagedDl);
+      dl.title = S.stagedDlTitle;
+      dl.style.cssText += ';font-size:11.5px;padding:3px 8px;flex:none';
+      dl.addEventListener('click', async () => {
+        const bytes = await getStaged(s.name);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([bytes]));
+        a.download = s.name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      });
       const del = el('button', null, '🗑');
       del.style.cssText += ';font-size:11.5px;padding:3px 8px;flex:none;color:#c75d6a';
       del.addEventListener('click', async () => { await removeStaged(s.name); renderStaged(); });
       rowEl.appendChild(nm);
       rowEl.appendChild(sz);
       rowEl.appendChild(add);
+      rowEl.appendChild(dl);
       rowEl.appendChild(del);
       stagedBox.appendChild(rowEl);
     }
+    // Local files INTO the shared area (they reach the modeler's File->Open on
+    // its next start; the assembly can add them from this same list).
+    const sendLab = el('label', null, S.stagedSend);
+    sendLab.title = S.stagedSendTitle;
+    sendLab.style.cssText =
+      'display:inline-block;margin-top:2px;padding:4px 10px;border:1px dashed #2a3647;border-radius:6px;' +
+      'color:#7d93b0;font-size:11.5px;cursor:pointer';
+    const sendIn = document.createElement('input');
+    sendIn.type = 'file';
+    sendIn.accept = '.srf,.dnm,.dat';
+    sendIn.multiple = true;
+    sendIn.style.display = 'none';
+    sendIn.addEventListener('change', async () => {
+      let n = 0;
+      for (const f of Array.from(sendIn.files)) {
+        if (!/\.(srf|dnm|dat)$/i.test(f.name)) continue;
+        await putStaged(f.name, new Uint8Array(await f.arrayBuffer()));
+        n++;
+      }
+      if (n) msg.textContent = S.stagedSent(n);
+      renderStaged();
+    });
+    sendLab.appendChild(sendIn);
+    stagedBox.appendChild(sendLab);
   };
   renderStaged();
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderStaged(); });

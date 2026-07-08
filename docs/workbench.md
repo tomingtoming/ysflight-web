@@ -98,6 +98,16 @@ loose ファイルの組み立ては**ブラウザ内で正規形の zip を合�
 - これで **ブラウザだけで「モデリング（Polygon Crest）→ 組み立て → 自分の島に降りる」が
   一周する**。ステージング（loose作業ファイル）と blob ストア（content-addressed な
   パックpayload）は意図的に別物。
+- **ファイル入出力の接続先＝OPFSステージングを「モデラのファイル置き場の正」とする**
+  （2026-07-09 設計確定）。理由: (a)保存は自動でステージングに残る＝VFSがリロードで
+  消えても保存済みの物は失われない (b)ワークベンチと同一の面＝導線が1本 (c)IDBFS常時
+  マウントや File System Access API より単純。出入り口: 持ち込み=ワークベンチの
+  「＋ファイルを送る」／持ち出し=staged の ⬇ ダウンロード／作品→モデラ=ライブラリの
+  🧊（payload の .dnm/.srf をステージングへ）。ローカルディスク直結（FS Access API）は
+  需要が立ってから。
+- **右クリック**: Polygon Crest の標準ビュー操作は **SHIFT+右ドラッグ=回転・SHIFT+
+  両ボタン=ズーム**（fsgui3dviewcontrol.cpp SetMouseStateYsStandard）＝右クリックは
+  本質的に必要。modeler.html が canvas の contextmenu/auxclick を preventDefault。
 
 ## 第四波（2026-07-08 同日実装）: マイ作品ライブラリとレシピ再編集
 
