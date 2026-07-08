@@ -215,10 +215,10 @@ async function listCreations() {
         if (first) sceneryIdent = first.trim().split(/\s+/)[0].replace(/^"|"$/g, '') || null;
       }
     }
-    const recipeFile = ((rec.manifest && rec.manifest.files) || []).find((f) => f.path === RECIPE_FILE);
+    const recipeFile = (rec.files || []).find((f) => f.path === RECIPE_FILE);
     out.push({
       id: rec.id, name: rec.name, enabled: rec.enabled !== false,
-      installedAt: (rec.manifest && rec.manifest.installedAt) || 0,
+      installedAt: rec.installedAt || 0,
       kind, identities, sceneryIdent, recipeSha: recipeFile ? recipeFile.sha256 : null,
     });
   }
@@ -236,7 +236,7 @@ async function loadRecipe(recipeSha) {
 async function packPayload(id, prefix) {
   const rec = await opfs.getRecord(id);
   const out = [];
-  for (const f of (rec && rec.manifest && rec.manifest.files) || []) {
+  for (const f of (rec && rec.files) || []) {
     if (f.path === RECIPE_FILE || !f.path.startsWith(prefix)) continue;
     if (/\.lst(\.idx)?$/i.test(f.path)) continue; // regenerated on assemble
     out.push({ name: f.path.split('/').pop(), bytes: await opfs.getBlob(f.sha256) });
