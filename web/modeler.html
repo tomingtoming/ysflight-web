@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polygon Crest — YSFLIGHT Web (experimental)</title>
+<meta name="robots" content="noindex">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b1017; overflow: hidden; }
+  #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+  #boot {
+    position: fixed; inset: 0; display: flex; flex-direction: column; gap: 8px;
+    align-items: center; justify-content: center; color: #8fa3bb;
+    font-family: system-ui, sans-serif; font-size: 14px; background: #0b1017;
+    transition: opacity .3s; z-index: 10;
+  }
+  #boot.hidden { opacity: 0; pointer-events: none; }
+  #boot small { color: #566b84; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="boot">
+  <div>🧊 Polygon Crest を起動中…</div>
+  <small>YSFLIGHT 公式 3D モデルエディタ (© Soji Yamakawa, BSD) のブラウザ実験ビルド</small>
+</div>
+<canvas id="canvas" tabindex="0"></canvas>
+<script>
+  var ASSET = {js:'ysgebl_web.js',wasm:'ysgebl_web.wasm',data:'ysgebl_web.data'}; // __MODELER_ASSET_LINE__
+  var canvas = document.getElementById('canvas');
+  // The fssimplewindow port reads the canvas backing size; keep it at the
+  // device-pixel viewport so the editor renders sharp and fills the window.
+  function fitCanvas() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+  }
+  fitCanvas();
+  window.addEventListener('resize', fitCanvas);
+
+  var Module = {
+    canvas: canvas,
+    arguments: [],
+    locateFile: function (p) {
+      if (p.endsWith('.wasm')) return ASSET.wasm;
+      if (p.endsWith('.data')) return ASSET.data;
+      return p;
+    },
+    preRun: [function () {
+      // Home for the editor's config/windowpos files (MEMFS for now; IDBFS
+      // persistence is a follow-up).  getenv("HOME") must resolve.
+      Module.ENV.HOME = '/home/web_user';
+      try { Module.FS.mkdirTree('/home/web_user'); } catch (e) {}
+    }],
+    onRuntimeInitialized: function () {
+      var boot = document.getElementById('boot');
+      // Give the first frames a moment so the overlay never flashes away early.
+      setTimeout(function () { boot.classList.add('hidden'); }, 300);
+      canvas.focus();
+    },
+  };
+  var s = document.createElement('script');
+  s.src = ASSET.js;
+  document.body.appendChild(s);
+</script>
+</body>
+</html>
