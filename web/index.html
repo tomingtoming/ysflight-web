@@ -1188,7 +1188,10 @@
       var st = Module.ysfwVr && Module.ysfwVr.stats;
       if (st && st.avgFps) {
         var n = document.createElement('div');
-        n.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps (avg, ' + st.seconds.toFixed(0) + 's)';
+        // CPU ms/frame next to fps: if CPU ms ~= the frame period, the frame
+        // is CPU-bound (resolution won't help); if far below, it's not.
+        var cpu = (st.cpuMs ? ', ' + st.cpuMs.toFixed(0) + 'ms CPU/frame' : '');
+        n.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps (avg, ' + st.seconds.toFixed(0) + 's)' + cpu;
         n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(13,20,29,.92);color:#cfe0f5;border:1px solid #2a3647;border-radius:8px;padding:8px 14px;font-size:13px';
         n.onclick = function () { if (n.parentNode) n.remove(); };
         document.body.appendChild(n);
