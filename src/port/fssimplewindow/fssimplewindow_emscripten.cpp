@@ -13,6 +13,7 @@ Follows the same BSD-style license as fssimplewindow itself.
 
 #include <emscripten.h>
 #include <emscripten/html5.h>
+#include <GLES2/gl2.h>
 
 #include <chrono>
 #include <string.h>
@@ -394,10 +395,35 @@ void FsOpenWindow(const FsOpenWindowOption &opt)
 		attr.depth=true;
 		attr.stencil=true;
 		attr.antialias=true;
-		// WebGL 2.0 context.  The engine's GL ES 2.0 renderer runs unchanged
-		// on a WebGL2 context (superset), and WebGL2 is the prerequisite for
+		// WebGL 2.0 context.  ysgl rewrites its shaders to GLSL ES 3.00 at
+		// compile time on an ES3 context (see ysglslutil.c) so the shadow-map
+		// depth texture samples correctly, and WebGL2 is the prerequisite for
 		// single-pass stereo (OVR_multiview2) in VR.
-		attr.majorVersion=1;
+		//
+		// Exception: SwiftShader (headless-Chromium software rendering, i.e.
+		// CI) crashes its GPU process on this app's WebGL2 command stream
+		// (SEGV in the Subzero JIT, nondeterministic context loss during
+		// boot); real GPUs are fine.  Sniff the renderer on a throwaway
+		// canvas BEFORE choosing the version -- a canvas permanently commits
+		// to its first context type, so this cannot be probed on the real
+		// canvas.  WebGL1 keeps today's proven ES 1.00 path there.
+		const int isSwiftShader=EM_ASM_INT({
+			try{
+				var cv=document.createElement('canvas');
+				var gl=cv.getContext('webgl2')||cv.getContext('webgl');
+				if(!gl) return 0;
+				var ext=gl.getExtension('WEBGL_debug_renderer_info');
+				var r=ext?gl.getParameter(ext.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER);
+				var lose=gl.getExtension('WEBGL_lose_context');
+				if(lose) lose.loseContext();
+				return (r && r.indexOf('SwiftShader')>=0)?1:0;
+			}catch(e){ return 0; }
+		});
+		if(0!=isSwiftShader)
+		{
+			printf("SwiftShader detected: using WebGL1 (this app's WebGL2 command stream crashes its GPU process)\n");
+		}
+		attr.majorVersion=(0!=isSwiftShader ? 1 : 2);
 		attr.minorVersion=0;
 		attr.enableExtensionsByDefault=true;
 		attr.preserveDrawingBuffer=false;
