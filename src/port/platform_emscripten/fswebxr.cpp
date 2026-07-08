@@ -253,7 +253,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 					{
 						st.seconds=(st.t1-st.t0)/1000;
 						st.avgFps=(st.frames-1)/st.seconds;
-						console.log('[vr] session avg '+st.avgFps.toFixed(1)+' fps over '+st.seconds.toFixed(1)+'s');
+						// Engine CPU time per tick (EMA).  If this is close to the
+						// frame period (1000/fps), the frame is CPU-bound -- a
+						// resolution-independent read that survives thermal drift,
+						// unlike comparing fps across separate (differently-heated)
+						// runs.
+						st.cpuMs=(Module._YsfwGetTickMs ? Module._YsfwGetTickMs() : 0);
+						console.log('[vr] session avg '+st.avgFps.toFixed(1)+' fps, '+
+						            st.cpuMs.toFixed(0)+'ms CPU/frame (period '+(1000/st.avgFps).toFixed(0)+'ms), over '+st.seconds.toFixed(1)+'s');
 					}
 					vr.session=null;
 					vr.refSpace=null;
