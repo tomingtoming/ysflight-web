@@ -193,7 +193,7 @@ export function listStockAircraft(FS, root = '/ysflight') {
 // the user types is exactly the name ?freeflight= will resolve.
 export function sanitizeIdentify(name) {
   return (name || '')
-    .replace(/[\s"]+/g, '_')
+    .replace(/[\s"]/g, '_') // per character, like the engine (no run-collapsing)
     .toUpperCase()
     .replace(/[^\x20-\x7e]/g, '_')
     .slice(0, 31);
