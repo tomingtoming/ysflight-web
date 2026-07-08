@@ -86,6 +86,25 @@ loose ファイルの組み立ては**ブラウザ内で正規形の zip を合�
 成功させる**（エンジンは欠けたエントリを Cannot Load でスキップして生き続ける——
 挙動は変えず、見えなかったものを見せるだけ）。
 
+## upstream/public に眠る資産（2026-07-08 調査・将来拡張の弾薬庫）
+
+upstream/public には **Polygon Crest（YSFLIGHT 公式 3D モデルエディタ ysgebl）のソース一式**が
+含まれており、GUI エントリポイント（`src/ysgebl/src/main/`）と CLI（`geblcmd`）以外は
+**EMSCRIPTEN ビルドでも全部ライブラリとしてビルド・リンクされている**（`geblkernel` は
+`platform_emscripten` の直接依存）。つまり以下は「移植」でなく「露出」の距離にある:
+
+| 資産 | 中身 | ワークベンチでの使い道 |
+|---|---|---|
+| `geblkernel` | `YsShellDnmContainer::LoadDnm/SaveDnm`（木構造・アニメ状態込み）、`YsShellExtReader::MergeSrf`／`SaveSrf`。DNM/SRF/OBJ/STL/PLY/OFF 対応（`kernel/ysshelldnmtemplate.h`, `kernel/ysshellextio.h`） | DNM の参照整合性検証、ノード一覧の取得、（将来）OBJ→SRF 変換の受け口 |
+| `geblutil` | `CheckNonManifoldEdge`／`CheckSelfIntersection`／`CheckNonPlanarPolygon`（`kernelutil/ysshellext_diagnoseutil.h`） | Check 面の第二段＝**ジオメトリ診断**（Polygon Crest の修復メニューと同じ実績コード） |
+| `geblgl(_gl2)` | `YsShellExtDrawingBuffer`→VBO→GLES2 描画。最小サンプル `samples/YsShellExt/main.cpp`（SRF 読んで描く） | **ブラウザ内 DNM/SRF 単体プレビュー**、オフスクリーン FBO＋`ysbitmap` の `SavePng` で**サムネイル生成**（pack.json の thumbnail 供給元） |
+| `geblgui`（`gui/dnm/dnmpreview.cpp`） | DNM アニメプレビュー（ギア/VG翼/フラップのスライダ UI）。ライブラリはビルド済みだが `fslazywindow` の GUI ループ初期化が別途要る | 後段の「ブラウザ内 DNM アニメプレビュー」 |
+
+含意: ワークベンチの Check 面（ジオメトリ診断）と「プレビュー/サムネイル」拡張は、
+新規実装でなく **既に wasm 内に居るコードへ JS→wasm の口を生やす作業**。さらに言えば
+Polygon Crest 本体のブラウザ移植（＝ブラウザ内モデラ）すら構造的には視野に入る——
+ただしそれは別企画級のスコープであり、需要が立ってから。
+
 ## 将来（需要が立ってから・順不同）
 
 - **Out 面の完成**: pack.json エディタ（author/license 必須・`redistributable` 既定 false
