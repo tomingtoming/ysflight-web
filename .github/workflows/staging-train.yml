@@ -1,0 +1,86 @@
+name: staging-train
+
+# staging ブランチ（リリーストレイン）を「main + `staging` ラベル付き open PR」の
+# マージ結果として常に作り直す。
+#
+# - PR への `staging` ラベル付け外し、ラベル付き PR の更新/クローズ → 再編成
+# - main への push（PR マージ含む）→ 再編成（ベースが常に最新 main になる）
+# - マージで衝突した PR はスキップし、その PR にコメントで通知
+#
+# staging は毎回 force push で決定的に再構成されるため、staging へ直接 commit
+# しないこと（乗せたいものは PR にラベルを付ける）。
+# staging への push は Cloudflare Workers Builds の非本番トリガーが拾い、
+# https://ysflight-web-staging.toming.workers.dev へ実デプロイされる。
+# （Durable Object を持つ Worker には Preview URLs が生成されないための代替。
+#   非本番トリガーの deploy コマンドは staging のときだけ
+#   `env -u WRANGLER_CI_OVERRIDE_NAME -u WRANGLER_CI_MATCH_TAG npx wrangler deploy
+#   --name ysflight-web-staging`、他ブランチは `wrangler versions upload`。）
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize, closed, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: staging-train
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    # pull_request イベントは staging ラベルが絡むときだけ走らせる
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.label.name == 'staging' ||
+      contains(github.event.pull_request.labels.*.name, 'staging')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Rebuild staging = main + labeled PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B staging origin/main
+
+          gh pr list --label staging --state open --json number,headRefName \
+            --jq 'sort_by(.number)[] | "\(.number) \(.headRefName)"' > /tmp/train.txt
+          echo "train members:"; cat /tmp/train.txt
+
+          failed=""
+          while read -r num head; do
+            [ -z "${num}" ] && continue
+            git fetch origin "refs/pull/${num}/head"
+            if git merge --no-ff --no-edit -m "staging: merge PR #${num} (${head})" FETCH_HEAD; then
+              echo "::notice::merged PR #${num} (${head})"
+            else
+              git merge --abort
+              failed="${failed} ${num}"
+              echo "::warning::conflict, skipped PR #${num} (${head})"
+            fi
+          done < /tmp/train.txt
+
+          # ツリーが変わらないなら push しない（無駄な Workers Builds を避ける）
+          current="$(git rev-parse --quiet --verify 'origin/staging^{tree}' || echo none)"
+          if [ "$(git rev-parse 'staging^{tree}')" = "${current}" ]; then
+            echo "staging tree unchanged; skipping push"
+          else
+            git push --force origin staging
+          fi
+
+          for num in ${failed}; do
+            body="⚠️ **staging-train**: この PR は \`staging\` へのマージで衝突したためトレインから外れています。main を取り込んで衝突を解消すると、次の再編成で自動復帰します。"
+            gh pr comment "${num}" --edit-last --create-if-none --body "${body}" \
+              || gh pr comment "${num}" --body "${body}"
+          done
