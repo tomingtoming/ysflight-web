@@ -70,7 +70,7 @@ const S = ({
     datDup: '⚠ その名前は既存の機体と重複しています（別名を推奨）',
     // creations library
     libTitle: '📦 マイ作品',
-    libIntro: '作った物・取り込んだ物はここに並びます。✏️ で続きから編集できます（ワークベンチ製のみ）',
+    libIntro: 'このワークベンチで作った物だけが並びます（zipで取り込んだパックの管理はゲーム側の「追加パック」で）。✏️ で続きから編集できます',
     libEmpty: '（まだ何もありません — 下で作りましょう）',
     libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
     libOn: '有効', libOff: '無効',
@@ -132,7 +132,7 @@ const S = ({
     datNeedName: 'Enter a new aircraft name',
     datDup: '⚠ That name clashes with an existing aircraft (pick another)',
     libTitle: '📦 My creations',
-    libIntro: 'Everything you make or import lands here. ✏️ re-opens workbench-made items for further editing',
+    libIntro: 'Only things MADE in this workbench appear here (imported zip packs are managed in the game’s add-on panel). ✏️ re-opens an item for further editing',
     libEmpty: '(Nothing yet — make something below)',
     libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
     libOn: 'On', libOff: 'Off',
@@ -195,11 +195,13 @@ async function saveOrReplace(zipBytes, name, replaceId) {
   return res;
 }
 
-// One creations-library view over the OPFS records: kind, flyable identities,
-// and (for workbench-made packs) the embedded recipe pointer.
+// The creations-library view: ONLY workbench-made packs (the ones carrying an
+// embedded workbench.json recipe).  Imported zips are inventory, not creations
+// — they live in the game page's pack panel, not here.
 async function listCreations() {
   const out = [];
   for (const rec of await opfs.listRecords()) {
+    if (!((rec.files || []).some((f) => f.path === RECIPE_FILE))) continue;
     const cats = rec.categories || [];
     const kind = cats.length > 1 ? 'mixed' : cats[0] === 'aircraft' ? 'aircraft' : cats[0] === 'scenery' ? 'scenery' : 'other';
     const identities = [];

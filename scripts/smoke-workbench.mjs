@@ -106,8 +106,14 @@ const scn = await page
 console.log('island scenery: ' + JSON.stringify({ id: scn.id, ident: scn.ident, start: scn.start }));
 if (scn.ident !== 'WB_ISLAND' || scn.start !== 'START01') die('scenery wizard returned unexpected ident/start');
 
-// 3b. Creations library: everything made above is listed, typed, and editable.
+// 3b. Creations library: everything made above is listed, typed, and editable —
+//     and an IMPORTED zip (no recipe) must NOT appear (creations ≠ inventory).
+await page.evaluate(async () => {
+  const bytes = new Uint8Array(await (await fetch('/test-pack.zip')).arrayBuffer());
+  await window.ysfwWorkbench.installZip(bytes, 'imported-community-pack');
+});
 const lib = await page.evaluate(() => window.ysfwWorkbench.listCreations());
+if (lib.some((i) => i.name === 'imported-community-pack')) die('imported zip leaked into the creations library');
 if (lib.length !== 3) die('expected 3 creations, got ' + lib.length + ': ' + JSON.stringify(lib.map((i) => i.name)));
 if (lib.filter((i) => i.kind === 'aircraft').length !== 2) die('expected 2 aircraft creations');
 if (lib.filter((i) => i.kind === 'scenery').length !== 1) die('expected 1 scenery creation');
