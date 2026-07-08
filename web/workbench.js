@@ -120,7 +120,14 @@ const emit = (p) => (/\s/.test(p) ? `"${p}"` : p);
 // optional).  Returns { zipBytes, identify, lstLine, warnings } — identify is
 // null when the .dat carries no ASCII IDENTIFY/CATEGORY pair (the engine then
 // reads the .dat itself; the test-fly button just can't name the aircraft).
-export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coarse }) {
+// When `recipe` is given it is embedded as workbench.json — the creation
+// parameters ride inside the pack (content-addressed like everything else), so
+// the workbench can list its own creations and re-open them for editing.  The
+// engine never reads it (only files referenced by the scanned .lst matter).
+export const RECIPE_FILE = 'workbench.json';
+const recipeEntry = (recipe) => new TextEncoder().encode(JSON.stringify({ schema: 1, ...recipe }));
+
+export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coarse, recipe }) {
   if (!dat) throw new Error(ERR.NO_DAT);
   if (!visual) throw new Error(ERR.NO_VISUAL);
   if (!collision) throw new Error(ERR.NO_COLLISION);
@@ -150,6 +157,7 @@ export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coa
     .replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'workbench';
   const lstLine = tokens.map(emit).join(' ') + '\n';
   entries['aircraft/air_' + packName.toLowerCase() + '.lst'] = new TextEncoder().encode(lstLine);
+  if (recipe) entries[RECIPE_FILE] = recipeEntry({ type: 'aircraft', ...recipe });
 
   return {
     zipBytes: zipSync(entries),
@@ -268,7 +276,7 @@ const num = (v, d) => (Math.round(v * 100) / 100).toFixed(d);
 //   (b) a PST loop with AREA LAND (the LANDABLE override over DEFAREA WATER;
 //       no TER means the island is flat at BASEELV 0m, so you can touch down).
 // Returns {zipBytes, ident, packName}.
-export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80], startAltM = 1000, startSpeedMS = 100, islands = [] }) {
+export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80], startAltM = 1000, startSpeedMS = 100, islands = [], recipe }) {
   const ident = sanitizeIdentify(name);
   if (!ident) throw new Error('workbench: map name is required');
   const packName = ident.toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
@@ -325,5 +333,6 @@ export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106
     ['scenery/' + fileStem + '.fld']: enc.encode(fld),
     ['scenery/' + fileStem + '.stp']: enc.encode(stp),
   };
+  if (recipe) entries[RECIPE_FILE] = recipeEntry({ type: 'scenery', ...recipe });
   return { zipBytes: zipSync(entries), ident, packName };
 }
