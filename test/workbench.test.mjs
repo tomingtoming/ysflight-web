@@ -195,6 +195,32 @@ test('assembleSceneryZip without islands stays the proven 8-line header', async 
   assert.equal(fld.trim().split('\n').length, 8);
 });
 
+test('recipe embedding: workbench.json rides the pack and survives the pipeline', async () => {
+  const scenery = { name: 'REDO', ground: [1, 2, 3], sky: [4, 5, 6], land: [7, 8, 9], startAltM: 500, islands: [{ points: [[-100, -100], [100, -100], [0, 100]] }] };
+  const withRecipe = assembleSceneryZip({ ...scenery, recipe: { scenery } });
+  const without = assembleSceneryZip(scenery);
+  const { unzipSync } = await import('../web/vendor/fflate.js');
+  const recipeBytes = unzipSync(withRecipe.zipBytes)['workbench.json'];
+  assert.ok(recipeBytes, 'workbench.json embedded');
+  const parsed = JSON.parse(new TextDecoder().decode(recipeBytes));
+  assert.equal(parsed.type, 'scenery');
+  assert.deepEqual(parsed.scenery.islands, scenery.islands);
+
+  const a = await analyzePack(withRecipe.zipBytes, { sha256 });
+  assert.ok(a.hashed.some((f) => f.path === 'workbench.json'), 'recipe survives analyze as payload');
+  assert.deepEqual(a.categories, ['scenery']); // recipe never becomes a scanned list
+  const b = await analyzePack(without.zipBytes, { sha256 });
+  assert.notEqual(a.id, b.id); // recipe is content -> different id (replace semantics rely on this)
+
+  const ac = assembleAircraftZip({
+    dat: test1.dat, visual: test1.dnm, collision: test1.coll,
+    recipe: { packName: 'x', slots: { dat: 'test1.dat' } },
+  });
+  const acr = JSON.parse(new TextDecoder().decode(unzipSync(ac.zipBytes)['workbench.json']));
+  assert.equal(acr.type, 'aircraft');
+  assert.equal(acr.slots.dat, 'test1.dat');
+});
+
 test('analyzePack surfaces unresolved references as diagnostics', async () => {
   // A pack whose list references a file the archive does not contain.
   const { zipSync } = await import('../web/vendor/fflate.js');

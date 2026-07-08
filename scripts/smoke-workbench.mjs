@@ -106,6 +106,44 @@ const scn = await page
 console.log('island scenery: ' + JSON.stringify({ id: scn.id, ident: scn.ident, start: scn.start }));
 if (scn.ident !== 'WB_ISLAND' || scn.start !== 'START01') die('scenery wizard returned unexpected ident/start');
 
+// 3b. Creations library: everything made above is listed, typed, and editable.
+const lib = await page.evaluate(() => window.ysfwWorkbench.listCreations());
+if (lib.length !== 3) die('expected 3 creations, got ' + lib.length + ': ' + JSON.stringify(lib.map((i) => i.name)));
+if (lib.filter((i) => i.kind === 'aircraft').length !== 2) die('expected 2 aircraft creations');
+if (lib.filter((i) => i.kind === 'scenery').length !== 1) die('expected 1 scenery creation');
+if (!lib.every((i) => i.recipeSha)) die('every workbench creation should carry a recipe');
+console.log('library: 3 creations listed, all with recipes');
+
+// 3c. Edit round-trip: re-open the drawn map from its recipe, add an island,
+//     save — the new content-hash id REPLACES the old record (same ident).
+const edited = await page
+  .evaluate(async (oldId) => {
+    const lib = await window.ysfwWorkbench.listCreations();
+    const isl = lib.find((i) => i.kind === 'scenery');
+    const recipe = await window.ysfwWorkbench.loadRecipe(isl.recipeSha);
+    const sc = recipe.scenery;
+    sc.islands = sc.islands.concat([{ points: [[-4000, -4000], [-3000, -4000], [-3500, -3000]] }]);
+    const res = await window.ysfwWorkbench.createScenery({ ...sc, replaceId: isl.id });
+    const after = await window.ysfwWorkbench.listCreations();
+    return { oldId: isl.id, newId: res.id, ident: res.ident, count: after.length, oldGone: !after.some((i) => i.id === isl.id) };
+  })
+  .catch((e) => die('edit round-trip threw: ' + e.message));
+console.log('edit round-trip: ' + JSON.stringify(edited));
+if (edited.newId === edited.oldId) die('edit produced the same id (content should differ)');
+if (!edited.oldGone) die('old version was not replaced');
+if (edited.count !== 3) die('library should still hold 3 creations after replace, got ' + edited.count);
+if (edited.ident !== 'WB_ISLAND') die('edited map lost its ident');
+
+// 3d. Delete: a disposable creation disappears from the library.
+const delCheck = await page.evaluate(async () => {
+  const tmp = await window.ysfwWorkbench.createScenery({ name: 'WB_TMP' });
+  await window.ysfwWorkbench.deleteCreation(tmp.id);
+  const after = await window.ysfwWorkbench.listCreations();
+  return { count: after.length, gone: !after.some((i) => i.id === tmp.id) };
+});
+if (!delCheck.gone || delCheck.count !== 3) die('delete failed: ' + JSON.stringify(delCheck));
+console.log('library: delete works (back to 3 creations)');
+
 // ---- game page: fly what the workbench made (the OPFS bridge) -------------------
 
 // 4. The loose-assembled aircraft flies.

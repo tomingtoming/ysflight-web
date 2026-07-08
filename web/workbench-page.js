@@ -11,7 +11,7 @@
 
 import {
   classifyLoose, assembleAircraftZip,
-  makeDatFromBase, assembleSceneryZip, SCENERY_START,
+  makeDatFromBase, assembleSceneryZip, SCENERY_START, RECIPE_FILE,
 } from './workbench.js';
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
@@ -68,6 +68,18 @@ const S = ({
     datSet: (n) => '✓ ' + n + ' を機体組み立ての .dat スロットに入れました',
     datNeedName: '新しい機体名を入れてください',
     datDup: '⚠ その名前は既存の機体と重複しています（別名を推奨）',
+    // creations library
+    libTitle: '📦 マイ作品',
+    libIntro: '作った物・取り込んだ物はここに並びます。✏️ で続きから編集できます（ワークベンチ製のみ）',
+    libEmpty: '（まだ何もありません — 下で作りましょう）',
+    libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
+    libOn: '有効', libOff: '無効',
+    libFly: '🛫', libFlyTitle: 'テスト飛行（ゲームページに移動します）',
+    libEdit: '✏️', libEditTitle: '続きから編集',
+    libDel: '🗑', libDelTitle: '削除',
+    libDelConfirm: (n) => '「' + n + '」を削除しますか？',
+    libUpdated: (n) => '✓ 「' + n + '」を更新しました（前の版は置き換え）',
+    libEditingBadge: (n) => '✏️ 編集中: ' + n,
     // island
     isTitle: '🏝 マップを描く',
     isIntro: 'ドラッグで海岸線を描くと島になります（何個でも）。島は本物の陸地＝降りられます。マップは16km四方。',
@@ -119,6 +131,17 @@ const S = ({
     datSet: (n) => '✓ Placed ' + n + ' into the assembly’s .dat slot',
     datNeedName: 'Enter a new aircraft name',
     datDup: '⚠ That name clashes with an existing aircraft (pick another)',
+    libTitle: '📦 My creations',
+    libIntro: 'Everything you make or import lands here. ✏️ re-opens workbench-made items for further editing',
+    libEmpty: '(Nothing yet — make something below)',
+    libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
+    libOn: 'On', libOff: 'Off',
+    libFly: '🛫', libFlyTitle: 'Test-fly (moves to the game page)',
+    libEdit: '✏️', libEditTitle: 'Continue editing',
+    libDel: '🗑', libDelTitle: 'Delete',
+    libDelConfirm: (n) => 'Delete “' + n + '”?',
+    libUpdated: (n) => '✓ Updated “' + n + '” (previous version replaced)',
+    libEditingBadge: (n) => '✏️ Editing: ' + n,
     isTitle: '🏝 Draw a map',
     isIntro: 'Drag to draw coastlines — each stroke becomes an island (as many as you like). Islands are real, landable ground. The map is 16km across.',
     isName: 'Map name (ASCII)',
@@ -160,6 +183,65 @@ async function installZip(bytes, name) {
     templates: a.generated.filter((g) => !g.idx).reduce((n, g) => n + g.entries, 0),
     diagnostics: a.diagnostics,
   };
+}
+
+// Save with replace semantics: when re-editing an existing creation, the new
+// content-hash id replaces the old record (same id = no-op, content unchanged).
+async function saveOrReplace(zipBytes, name, replaceId) {
+  const res = await installZip(zipBytes, name);
+  if (replaceId && replaceId !== res.id) {
+    try { await opfs.removeRecord(replaceId); await opfs.gc(); } catch (e) { /* old version lingers; harmless */ }
+  }
+  return res;
+}
+
+// One creations-library view over the OPFS records: kind, flyable identities,
+// and (for workbench-made packs) the embedded recipe pointer.
+async function listCreations() {
+  const out = [];
+  for (const rec of await opfs.listRecords()) {
+    const cats = rec.categories || [];
+    const kind = cats.length > 1 ? 'mixed' : cats[0] === 'aircraft' ? 'aircraft' : cats[0] === 'scenery' ? 'scenery' : 'other';
+    const identities = [];
+    let sceneryIdent = null;
+    for (const g of rec.generated || []) {
+      if (/^aircraft\/.*\.lst\.idx$/.test(g.file)) {
+        for (const line of (g.text || '').split('\n')) {
+          const t = line.split('\t');
+          if (t.length >= 2 && t[1]) identities.push(t[1]);
+        }
+      } else if (/^scenery\/.*\.lst$/.test(g.file) && !/\.idx$/.test(g.file)) {
+        const first = (g.text || '').split('\n').find(Boolean);
+        if (first) sceneryIdent = first.trim().split(/\s+/)[0].replace(/^"|"$/g, '') || null;
+      }
+    }
+    const recipeFile = ((rec.manifest && rec.manifest.files) || []).find((f) => f.path === RECIPE_FILE);
+    out.push({
+      id: rec.id, name: rec.name, enabled: rec.enabled !== false,
+      installedAt: (rec.manifest && rec.manifest.installedAt) || 0,
+      kind, identities, sceneryIdent, recipeSha: recipeFile ? recipeFile.sha256 : null,
+    });
+  }
+  out.sort((a, b) => b.installedAt - a.installedAt);
+  return out;
+}
+
+async function loadRecipe(recipeSha) {
+  const bytes = await opfs.getBlob(recipeSha);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+// Read a pack's payload files back out of the content-addressed store —
+// the aircraft edit flow restores its loose entries from these.
+async function packPayload(id, prefix) {
+  const rec = await opfs.getRecord(id);
+  const out = [];
+  for (const f of (rec && rec.manifest && rec.manifest.files) || []) {
+    if (f.path === RECIPE_FILE || !f.path.startsWith(prefix)) continue;
+    if (/\.lst(\.idx)?$/i.test(f.path)) continue; // regenerated on assemble
+    out.push({ name: f.path.split('/').pop(), bytes: await opfs.getBlob(f.sha256) });
+  }
+  return out;
 }
 
 // Aircraft identities already taken (stock + installed packs) for the dup check.
@@ -223,6 +305,91 @@ function header() {
   app.appendChild(el('p', 'sub', S.sub));
 }
 
+// --- creations library card ---------------------------------------------------------
+
+let renderLibrary = () => {};           // re-render hook, called after any save/delete
+let aircraftEdit = () => {};            // (recipe, rec) => restore the aircraft card
+let islandEdit = () => {};              // (recipe, rec) => restore the island card
+let lastAircraftIdentify = null;
+
+function creationsCard() {
+  const card = el('div', 'card');
+  card.appendChild(el('h2', null, S.libTitle));
+  card.appendChild(el('p', 'intro', S.libIntro));
+  const listEl = el('div');
+  card.appendChild(listEl);
+  app.appendChild(card);
+
+  renderLibrary = async () => {
+    const items = await listCreations();
+    listEl.innerHTML = '';
+    if (items.length === 0) {
+      listEl.appendChild(el('div', 'msg', S.libEmpty));
+      return;
+    }
+    for (const it of items) {
+      const rowEl = el('div');
+      rowEl.style.cssText =
+        'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #2a3647;' +
+        'border-radius:7px;margin-bottom:6px;background:#0b1017' + (it.enabled ? '' : ';opacity:.5');
+      const badge = el('span', null, S.libKind[it.kind] || '📦');
+      badge.style.cssText = 'flex:none';
+      const nm = el('span', null, it.name || it.id);
+      nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6edf3;font-size:13.5px';
+      const sub = el('span', null, it.identities[0] || it.sceneryIdent || '');
+      sub.style.cssText = 'flex:none;color:#7d93b0;font-size:11px;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      rowEl.appendChild(badge);
+      rowEl.appendChild(nm);
+      rowEl.appendChild(sub);
+
+      const btn = (label, title, accent) => {
+        const b = el('button', accent ? 'accent' : null, label);
+        b.title = title;
+        b.style.cssText += ';font-size:12px;padding:4px 9px;flex:none';
+        rowEl.appendChild(b);
+        return b;
+      };
+      const onoff = btn(it.enabled ? S.libOn : S.libOff, '', it.enabled);
+      onoff.addEventListener('click', async () => {
+        await opfs.setEnabled(it.id, !it.enabled);
+        renderLibrary();
+      });
+      // Fly: aircraft by its first identity; scenery by ident (workbench maps
+      // know their start; imported scenery may lack one we can name -> hidden).
+      const canFlyScenery = it.kind === 'scenery' && it.sceneryIdent && it.recipeSha;
+      if (it.enabled && (it.identities.length > 0 || canFlyScenery)) {
+        const fly = btn(S.libFly, S.libFlyTitle, true);
+        fly.addEventListener('click', () => {
+          if (it.identities.length > 0) location.href = flyUrl(it.identities[0]);
+          else location.href = flyUrl(lastAircraftIdentify || DEFAULT_FLY_AIRCRAFT, it.sceneryIdent, SCENERY_START);
+        });
+      }
+      if (it.recipeSha) {
+        const ed = btn(S.libEdit, S.libEditTitle, false);
+        ed.addEventListener('click', async () => {
+          try {
+            const recipe = await loadRecipe(it.recipeSha);
+            if (recipe.type === 'scenery') islandEdit(recipe, it);
+            else aircraftEdit(recipe, it);
+          } catch (e) {
+            console.warn('[workbench] recipe load failed', e);
+          }
+        });
+      }
+      const del = btn(S.libDel, S.libDelTitle, false);
+      del.style.color = '#c75d6a';
+      del.addEventListener('click', async () => {
+        if (!self.confirm(S.libDelConfirm(it.name || it.id))) return;
+        await opfs.removeRecord(it.id);
+        try { await opfs.gc(); } catch (e) {}
+        renderLibrary();
+      });
+      listEl.appendChild(rowEl);
+    }
+  };
+  renderLibrary();
+}
+
 // --- aircraft assembly card --------------------------------------------------------
 
 let acSetGeneratedDat = null; // hook the dat wizard uses to feed the assembly
@@ -253,12 +420,17 @@ function aircraftCard() {
 
   let entries = [];       // [{name, bytes}] accumulated loose files
   let generatedDat = null;
+  let datRecipe = null;   // {baseFile, identify, knobs} when the dat wizard made the .dat
+  let editingId = null;   // replace-on-save target when re-editing a creation
   let sels = null;
+  const editBadge = el('div', 'msg');
+  card.insertBefore(editBadge, drop);
 
-  const rebuildSlots = () => {
+  const rebuildSlots = (preset) => {
     slotsBox.innerHTML = '';
     btnRow.innerHTML = '';
     const { candidates, guess, ignored } = classifyLoose(entries);
+    const pre = (slot) => (preset && preset.slots && preset.slots[slot]) || null;
     const byName = new Map(entries.map((e) => [e.name.split(/[\\/]/).pop(), e]));
     const mkSel = (label, cands, preselect, required, extraOpt) => {
       const sel = document.createElement('select');
@@ -272,14 +444,15 @@ function aircraftCard() {
       ? Object.assign(el('option'), { value: '@generated', textContent: S.datGenerated(generatedDat.identify) })
       : null;
     sels = {
-      dat: mkSel(S.slotDat, candidates.dat, generatedDat ? '@generated' : guess.dat, true, genOpt),
-      visual: mkSel(S.slotVisual, candidates.dnm, guess.visual, true),
-      collision: mkSel(S.slotColl, candidates.srf, guess.collision, true),
-      cockpit: mkSel(S.slotCockpit, candidates.srf, guess.cockpit, false),
-      coarse: mkSel(S.slotCoarse, candidates.dnm, guess.coarse, false),
+      dat: mkSel(S.slotDat, candidates.dat, pre('dat') || (generatedDat ? '@generated' : guess.dat), true, genOpt),
+      visual: mkSel(S.slotVisual, candidates.dnm, pre('visual') || guess.visual, true),
+      collision: mkSel(S.slotColl, candidates.srf, pre('collision') || guess.collision, true),
+      cockpit: mkSel(S.slotCockpit, candidates.srf, pre('cockpit') || guess.cockpit, false),
+      coarse: mkSel(S.slotCoarse, candidates.dnm, pre('coarse') || guess.coarse, false),
     };
-    if (generatedDat) sels.dat.value = '@generated';
+    if (!preset && generatedDat) sels.dat.value = '@generated';
     const nameIn = Object.assign(document.createElement('input'), { type: 'text', placeholder: (guess.dat || (generatedDat && generatedDat.identify) || '').replace(/\.dat$/i, '') });
+    if (preset && preset.packName) nameIn.value = preset.packName;
     row(slotsBox, S.packName, nameIn);
     if (ignored.length) msg.textContent = S.ignored(ignored);
 
@@ -289,12 +462,21 @@ function aircraftCard() {
       msg.textContent = S.working;
       try {
         const pick = (sel) => (sel.value === '@generated' ? generatedDat : sel.value ? byName.get(sel.value) : null);
-        const asm = assembleAircraftZip({
-          name: nameIn.value.trim() || undefined,
+        const slots = {
           dat: pick(sels.dat), visual: pick(sels.visual), collision: pick(sels.collision),
           cockpit: pick(sels.cockpit), coarse: pick(sels.coarse),
+        };
+        const asm = assembleAircraftZip({
+          name: nameIn.value.trim() || undefined,
+          ...slots,
+          recipe: {
+            packName: nameIn.value.trim() || undefined,
+            slots: Object.fromEntries(Object.entries(slots).map(([k, v]) => [k, v ? v.name : null])),
+            datRecipe: sels.dat.value === '@generated' ? datRecipe : null,
+          },
         });
-        const res = await installZip(asm.zipBytes, asm.packName);
+        const res = await saveOrReplace(asm.zipBytes, asm.packName, editingId);
+        editingId = res.id; // further saves keep replacing this creation
         const lines = [S.acDone(asm.packName)];
         for (const w of asm.warnings) if (S.warn[w]) lines.push(S.warn[w]);
         msg.textContent = lines.join('\n');
@@ -305,7 +487,7 @@ function aircraftCard() {
           btnRow.appendChild(fly);
         }
         lastAircraftIdentify = asm.identify || lastAircraftIdentify;
-        void res;
+        renderLibrary();
       } catch (e) {
         const m = (e && e.message) || String(e);
         const friendly = /missing \.dat/.test(m) ? S.errMap.NO_DAT
@@ -330,11 +512,21 @@ function aircraftCard() {
   input.addEventListener('change', () => addFiles(input.files));
   drop.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files); });
 
-  acSetGeneratedDat = (dat) => { generatedDat = dat; rebuildSlots(); };
+  acSetGeneratedDat = (dat, recipeInfo) => { generatedDat = dat; datRecipe = recipeInfo || null; rebuildSlots(); };
+
+  // Re-open a creation: its loose files come back out of the pack payload, the
+  // slot assignment and name from the embedded recipe.
+  aircraftEdit = async (recipe, it) => {
+    entries = await packPayload(it.id, 'aircraft/');
+    generatedDat = null;
+    datRecipe = recipe.datRecipe || null;
+    editingId = it.id;
+    editBadge.textContent = S.libEditingBadge(it.name || it.id);
+    rebuildSlots({ slots: recipe.slots || {}, packName: recipe.packName || it.name });
+    card.scrollIntoView({ behavior: 'smooth' });
+  };
   app.appendChild(card);
 }
-
-let lastAircraftIdentify = null;
 
 // --- dat wizard card ---------------------------------------------------------------
 
@@ -382,7 +574,11 @@ async function datCard() {
       const lines = [S.datSet(dat.identify)];
       if ((await knownIdentities()).has(dat.identify)) lines.push(S.datDup);
       msg.textContent = lines.join('\n');
-      acSetGeneratedDat({ name: dat.identify.toLowerCase() + '.dat', bytes: dat.bytes, identify: dat.identify });
+      const knobVals = Object.fromEntries(Object.entries(knobs).map(([k, s]) => [k, Number(s.value)]));
+      acSetGeneratedDat(
+        { name: dat.identify.toLowerCase() + '.dat', bytes: dat.bytes, identify: dat.identify },
+        { baseFile: baseSel.value, identify: name, knobs: knobVals },
+      );
     } catch (e) {
       msg.textContent = S.errorPrefix + ((e && e.message) || e);
     } finally {
@@ -400,6 +596,9 @@ function islandCard() {
   const card = el('div', 'card');
   card.appendChild(el('h2', null, S.isTitle));
   card.appendChild(el('p', 'intro', S.isIntro));
+  const editBadge = el('div', 'msg');
+  card.appendChild(editBadge);
+  let editingId = null; // replace-on-save target when re-editing
 
   const nameIn = row(card, S.isName, Object.assign(document.createElement('input'), { type: 'text' }));
   const seaIn = row(card, S.isSea, Object.assign(document.createElement('input'), { type: 'color', value: '#0d3a66' }));
@@ -477,19 +676,26 @@ function islandCard() {
     (x / canvas.width - 0.5) * WORLD_M,   // X = east
     (y / canvas.height - 0.5) * WORLD_M,  // canvas down = Z = south
   ];
+  const fromWorld = ([x, z]) => [
+    (x / WORLD_M + 0.5) * canvas.width,
+    (z / WORLD_M + 0.5) * canvas.height,
+  ];
   goBtn.addEventListener('click', async () => {
     goBtn.disabled = true;
     msg.textContent = S.working;
     try {
-      const asm = assembleSceneryZip({
+      const scenery = {
         name: nameIn.value.trim(),
         ground: hex2rgb(seaIn.value),
         sky: hex2rgb(skyIn.value),
         land: hex2rgb(landIn.value),
         startAltM: Math.max(100, Number(altIn.value) || 1000),
         islands: polygons.map((poly) => ({ points: poly.map(toWorld) })),
-      });
-      await installZip(asm.zipBytes, asm.packName);
+      };
+      const asm = assembleSceneryZip({ ...scenery, recipe: { scenery } });
+      const res = await saveOrReplace(asm.zipBytes, asm.packName, editingId);
+      editingId = res.id; // further saves keep replacing this creation
+      renderLibrary();
       msg.textContent = S.isDone(asm.ident, polygons.length);
       btnRow.innerHTML = '';
       const flySel = document.createElement('select');
@@ -510,6 +716,24 @@ function islandCard() {
   });
   btnRow.appendChild(goBtn);
   card.appendChild(btnRow);
+
+  // Re-open a drawn map: the recipe carries the wizard state verbatim, so the
+  // canvas comes back with every island and you keep drawing where you left off.
+  const rgb2hex = (c) => '#' + c.map((v) => Math.max(0, Math.min(255, v | 0)).toString(16).padStart(2, '0')).join('');
+  islandEdit = (recipe, it) => {
+    const sc = recipe.scenery || {};
+    nameIn.value = sc.name || it.name || '';
+    if (sc.ground) seaIn.value = rgb2hex(sc.ground);
+    if (sc.sky) skyIn.value = rgb2hex(sc.sky);
+    if (sc.land) landIn.value = rgb2hex(sc.land);
+    if (sc.startAltM) altIn.value = String(sc.startAltM);
+    polygons.length = 0;
+    for (const isl of sc.islands || []) polygons.push((isl.points || []).map(fromWorld));
+    editingId = it.id;
+    editBadge.textContent = S.libEditingBadge(it.name || it.id);
+    redraw();
+    card.scrollIntoView({ behavior: 'smooth' });
+  };
   app.appendChild(card);
   redraw();
 }
@@ -519,27 +743,48 @@ function islandCard() {
 async function main() {
   try { await navigator.storage.persist(); } catch (e) { /* best effort */ }
   header();
+  creationsCard();
   aircraftCard();
   await datCard();
   islandCard();
-  // Driven by the smoke test (and handy in the console).
+  // Driven by the smoke test (and handy in the console).  The two create APIs
+  // embed recipes exactly like the UI does, so anything made through them shows
+  // up as an editable creation in the library.
   window.ysfwWorkbench = {
     ready: true,
     installZip,
     listStock: stockIndex,
+    listCreations,
+    loadRecipe,
+    deleteCreation: async (id) => {
+      await opfs.removeRecord(id);
+      try { await opfs.gc(); } catch (e) {}
+      renderLibrary();
+      return { id, removed: true };
+    },
     makeDat: async (file, identify, knobs) => {
       const r = await fetch('./stock/' + file);
       if (!r.ok) throw new Error('stock fetch: HTTP ' + r.status);
       return makeDatFromBase(new Uint8Array(await r.arrayBuffer()), { identify, knobs });
     },
     assembleInstall: async (slots) => {
-      const asm = assembleAircraftZip(slots);
-      const res = await installZip(asm.zipBytes, asm.packName);
+      const asm = assembleAircraftZip({
+        ...slots,
+        recipe: {
+          packName: slots.name,
+          slots: Object.fromEntries(['dat', 'visual', 'collision', 'cockpit', 'coarse']
+            .map((k) => [k, slots[k] ? slots[k].name : null])),
+        },
+      });
+      const res = await saveOrReplace(asm.zipBytes, asm.packName, slots.replaceId);
+      renderLibrary();
       return { ...res, identify: asm.identify, warnings: asm.warnings, packName: asm.packName };
     },
     createScenery: async (opts) => {
-      const asm = assembleSceneryZip(opts);
-      const res = await installZip(asm.zipBytes, asm.packName);
+      const { replaceId, ...scenery } = opts;
+      const asm = assembleSceneryZip({ ...scenery, recipe: { scenery } });
+      const res = await saveOrReplace(asm.zipBytes, asm.packName, replaceId);
+      renderLibrary();
       return { ...res, ident: asm.ident, start: SCENERY_START };
     },
   };
