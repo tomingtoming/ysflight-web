@@ -74,6 +74,8 @@ emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \
     -DCMAKE_EXE_LINKER_FLAGS="-Oz"
 
 cmake --build "$BUILD_DIR" --target ysflight32_gl2 -j"$(nproc)"
+# Polygon Crest for the browser (experimental second wasm target).
+cmake --build "$BUILD_DIR" --target ysgebl_web -j"$(nproc)"
 
 # --- Stage dist/ with content-hashed asset names ------------------------------
 rm -rf "$DIST_DIR"
@@ -115,6 +117,17 @@ cp "$ROOT/web/vendor/fflate.js" "$DIST_DIR/vendor/"
 cp "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" "$DIST_DIR/"
 node "$ROOT/scripts/gen-stock-index.mjs" "$ROOT/upstream/YSFLIGHT/runtime" "$DIST_DIR/stock"
 
+# Polygon Crest (experimental): hash the modeler assets and point modeler.html
+# at them (same cache-busting pattern as the engine assets).
+MJS_H=$(hash8 "$BUILD_DIR/platform_emscripten/ysgebl_web.js")
+MWASM_H=$(hash8 "$BUILD_DIR/platform_emscripten/ysgebl_web.wasm")
+MDATA_H=$(hash8 "$BUILD_DIR/platform_emscripten/ysgebl_web.data")
+cp "$BUILD_DIR/platform_emscripten/ysgebl_web.js"   "$DIST_DIR/ysgebl_web.$MJS_H.js"
+cp "$BUILD_DIR/platform_emscripten/ysgebl_web.wasm" "$DIST_DIR/ysgebl_web.$MWASM_H.wasm"
+cp "$BUILD_DIR/platform_emscripten/ysgebl_web.data" "$DIST_DIR/ysgebl_web.$MDATA_H.data"
+sed "s|^.*// __MODELER_ASSET_LINE__\$|  var ASSET = {js:'ysgebl_web.$MJS_H.js',wasm:'ysgebl_web.$MWASM_H.wasm',data:'ysgebl_web.$MDATA_H.data'};|" \
+    "$ROOT/web/modeler.html" > "$DIST_DIR/modeler.html"
+
 # index.html: point the ASSET line at the hashed names.
 sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',data:'$DATA_FILE',build:'$BUILD_ID'};|" \
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
@@ -129,6 +142,8 @@ sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
 # COOP/COEP cross-origin isolation headers are not required.)
 cat > "$DIST_DIR/_headers" <<EOF
 /ysflight32_gl2.*
+  Cache-Control: public, max-age=31536000, immutable
+/ysgebl_web.*
   Cache-Control: public, max-age=31536000, immutable
 /icons/*
   Cache-Control: public, max-age=86400
