@@ -12,7 +12,10 @@
 // clearly-drawn halves (left/right pixel columns differ but are both lit).
 import { chromium } from 'playwright';
 
-const url = process.argv[2] || 'http://localhost:8923/index.html?freeflight=EAGLE';
+// NOTE: the aircraft must be a real engine identifier -- a bare "EAGLE" does
+// not exist (AddAirplane returns NULL, the engine silently falls back to the
+// menu and this test times out at "flight never started").
+const url = process.argv[2] || 'http://localhost:8923/index.html?freeflight=F-15C_EAGLE';
 const outDir = process.argv[3] || '.';
 
 const FATAL_PATTERNS = [
