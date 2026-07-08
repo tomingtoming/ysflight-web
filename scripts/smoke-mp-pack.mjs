@@ -24,9 +24,13 @@ const browser = await chromium.launch({
   args: ['--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'],
 });
 
-function die(msg, logs) {
+function die(msg, ...logSets) {
   console.error('SMOKE-MP-PACK FAILED: ' + msg);
-  if (logs) for (const l of logs.slice(-25)) console.error('  ' + l);
+  for (const logs of logSets) {
+    if (!logs) continue;
+    console.error('  --- ' + (logs.label || 'page') + ' ---');
+    for (const l of logs.slice(-30)) console.error('  ' + l);
+  }
   process.exit(1);
 }
 
@@ -78,8 +82,9 @@ if ((await join.p.evaluate(async () => (await window.ysfwPacks.list()).length)) 
 const result = await join.p.evaluate(async (a) => await window.ysfwPackNet.join(a.room, [a.id]), { room: ROOM, id: hostId });
 console.log('join result: ' + JSON.stringify(result));
 const after = await join.p.evaluate(async () => await window.ysfwPacks.list());
-if (!(result.installed || []).includes(hostId)) die('joiner did not install the host pack', join.logs);
-if (!after.some((p) => p.id === hostId)) die('host pack absent from joiner index after transfer', join.logs);
+join.logs.label = 'joiner'; host.logs.label = 'host';
+if (!(result.installed || []).includes(hostId)) die('joiner did not install the host pack', join.logs, host.logs);
+if (!after.some((p) => p.id === hostId)) die('host pack absent from joiner index after transfer', join.logs, host.logs);
 console.log('HAPPY PATH OK: joiner received + installed pack ' + hostId + ' over P2P (no manual install)');
 
 // ---- NEGATIVE: a corrupted transfer must be rejected, not installed ----
@@ -138,9 +143,10 @@ if ((await mjoin.p.evaluate(async () => (await window.ysfwPacks.list()).length))
 const sync2 = await mjoin.p.evaluate(async (room) => await window.ysfwPackNet.syncAsJoiner(room), ROOM2);
 console.log('multi-join sync: ' + JSON.stringify(sync2));
 const after2 = await mjoin.p.evaluate(async () => (await window.ysfwPacks.list()).map((p) => p.id));
+mjoin.logs.label = 'multi-joiner'; mhost.logs.label = 'multi-host';
 for (const id of multiIds) {
-  if (!(sync2.installed || []).includes(id)) die('multi-join: pack not synced: ' + id, mjoin.logs);
-  if (!after2.includes(id)) die('multi-join: synced pack absent from joiner index: ' + id, mjoin.logs);
+  if (!(sync2.installed || []).includes(id)) die('multi-join: pack not synced: ' + id, mjoin.logs, mhost.logs);
+  if (!after2.includes(id)) die('multi-join: synced pack absent from joiner index: ' + id, mjoin.logs, mhost.logs);
 }
 console.log('MULTI-PACK OK: joiner synced all ' + multiIds.length + ' packs via the manifest path (hub + per-pack OPFS serve)');
 
