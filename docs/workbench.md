@@ -86,6 +86,25 @@ loose ファイルの組み立ては**ブラウザ内で正規形の zip を合�
 成功させる**（エンジンは欠けたエントリを Cannot Load でスキップして生き続ける——
 挙動は変えず、見えなかったものを見せるだけ）。
 
+## 第三波（2026-07-08 同日実装）: 専用ページ化と「島を描く」
+
+- **専用ページ `workbench.html`（toming裁定「作るのは別の専用の場所で」）**: 作成系UIを
+  ゲーム起動パネルから全撤去し、**エンジン非搭載の専用ページ**に移設。成立の鍵は
+  **パックの真実がOPFSレコード**であること——ゲームページはboot時に全レコードを
+  materializeするので、ワークベンチで作った物は「次にゲームを開いたら存在する」。
+  ページ間の統合はリンク1本（`?freeflight=` で即飛行）。stock機体はビルド時に
+  `dist/stock/`（index.json＋.dat）へ静的出力（`scripts/gen-stock-index.mjs`）＝
+  25MBのwasm preloadなしで .dat ウィザードが動く。
+- **島を描く**: canvasに海岸線をドラッグで描く→ストロークが多角形化→
+  `assembleSceneryZip({islands})` が **PC2（見た目・凹多角形OK＝エンジンが読み込み時に
+  三角形分割）＋ PST `AREA LAND`（DEFAREA WATERを上書きする陸判定＝降りられる）** を
+  .fld に直書き。TER無し＝BASEELV 0mの平坦島。**PCKの行数は埋め込みテキストと厳密一致が
+  必須**（ローダが行数で数えてOUTSIDEに戻る）＝単体テストの主検査点。
+  マップは16km四方、START位置は島が機首前方に来るよう6km南から北向き。
+- **接地判定の根拠**（yssceneryio.cpp / ysscenery.cpp 実調査）: 見た目=PC2（判定に無関係）／
+  陸水=PST AREA（`GetAreaTypeFromPoint` はPSTループ内側を返しNOAREAならDEFAREA）／
+  標高=TERのみ（無ければ `baseElevation`）。三者は完全に直交。
+
 ## 第二波（2026-07-08 同日実装）: .dat ウィザードとシーナリーウィザード
 
 MVP と同日に2機能を追加。どちらも**エンジン改変ゼロ**（実ソース調査で確定した事実に立つ）。

@@ -1,19 +1,22 @@
-// Workbench smoke test: proves the loose-file assembly flow works end-to-end in
-// a real browser against the actual wasm engine — drop-equivalent loose
-// .dat/.dnm/.srf bytes -> assemble -> install through the normal pipeline ->
-// reload with ?freeflight=<IDENTIFY> -> the ENGINE resolves the assembled
-// aircraft to a loaded template ("Airplane:<name>" prints only on success; see
-// smoke-pack.mjs for the negative control).
+// Workbench smoke test: proves the DEDICATED workbench page (workbench.html,
+// engine-less) creates packs that the game page then flies — i.e. the OPFS
+// bridge between the two pages, end-to-end in a real browser:
+//
+//   workbench.html:  loose .dat/.dnm/.srf -> assemble -> OPFS record
+//                    stock base -> .dat wizard -> second aircraft (WB_CUSTOM1)
+//                    drawn islands -> scenery pack (WB_ISLAND, PC2+PST text)
+//   index.html:      ?freeflight boots the engine, materializes OPFS records,
+//                    and prints "Airplane:<name>" / "Field:<name>" ONLY when it
+//                    resolved them to loaded templates (see smoke-pack.mjs for
+//                    the negative control).
 //
 //   node scripts/smoke-workbench.mjs <url> [waitMs]
-//
-// The loose fixture is served as /test-pack.zip (the community fixture); the
-// page unzips it and hands the test1 aircraft's raw files to the workbench as
-// if they were dropped without any zip or .lst.
 import { chromium } from 'playwright';
 
 const url = process.argv[2] || 'http://localhost:8926/index.html';
 const bootMs = parseInt(process.argv[3] || '90000', 10);
+const wbUrl = new URL(url);
+wbUrl.pathname = wbUrl.pathname.replace(/index\.html$/, 'workbench.html');
 
 const browser = await chromium.launch({
   args: ['--autoplay-policy=no-user-gesture-required'],
@@ -38,20 +41,20 @@ function die(msg) {
   process.exit(1);
 }
 
-await page.goto(url);
+// ---- workbench page: create everything (no engine involved) --------------------
+await page.goto(wbUrl.toString());
 await page
-  .waitForFunction(() => window.ysfwPacks && window.ysfwPacks.fsReady === true, { timeout: 60000 })
-  .catch(() => die('pack layer never became ready (window.ysfwPacks.fsReady)'));
+  .waitForFunction(() => window.ysfwWorkbench && window.ysfwWorkbench.ready === true, { timeout: 30000 })
+  .catch(() => die('workbench page never became ready (window.ysfwWorkbench)'));
 
-// 1. Assemble + install from LOOSE bytes through the public workbench API (the
-//    same function the UI's "Assemble & import" button calls).
+// 1. Assemble + install from LOOSE bytes (the fixture aircraft's raw files).
 const res = await page
   .evaluate(async () => {
     const { unzipSync } = await import('./vendor/fflate.js');
     const r = await fetch('/test-pack.zip');
     const z = unzipSync(new Uint8Array(await r.arrayBuffer()));
     const f = (p) => ({ name: p.split('/').pop(), bytes: z[p] });
-    return await window.ysfwPacks.workbenchAssembleInstall({
+    return await window.ysfwWorkbench.assembleInstall({
       name: 'wbsmoke',
       dat: f('user/toming/test1.dat'),
       visual: f('user/toming/test1.dnm'),
@@ -59,32 +62,24 @@ const res = await page
     });
   })
   .catch((e) => die('workbench assemble/install threw: ' + e.message));
-
 console.log('assembled+installed: ' + JSON.stringify({ id: res.id, identify: res.identify, templates: res.templates }));
 if (!res || !/^[0-9a-f]{16}$/.test(res.id)) die('install returned no valid pack id');
 if (res.identify !== 'YSFW_TEST1') die('expected identify YSFW_TEST1, got ' + res.identify);
 if (res.templates !== 1) die('expected 1 template, got ' + res.templates);
 if ((res.warnings || []).length !== 0) die('unexpected warnings: ' + JSON.stringify(res.warnings));
 
-// 2. The installed pack's identities are readable (what the test-fly button uses).
-const ids = await page.evaluate((id) => window.ysfwPacks.aircraftIdentities(id), res.id);
-if (JSON.stringify(ids) !== JSON.stringify(['YSFW_TEST1'])) {
-  die('aircraftIdentities mismatch: ' + JSON.stringify(ids));
-}
-
-// 2b. The .dat wizard: derive a renamed, re-tuned .dat from a STOCK aircraft
-//     (readable pre-boot from the /ysflight preload) and assemble it with the
-//     fixture's visual/collision into a second aircraft.
+// 2. The .dat wizard: stock base (dist/stock, no wasm preload) -> renamed,
+//    re-tuned .dat -> second aircraft with the fixture's visual/collision.
 const wiz = await page
   .evaluate(async () => {
-    const stock = window.ysfwPacks.workbenchListStock();
+    const stock = await window.ysfwWorkbench.listStock();
     if (!stock.length) throw new Error('no stock aircraft listed');
     const f15 = stock.find((a) => a.identify === 'F-15C_EAGLE') || stock[0];
-    const dat = window.ysfwPacks.workbenchMakeDat(f15.datPath, 'WB_CUSTOM1', { engine: 2 });
+    const dat = await window.ysfwWorkbench.makeDat(f15.file, 'WB_CUSTOM1', { engine: 2 });
     const { unzipSync } = await import('./vendor/fflate.js');
     const z = unzipSync(new Uint8Array(await (await fetch('/test-pack.zip')).arrayBuffer()));
     const f = (p) => ({ name: p.split('/').pop(), bytes: z[p] });
-    const r = await window.ysfwPacks.workbenchAssembleInstall({
+    const r = await window.ysfwWorkbench.assembleInstall({
       name: 'wbcustom',
       dat: { name: 'wb_custom1.dat', bytes: dat.bytes },
       visual: f('user/toming/test1.dnm'),
@@ -97,17 +92,23 @@ console.log('dat wizard: ' + JSON.stringify(wiz));
 if (wiz.identify !== 'WB_CUSTOM1') die('expected WB_CUSTOM1, got ' + wiz.identify);
 if (wiz.stockCount < 50) die('stock list suspiciously small: ' + wiz.stockCount);
 
-// 2c. The scenery wizard: a minimal ocean field pack, installed like any other.
+// 3. The island scenery: a DRAWN map (two polygons -> PC2 visual + PST LAND).
 const scn = await page
-  .evaluate(() => window.ysfwPacks.workbenchCreateScenery({
-    name: 'WB_ISLAND', ground: [40, 90, 60], sky: [23, 106, 189], startAltM: 800,
+  .evaluate(() => window.ysfwWorkbench.createScenery({
+    name: 'WB_ISLAND', ground: [13, 58, 102], sky: [23, 106, 189], land: [60, 140, 80],
+    startAltM: 800,
+    islands: [
+      { points: [[-2000, -1500], [1500, -2200], [2400, 600], [0, 1800], [-2300, 900]] },
+      { points: [[3500, 3000], [4500, 2800], [4200, 4000]], color: [200, 180, 120] },
+    ],
   }))
-  .catch((e) => die('scenery wizard flow threw: ' + e.message));
-console.log('scenery wizard: ' + JSON.stringify({ id: scn.id, ident: scn.ident, start: scn.start }));
+  .catch((e) => die('island scenery flow threw: ' + e.message));
+console.log('island scenery: ' + JSON.stringify({ id: scn.id, ident: scn.ident, start: scn.start }));
 if (scn.ident !== 'WB_ISLAND' || scn.start !== 'START01') die('scenery wizard returned unexpected ident/start');
 
-// 3. Reload straight into a flight with the assembled aircraft.  "Airplane:
-//    YSFW_TEST1" prints ONLY when freeflight resolved it to a loaded template.
+// ---- game page: fly what the workbench made (the OPFS bridge) -------------------
+
+// 4. The loose-assembled aircraft flies.
 logs.length = 0;
 fatal.length = 0;
 const ff = new URL(url);
@@ -129,13 +130,13 @@ await page
     if (logs.some((l) => /Airplane:\s*YSFW_TEST1/.test(l))) { loaded = true; break; }
     await page.waitForTimeout(250);
   }
-  if (!loaded) die('engine never set up a flight with the assembled aircraft "YSFW_TEST1"');
+  if (!loaded) die('engine never set up a flight with the workbench-made aircraft "YSFW_TEST1"');
 }
 if (fatal.length) die('fatal engine output while flying the assembled aircraft');
-console.log('workbench: assembled pack flew via ?freeflight (real engine)');
+console.log('workbench->game: assembled pack flew via ?freeflight (real engine)');
 
-// 4. The wizard-made aircraft flies ON the wizard-made field: the full
-//    kid-loop payoff (my plane, my island) in one freeflight boot.
+// 5. The wizard-made aircraft flies ON the drawn island map: the full kid-loop
+//    payoff (my plane, my island) in one freeflight boot.
 logs.length = 0;
 fatal.length = 0;
 const ff2 = new URL(url);
@@ -158,11 +159,11 @@ await page
     airLoaded = airLoaded || logs.some((l) => /Airplane:\s*WB_CUSTOM1/.test(l));
     await page.waitForTimeout(250);
   }
-  if (!fieldLoaded) die('engine never loaded the wizard-made field "WB_ISLAND"');
+  if (!fieldLoaded) die('engine never loaded the drawn island field "WB_ISLAND"');
   if (!airLoaded) die('field loaded but the wizard-made aircraft "WB_CUSTOM1" did not fly');
 }
-if (fatal.length) die('fatal engine output while flying the wizard-made aircraft on the wizard-made field');
+if (fatal.length) die('fatal engine output while flying the wizard-made aircraft on the drawn map');
 
 await browser.close();
-console.log('workbench: wizard-made aircraft flew on wizard-made field (real engine)');
+console.log('workbench->game: wizard-made aircraft flew on the DRAWN island map (real engine)');
 console.log('SMOKE-WORKBENCH PASSED');

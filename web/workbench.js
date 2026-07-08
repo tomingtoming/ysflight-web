@@ -260,14 +260,22 @@ const num = (v, d) => (Math.round(v * 100) / 100).toFixed(d);
 // accepts is just the header block (ENDF is optional; LoadFld ends at EOF).
 // Ships the same normal-form zip as everything else: sce_<name>.lst pointing at
 // scenery/<name>.fld + .stp (3 tokens, same shape as the flying scnpack fixture).
+//
+// islands: [{points: [[xEastM, zSouthM], ...], color?: [r,g,b]}] — each becomes
+//   (a) a PC2 PLG polygon (the VISIBLE land; concave is fine, the engine
+//       tessellates on load) embedded via PCK — whose line count must match the
+//       embedded text EXACTLY (the loader counts lines back to OUTSIDE state) —
+//   (b) a PST loop with AREA LAND (the LANDABLE override over DEFAREA WATER;
+//       no TER means the island is flat at BASEELV 0m, so you can touch down).
 // Returns {zipBytes, ident, packName}.
-export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106, 189], startAltM = 1000, startSpeedMS = 100 }) {
+export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80], startAltM = 1000, startSpeedMS = 100, islands = [] }) {
   const ident = sanitizeIdentify(name);
   if (!ident) throw new Error('workbench: map name is required');
   const packName = ident.toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
   const fileStem = packName;
 
-  const fld = [
+  const polys = (islands || []).filter((i) => i && Array.isArray(i.points) && i.points.length >= 3);
+  const fldLines = [
     'FIELD',
     'GND ' + rgb(ground),
     'SKY ' + rgb(sky),
@@ -276,12 +284,34 @@ export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106
     'BASEELV 0.00m',
     'MAGVAR 0.00deg',
     'CANRESUME TRUE',
-    '',
-  ].join('\n');
+  ];
+  if (polys.length > 0) {
+    // One .pc2 holding every island polygon; referenced once below.
+    const pc2 = ['Pict2'];
+    for (const p of polys) {
+      pc2.push('PLG', 'COL ' + rgb(p.color || land));
+      for (const [x, z] of p.points) pc2.push('VER ' + num(x, 2) + ' ' + num(z, 2));
+      pc2.push('SPEC FALSE', 'ENDO');
+    }
+    pc2.push('ENDPICT');
+    fldLines.push('PCK "00000000.pc2" ' + pc2.length);
+    fldLines.push(...pc2);
+    fldLines.push('', ''); // saver-style trailing blanks (ignored OUTSIDE the PCK count)
+    fldLines.push('PC2', 'FIL "00000000.pc2"', 'POS 0.00 0.00 0.00 0.00 0.00 0.00', 'ID 0', 'END');
+    for (const p of polys) {
+      fldLines.push('PST', 'ISLOOP TRUE', 'AREA LAND');
+      for (const [x, z] of p.points) fldLines.push('PNT ' + num(x, 2) + ' 0.00 ' + num(z, 2));
+      fldLines.push('FIL ""', 'POS 0.00 0.00 0.00 0.00 0.00 0.00', 'ID 0', 'END');
+    }
+  }
+  fldLines.push('');
+  const fld = fldLines.join('\n');
 
+  // Spawn upwind of the origin so a drawn island around (0,0) is in front of
+  // the nose (heading 0 = north = -Z) rather than under the tail.
   const stp = [
     'N ' + SCENERY_START,
-    'C POSITION 0.00m ' + num(startAltM, 2) + 'm 0.00m',
+    'C POSITION 0.00m ' + num(startAltM, 2) + 'm ' + num(polys.length ? 6000 : 0, 2) + 'm',
     'C ATTITUDE 0.00deg 0.00deg 0.00deg',
     'C INITSPED ' + num(startSpeedMS, 2) + 'm/s',
     'C CTLTHROT 0.80',

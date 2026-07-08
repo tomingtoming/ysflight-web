@@ -148,6 +148,53 @@ test('assembleSceneryZip: minimal ocean field round-trips through analyzePack as
   assert.match(stp, /^C POSITION 0\.00m 800\.00m 0\.00m$/m);
 });
 
+test('assembleSceneryZip with islands: PC2 visual + PST AREA LAND, exact PCK line count', async () => {
+  const tri = [[-500, -500], [500, -500], [0, 500]];
+  const blob = [[-1000, 2000], [-800, 2400], [-400, 2500], [-200, 2100], [-600, 1900]];
+  const asm = assembleSceneryZip({
+    name: 'DRAWN', islands: [{ points: tri }, { points: blob, color: [200, 180, 120] }],
+  });
+  const { unzipSync } = await import('../web/vendor/fflate.js');
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/drawn.fld']);
+
+  // PCK count must equal the embedded pc2 line count EXACTLY (loader counts
+  // lines back to OUTSIDE state; a mismatch corrupts everything after it).
+  const m = fld.match(/^PCK "00000000\.pc2" (\d+)$/m);
+  assert.ok(m, 'PCK header present');
+  const lines = fld.split('\n');
+  const pckAt = lines.findIndex((l) => l.startsWith('PCK '));
+  const declared = parseInt(m[1], 10);
+  const embedded = lines.slice(pckAt + 1, pckAt + 1 + declared);
+  assert.equal(embedded[0], 'Pict2');
+  assert.equal(embedded[embedded.length - 1], 'ENDPICT');
+  assert.equal(embedded.filter((l) => l === 'PLG').length, 2);
+  assert.equal(embedded.filter((l) => l.startsWith('VER ')).length, tri.length + blob.length);
+  assert.ok(embedded.includes('COL 200 180 120'), 'per-island color');
+
+  // The visible polygon is referenced once, and each island gets a LAND loop.
+  assert.match(fld, /^PC2\nFIL "00000000\.pc2"\nPOS 0\.00 0\.00 0\.00 0\.00 0\.00 0\.00\nID 0\nEND$/m);
+  assert.equal((fld.match(/^AREA LAND$/gm) || []).length, 2);
+  assert.equal((fld.match(/^PNT /gm) || []).length, tri.length + blob.length);
+  assert.match(fld, /^PNT -500\.00 0\.00 -500\.00$/m);
+
+  // Still a valid pack through the normal pipeline.
+  const a = await analyzePack(asm.zipBytes, { sha256 });
+  assert.deepEqual(a.categories, ['scenery']);
+  assert.equal(a.diagnostics.missing, 0);
+
+  // The start position moves upwind so the drawn islands sit ahead of the nose.
+  const stp = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/drawn.stp']);
+  assert.match(stp, /^C POSITION 0\.00m 1000\.00m 6000\.00m$/m);
+});
+
+test('assembleSceneryZip without islands stays the proven 8-line header', async () => {
+  const asm = assembleSceneryZip({ name: 'PLAIN' });
+  const { unzipSync } = await import('../web/vendor/fflate.js');
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/plain.fld']);
+  assert.doesNotMatch(fld, /PCK|PC2|PST/);
+  assert.equal(fld.trim().split('\n').length, 8);
+});
+
 test('analyzePack surfaces unresolved references as diagnostics', async () => {
   // A pack whose list references a file the archive does not contain.
   const { zipSync } = await import('../web/vendor/fflate.js');

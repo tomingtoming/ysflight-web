@@ -12,11 +12,6 @@
 // directly.  Install/list only here; enable-disable + uninstall land in M3.
 
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
-import {
-  classifyLoose, assembleAircraftZip,
-  listStockAircraft, makeDatFromBase, sanitizeIdentify,
-  assembleSceneryZip, SCENERY_START,
-} from './workbench.js';
 import * as opfs from './opfs-store.js';
 import { createMemfsLru } from './memfs-lru.js';
 import { unzipSync } from './vendor/fflate.js';
@@ -74,56 +69,15 @@ const S = ({
     urlFail: '直接取得できませんでした（CORS／ネットワーク）。zip をDLしてドロップしてください',
     urlFail404: (s) => 'URL を取得できませんでした（' + s + '）。リンクが正しいか確認してください',
     dropZone: 'パック (.zip) を1つ以上ドロップ / クリックして選択',
-    dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください。機体の .dat / .dnm / .srf を直接ドロップすると、その場で1機に組み立てられます',
-    wbTitle: '🛠 機体を組む（ワークベンチ）',
-    wbIntro: 'ドロップされたファイルを機体パックに組み立てます。割り当てを確認してください',
-    wbSlotDat: '飛行特性 (.dat) ※必須',
-    wbSlotVisual: '外観モデル (.dnm) ※必須',
-    wbSlotColl: '当たり判定 (.srf) ※必須',
-    wbSlotCockpit: 'コックピット (.srf)',
-    wbSlotCoarse: '遠景モデル (.dnm)',
-    wbName: 'パック名',
-    wbNone: '（なし）',
-    wbAssemble: '組み立てて取り込む',
-    wbClose: '閉じる',
-    wbDone: (n) => '✓ 機体パック「' + n + '」を取り込みました',
-    wbWorking: '組み立て中…',
-    wbWarn: {
-      'coarse-needs-cockpit': '⚠ 遠景モデルは外しました（コックピット指定がないと5番目に置けません）',
-      'no-ascii-identify': '⚠ .dat に ASCII の IDENTIFY が見つかりません（テスト飛行ボタンで機体名を指定できないため、メニューから選んでください）',
-    },
-    wbErrMap: {
-      NO_DAT: '飛行特性 (.dat) を割り当ててください',
-      NO_VISUAL: '外観モデル (.dnm) を割り当ててください',
-      NO_COLLISION: '当たり判定 (.srf) を割り当ててください',
-    },
-    wbIgnored: (names) => '— 対象外のファイル: ' + names.join(', '),
+    dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください',
+    wbLink: '🛠 ワークベンチ — 機体とマップを作る',
+    wbLinkTitle: '専用ページで機体を組む・.datを作る・島を描く（作ったものは次回起動から使えます）',
+    looseHint: (names) => '— ' + names.join(', ') + ' : 機体のファイルはワークベンチ（🛠）で組み立てられます',
     flyBtn: '🛫',
     flyTitle: 'テスト飛行 — この機体で滑走路から即離陸（ページをリロードします）',
-    flyNow: '🛫 テスト飛行',
     flyPick: '機体を選択:',
     flyNoIdent: 'この機体は名前指定で起動できません（.dat に ASCII の IDENTIFY が無い）。プレイ開始からメニューで選んでください',
     diagWarn: (n, samples) => '⚠ パック内のリストが参照する ' + n + ' ファイルが見つかりません（該当エントリは飛べません）' + (samples.length ? ' 例: ' + samples.slice(0, 3).join(', ') : ''),
-    datWizBtn: 'stockから作る…',
-    datWizTitle: '✏️ 飛行特性 (.dat) を作る',
-    datWizIntro: '元になる機体を選んで、名前を付けて、性能を倍率でいじれます',
-    datWizBase: '元になる機体',
-    datWizName: '新しい機体名（英数字）',
-    datWizKnobs: { engine: 'エンジン出力', weight: '機体の重さ', speed: '最高速度', agility: '操縦の鋭さ' },
-    datWizUse: 'この .dat を使う',
-    datWizGenerated: (n) => '（生成）' + n + '.dat',
-    datWizDup: '⚠ その名前は既存の機体と重複しています（先に読まれた方が勝つので別名を推奨）',
-    datWizNeedName: '新しい機体名を入れてください',
-    sceneryBtn: '🏝 マップを作る',
-    sceneryTitle: '🏝 マップを作る（海フィールド）',
-    sceneryIntro: '自分の空と海の色のマップを作って、そこで飛べます',
-    sceneryName: 'マップ名（英数字）',
-    sceneryGround: '地面・海の色',
-    scenerySky: '空の色',
-    sceneryAlt: '開始高度 (m)',
-    sceneryMake: '作って取り込む',
-    sceneryDone: (n) => '✓ マップ「' + n + '」を取り込みました',
-    sceneryFly: '🛫 このマップで飛ぶ',
     postPlayHint: 'プレイ開始後、エンジンのメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
     errMap: {
       noList: 'YSFLIGHT のリスト（aircraft/air*.lst など）が見つかりません。zip の直下に aircraft/ や scenery/ があるか確認してください',
@@ -185,56 +139,15 @@ const S = ({
     urlFail: 'Could not fetch directly (CORS / network). Download the zip and drop it here',
     urlFail404: (s) => 'Could not fetch the URL (' + s + '). Check the link is correct',
     dropZone: 'Drop one or more packs (.zip) / click to choose',
-    dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level. Drop loose aircraft .dat / .dnm / .srf files to assemble them into a pack right here',
-    wbTitle: '🛠 Aircraft workbench',
-    wbIntro: 'Assembling the dropped files into an aircraft pack — check the slot assignment',
-    wbSlotDat: 'Flight model (.dat) — required',
-    wbSlotVisual: 'Visual model (.dnm) — required',
-    wbSlotColl: 'Collision shell (.srf) — required',
-    wbSlotCockpit: 'Cockpit (.srf)',
-    wbSlotCoarse: 'Coarse/LOD model (.dnm)',
-    wbName: 'Pack name',
-    wbNone: '(none)',
-    wbAssemble: 'Assemble & import',
-    wbClose: 'Close',
-    wbDone: (n) => '✓ Imported aircraft pack “' + n + '”',
-    wbWorking: 'Assembling…',
-    wbWarn: {
-      'coarse-needs-cockpit': '⚠ Coarse model dropped (slot 5 needs a cockpit in slot 4)',
-      'no-ascii-identify': '⚠ No ASCII IDENTIFY in the .dat — the test-fly button can’t name this aircraft; pick it from the engine menu instead',
-    },
-    wbErrMap: {
-      NO_DAT: 'Assign a flight model (.dat)',
-      NO_VISUAL: 'Assign a visual model (.dnm)',
-      NO_COLLISION: 'Assign a collision shell (.srf)',
-    },
-    wbIgnored: (names) => '— not usable here: ' + names.join(', '),
+    dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level',
+    wbLink: '🛠 Workbench — build aircraft & maps',
+    wbLinkTitle: 'A dedicated page to assemble aircraft, make a .dat, and draw islands (available in-game on next load)',
+    looseHint: (names) => '— ' + names.join(', ') + ' : assemble loose aircraft files in the Workbench (🛠)',
     flyBtn: '🛫',
     flyTitle: 'Test-fly — take off with this aircraft right away (reloads the page)',
-    flyNow: '🛫 Test-fly',
     flyPick: 'Pick an aircraft:',
     flyNoIdent: 'This aircraft can’t be launched by name (no ASCII IDENTIFY in its .dat). Press Play and pick it from the menu',
     diagWarn: (n, samples) => '⚠ ' + n + ' file(s) referenced by the pack’s lists are missing (those entries won’t fly)' + (samples.length ? ' e.g. ' + samples.slice(0, 3).join(', ') : ''),
-    datWizBtn: 'Make from stock…',
-    datWizTitle: '✏️ Make a flight model (.dat)',
-    datWizIntro: 'Pick a base aircraft, name yours, and scale its performance',
-    datWizBase: 'Base aircraft',
-    datWizName: 'New aircraft name (ASCII)',
-    datWizKnobs: { engine: 'Engine power', weight: 'Weight', speed: 'Top speed', agility: 'Handling sharpness' },
-    datWizUse: 'Use this .dat',
-    datWizGenerated: (n) => '(generated) ' + n + '.dat',
-    datWizDup: '⚠ That name clashes with an existing aircraft (first one loaded wins — pick another)',
-    datWizNeedName: 'Enter a new aircraft name',
-    sceneryBtn: '🏝 Make a map',
-    sceneryTitle: '🏝 Make a map (ocean field)',
-    sceneryIntro: 'Make a map with your own sky and sea colors, then fly there',
-    sceneryName: 'Map name (ASCII)',
-    sceneryGround: 'Ground / sea color',
-    scenerySky: 'Sky color',
-    sceneryAlt: 'Start altitude (m)',
-    sceneryMake: 'Create & import',
-    sceneryDone: (n) => '✓ Imported map “' + n + '”',
-    sceneryFly: '🛫 Fly on this map',
     postPlayHint: 'After Play, open Simulation → Create Flight in the engine menu to fly your installed aircraft & maps',
     errMap: {
       noList: 'No YSFLIGHT list found (aircraft/air*.lst, etc.). Make sure the zip has folders like aircraft/ or scenery/ at its top level',
@@ -760,8 +673,8 @@ async function handleFiles(fileList) {
   const status = document.getElementById('ysfw-pack-status');
   const all = Array.from(fileList);
   const zips = all.filter((f) => /\.zip$/i.test(f.name));
-  // Loose aircraft files route to the workbench (assembled into a pack in-page)
-  // instead of the "not a zip" skip pile.
+  // Loose aircraft files belong in the dedicated workbench page (creation
+  // space); here they just get a pointer instead of the "not a zip" pile.
   const loose = all.filter((f) => /\.(dat|dnm|srf)$/i.test(f.name));
   const nonZip = all.filter((f) => !/\.zip$/i.test(f.name) && !/\.(dat|dnm|srf)$/i.test(f.name));
   const failed = [];          // { name, error }
@@ -776,6 +689,7 @@ async function handleFiles(fileList) {
   const tail = () => [
     ...failed.map((f) => '✗ ' + f.name + ': ' + friendlyErr(f.error)),
     ...warned,
+    ...(loose.length ? [S.looseHint(loose.map((f) => f.name))] : []),
     ...nonZip.map((f) => '— ' + f.name + ' ' + S.notZip),
   ];
   const setStatus = (head) => { if (status) status.textContent = [head, ...tail()].join('\n'); };
@@ -818,14 +732,7 @@ async function handleFiles(fileList) {
   if (zips.length > 0) {
     setStatus(S.bulkDone(okCount, failed.length)); // done summary LAST, after the list is shown
   } else if (status) {
-    status.textContent = tail().join('\n'); // loose-only drop: no zip progress to report
-  }
-
-  // Loose aircraft files -> open the workbench with their bytes for assembly.
-  if (loose.length > 0) {
-    const entries = [];
-    for (const f of loose) entries.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
-    renderWorkbench(entries);
+    status.textContent = tail().join('\n'); // loose-only drop: point at the workbench page
   }
 }
 
@@ -860,369 +767,6 @@ async function aircraftIdentities(id) {
   return out;
 }
 
-// Assemble loose aircraft files and install the resulting pack through the
-// normal pipeline.  `slots` = {name?, dat, visual, collision, cockpit?, coarse?}
-// with {name, bytes} values.  Shared by the workbench UI and the smoke test.
-async function workbenchAssembleInstall(slots) {
-  const asm = assembleAircraftZip(slots);
-  const res = await installFromBytes(asm.zipBytes, asm.packName);
-  return { ...res, identify: asm.identify, warnings: asm.warnings, packName: asm.packName };
-}
-
-// Render (or re-render) the workbench assembly card for a batch of loose files.
-// Lives in the placeholder div renderPanel leaves after the drop zone.
-function renderWorkbench(entries) {
-  const slot = document.getElementById('ysfw-workbench');
-  if (!slot) return;
-  slot.innerHTML = '';
-  slot.style.display = 'block';
-
-  const { candidates, guess, ignored } = classifyLoose(entries);
-  const byName = new Map(entries.map((e) => [e.name.split(/[\\/]/).pop(), e]));
-
-  const card = document.createElement('div');
-  card.style.cssText =
-    'margin-top:8px;padding:10px;border:1px solid ' + ACCENT + ';border-radius:8px;background:rgba(77,163,255,.05)';
-  const title = document.createElement('div');
-  title.textContent = S.wbTitle;
-  title.style.cssText = 'color:#cfe0f5;font-size:13px;font-weight:600;margin-bottom:2px';
-  card.appendChild(title);
-  const intro = document.createElement('div');
-  intro.textContent = S.wbIntro;
-  intro.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:8px';
-  card.appendChild(intro);
-
-  const mkSelect = (label, cands, preselect, required) => {
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
-    const lab = document.createElement('span');
-    lab.textContent = label;
-    lab.style.cssText = 'flex:none;width:46%;color:#8fa3bb;font-size:12px';
-    const sel = document.createElement('select');
-    sel.style.cssText =
-      'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
-    if (!required) {
-      const opt = document.createElement('option');
-      opt.value = '';
-      opt.textContent = S.wbNone;
-      sel.appendChild(opt);
-    }
-    for (const c of cands) {
-      const opt = document.createElement('option');
-      opt.value = c.name;
-      opt.textContent = c.name;
-      sel.appendChild(opt);
-    }
-    sel.value = preselect || (required ? (cands[0] && cands[0].name) || '' : '');
-    row.appendChild(lab);
-    row.appendChild(sel);
-    card.appendChild(row);
-    return sel;
-  };
-
-  const selDat = mkSelect(S.wbSlotDat, candidates.dat, guess.dat, true);
-  // A loose pile without a .dat is the expected shape for a fresh model out of a
-  // modeler — offer the stock-based .dat wizard right on the slot.
-  let generatedDat = null;
-  {
-    const datRow = selDat.parentElement;
-    const wizBtn = document.createElement('button');
-    wizBtn.textContent = S.datWizBtn;
-    wizBtn.style.cssText =
-      'flex:none;font-size:11px;padding:4px 8px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#8fa3bb';
-    wizBtn.addEventListener('click', () => renderDatWizard(card, (dat) => {
-      generatedDat = dat;
-      let opt = selDat.querySelector('option[value="@generated"]');
-      if (!opt) {
-        opt = document.createElement('option');
-        opt.value = '@generated';
-        selDat.appendChild(opt);
-      }
-      opt.textContent = S.datWizGenerated(dat.identify);
-      selDat.value = '@generated';
-    }));
-    datRow.appendChild(wizBtn);
-  }
-  const selVisual = mkSelect(S.wbSlotVisual, candidates.dnm, guess.visual, true);
-  const selColl = mkSelect(S.wbSlotColl, candidates.srf, guess.collision, true);
-  const selCockpit = mkSelect(S.wbSlotCockpit, candidates.srf, guess.cockpit, false);
-  const selCoarse = mkSelect(S.wbSlotCoarse, candidates.dnm, guess.coarse, false);
-
-  const nameRow = document.createElement('div');
-  nameRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
-  const nameLab = document.createElement('span');
-  nameLab.textContent = S.wbName;
-  nameLab.style.cssText = 'flex:none;width:46%;color:#8fa3bb;font-size:12px';
-  const nameIn = document.createElement('input');
-  nameIn.type = 'text';
-  nameIn.placeholder = (guess.dat || '').replace(/\.dat$/i, '');
-  nameIn.style.cssText =
-    'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
-  nameRow.appendChild(nameLab);
-  nameRow.appendChild(nameIn);
-  card.appendChild(nameRow);
-
-  const msg = document.createElement('div');
-  msg.style.cssText = 'color:#8fa3bb;font-size:12px;white-space:pre-line;margin-bottom:6px';
-  if (ignored.length) msg.textContent = S.wbIgnored(ignored);
-  card.appendChild(msg);
-
-  const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:6px;justify-content:flex-end';
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = S.wbClose;
-  closeBtn.style.cssText =
-    'font-size:12px;padding:6px 12px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#8fa3bb';
-  closeBtn.addEventListener('click', () => { slot.innerHTML = ''; slot.style.display = 'none'; });
-  const goBtn = document.createElement('button');
-  goBtn.textContent = S.wbAssemble;
-  goBtn.style.cssText =
-    'font-size:12px;padding:6px 14px;border-radius:5px;cursor:pointer;border:1px solid ' +
-    ACCENT + ';background:rgba(77,163,255,.15);color:' + ACCENT;
-  goBtn.addEventListener('click', async () => {
-    goBtn.disabled = true;
-    msg.textContent = S.wbWorking;
-    try {
-      const pick = (sel) => (sel.value === '@generated' ? generatedDat
-        : sel.value ? byName.get(sel.value) : null);
-      const res = await workbenchAssembleInstall({
-        name: nameIn.value.trim() || undefined,
-        dat: pick(selDat), visual: pick(selVisual), collision: pick(selColl),
-        cockpit: pick(selCockpit), coarse: pick(selCoarse),
-      });
-      const lines = [S.wbDone(res.packName)];
-      for (const w of res.warnings) if (S.wbWarn[w]) lines.push(S.wbWarn[w]);
-      msg.textContent = lines.join('\n');
-      // Replace the action row with the payoff: fly the assembled aircraft NOW.
-      btnRow.innerHTML = '';
-      btnRow.appendChild(closeBtn);
-      if (res.identify) {
-        const flyBtn = document.createElement('button');
-        flyBtn.textContent = S.flyNow;
-        flyBtn.title = S.flyTitle;
-        flyBtn.style.cssText =
-          'font-size:12px;padding:6px 14px;border-radius:5px;cursor:pointer;border:1px solid ' +
-          ACCENT + ';background:rgba(77,163,255,.15);color:' + ACCENT;
-        flyBtn.addEventListener('click', () => flyFreeflight(res.identify));
-        btnRow.appendChild(flyBtn);
-      }
-    } catch (e) {
-      const m = (e && e.message) || String(e);
-      msg.textContent = S.errorPrefix + (workbenchFriendlyErr(m) || friendlyErr(m));
-      goBtn.disabled = false;
-    }
-  });
-  btnRow.appendChild(closeBtn);
-  btnRow.appendChild(goBtn);
-  card.appendChild(btnRow);
-  slot.appendChild(card);
-}
-
-// Map workbench assembly errors (workbench.js ERR codes) to friendly strings.
-function workbenchFriendlyErr(m) {
-  if (/missing \.dat/.test(m)) return S.wbErrMap.NO_DAT;
-  if (/missing visual/.test(m)) return S.wbErrMap.NO_VISUAL;
-  if (/missing collision/.test(m)) return S.wbErrMap.NO_COLLISION;
-  return null;
-}
-
-// Every aircraft IDENTIFY currently visible to the engine: stock + installed
-// packs.  Used by the .dat wizard's duplicate check (FindAirplaneTemplate
-// returns the FIRST 31-char match, so a clash silently shadows one aircraft).
-async function knownIdentities() {
-  const known = new Set(listStockAircraft(FS).map((a) => a.identify));
-  for (const p of await ensureCache()) {
-    if ((p.categories || []).includes('aircraft')) {
-      for (const idn of await aircraftIdentities(p.id)) known.add(idn);
-    }
-  }
-  return known;
-}
-
-// The .dat wizard card: base aircraft select + new name + multiplier knobs.
-// Appends to `parent` (the workbench card); onUse receives the generated slot
-// value {name, bytes, identify}.
-function renderDatWizard(parent, onUse) {
-  if (parent.querySelector('.ysfw-dat-wizard')) return;
-  const wiz = document.createElement('div');
-  wiz.className = 'ysfw-dat-wizard';
-  wiz.style.cssText = 'margin:6px 0 8px;padding:8px;border:1px dashed #2a3647;border-radius:6px';
-  const title = document.createElement('div');
-  title.textContent = S.datWizTitle;
-  title.style.cssText = 'color:#cfe0f5;font-size:12px;font-weight:600';
-  const intro = document.createElement('div');
-  intro.textContent = S.datWizIntro;
-  intro.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:6px';
-  wiz.appendChild(title);
-  wiz.appendChild(intro);
-
-  const stock = listStockAircraft(FS);
-  const row = (label, el) => {
-    const r = document.createElement('div');
-    r.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:5px';
-    const lab = document.createElement('span');
-    lab.textContent = label;
-    lab.style.cssText = 'flex:none;width:46%;color:#8fa3bb;font-size:12px';
-    r.appendChild(lab);
-    r.appendChild(el);
-    wiz.appendChild(r);
-    return el;
-  };
-  const baseSel = document.createElement('select');
-  baseSel.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
-  for (const a of stock) {
-    const opt = document.createElement('option');
-    opt.value = a.datPath;
-    opt.textContent = a.identify;
-    baseSel.appendChild(opt);
-  }
-  row(S.datWizBase, baseSel);
-  const nameIn = document.createElement('input');
-  nameIn.type = 'text';
-  nameIn.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
-  row(S.datWizName, nameIn);
-
-  const knobs = {};
-  for (const k of ['engine', 'weight', 'speed', 'agility']) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'flex:1;display:flex;align-items:center;gap:6px;min-width:0';
-    const slider = document.createElement('input');
-    slider.type = 'range';
-    slider.min = '0.5';
-    slider.max = '3';
-    slider.step = '0.1';
-    slider.value = '1';
-    slider.style.cssText = 'flex:1;min-width:0';
-    const val = document.createElement('span');
-    val.textContent = '×1.0';
-    val.style.cssText = 'flex:none;color:#cfe0f5;font-size:11px;width:34px;text-align:right';
-    slider.addEventListener('input', () => { val.textContent = '×' + Number(slider.value).toFixed(1); });
-    wrap.appendChild(slider);
-    wrap.appendChild(val);
-    row(S.datWizKnobs[k], wrap);
-    knobs[k] = slider;
-  }
-
-  const msg = document.createElement('div');
-  msg.style.cssText = 'color:#8fa3bb;font-size:11px;white-space:pre-line;margin:4px 0';
-  wiz.appendChild(msg);
-  const useBtn = document.createElement('button');
-  useBtn.textContent = S.datWizUse;
-  useBtn.style.cssText =
-    'font-size:12px;padding:5px 12px;border-radius:5px;cursor:pointer;border:1px solid ' +
-    ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT;
-  useBtn.addEventListener('click', async () => {
-    const name = nameIn.value.trim();
-    if (!name) { msg.textContent = S.datWizNeedName; return; }
-    try {
-      const base = FS.readFile(baseSel.value);
-      const dat = makeDatFromBase(base, {
-        identify: name,
-        knobs: Object.fromEntries(Object.entries(knobs).map(([k, s]) => [k, Number(s.value)])),
-      });
-      msg.textContent = '';
-      if ((await knownIdentities()).has(dat.identify)) msg.textContent = S.datWizDup;
-      onUse({ name: dat.identify.toLowerCase() + '.dat', bytes: dat.bytes, identify: dat.identify });
-      wiz.remove();
-    } catch (e) {
-      msg.textContent = S.errorPrefix + ((e && e.message) || e);
-    }
-  });
-  wiz.appendChild(useBtn);
-  parent.insertBefore(wiz, parent.children[2] || null); // right under the intro line
-}
-
-// The scenery wizard card: name + colors + start altitude -> a flyable ocean
-// field pack, imported through the normal pipeline, with a fly-now button.
-function renderSceneryWizard() {
-  const slot = document.getElementById('ysfw-workbench');
-  if (!slot) return;
-  slot.innerHTML = '';
-  slot.style.display = 'block';
-
-  const card = document.createElement('div');
-  card.style.cssText =
-    'margin-top:8px;padding:10px;border:1px solid ' + ACCENT + ';border-radius:8px;background:rgba(77,163,255,.05)';
-  const title = document.createElement('div');
-  title.textContent = S.sceneryTitle;
-  title.style.cssText = 'color:#cfe0f5;font-size:13px;font-weight:600;margin-bottom:2px';
-  const intro = document.createElement('div');
-  intro.textContent = S.sceneryIntro;
-  intro.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:8px';
-  card.appendChild(title);
-  card.appendChild(intro);
-
-  const row = (label, el) => {
-    const r = document.createElement('div');
-    r.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
-    const lab = document.createElement('span');
-    lab.textContent = label;
-    lab.style.cssText = 'flex:none;width:46%;color:#8fa3bb;font-size:12px';
-    r.appendChild(lab);
-    r.appendChild(el);
-    card.appendChild(r);
-    return el;
-  };
-  const nameIn = row(S.sceneryName, Object.assign(document.createElement('input'), { type: 'text' }));
-  nameIn.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
-  const groundIn = row(S.sceneryGround, Object.assign(document.createElement('input'), { type: 'color', value: '#285a3c' }));
-  const skyIn = row(S.scenerySky, Object.assign(document.createElement('input'), { type: 'color', value: '#176abd' }));
-  const altIn = row(S.sceneryAlt, Object.assign(document.createElement('input'), { type: 'number', value: '1000', min: '100', max: '10000' }));
-  altIn.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
-
-  const msg = document.createElement('div');
-  msg.style.cssText = 'color:#8fa3bb;font-size:12px;white-space:pre-line;margin-bottom:6px';
-  card.appendChild(msg);
-
-  const hex2rgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
-  const btnRow = document.createElement('div');
-  btnRow.style.cssText = 'display:flex;gap:6px;justify-content:flex-end';
-  const closeBtn = document.createElement('button');
-  closeBtn.textContent = S.wbClose;
-  closeBtn.style.cssText =
-    'font-size:12px;padding:6px 12px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#8fa3bb';
-  closeBtn.addEventListener('click', () => { slot.innerHTML = ''; slot.style.display = 'none'; });
-  const goBtn = document.createElement('button');
-  goBtn.textContent = S.sceneryMake;
-  goBtn.style.cssText =
-    'font-size:12px;padding:6px 14px;border-radius:5px;cursor:pointer;border:1px solid ' +
-    ACCENT + ';background:rgba(77,163,255,.15);color:' + ACCENT;
-  goBtn.addEventListener('click', async () => {
-    goBtn.disabled = true;
-    msg.textContent = S.wbWorking;
-    try {
-      const res = await workbenchCreateScenery({
-        name: nameIn.value.trim(),
-        ground: hex2rgb(groundIn.value),
-        sky: hex2rgb(skyIn.value),
-        startAltM: Math.max(100, Number(altIn.value) || 1000),
-      });
-      msg.textContent = S.sceneryDone(res.ident);
-      btnRow.innerHTML = '';
-      btnRow.appendChild(closeBtn);
-      const flyBtn = document.createElement('button');
-      flyBtn.textContent = S.sceneryFly;
-      flyBtn.title = S.flyTitle;
-      flyBtn.style.cssText = goBtn.style.cssText;
-      flyBtn.addEventListener('click', () => flyFreeflight('F-15C_EAGLE', res.ident, res.start));
-      btnRow.appendChild(flyBtn);
-    } catch (e) {
-      msg.textContent = S.errorPrefix + (friendlyErr((e && e.message) || String(e)));
-      goBtn.disabled = false;
-    }
-  });
-  btnRow.appendChild(closeBtn);
-  btnRow.appendChild(goBtn);
-  card.appendChild(btnRow);
-  slot.appendChild(card);
-}
-
-// Assemble + install a wizard-made scenery pack (shared by UI and smoke).
-async function workbenchCreateScenery(opts) {
-  const asm = assembleSceneryZip(opts);
-  const res = await installFromBytes(asm.zipBytes, asm.packName);
-  return { ...res, ident: asm.ident, start: SCENERY_START };
-}
 
 function renderPanel() {
   const overlay = document.getElementById('overlay');
@@ -1478,20 +1022,18 @@ function renderPanel() {
   dropHintEl.style.cssText = 'color:#7d93b0;font-size:10.5px;margin-top:4px;text-align:center';
   packBody.appendChild(dropHintEl);
 
-  // Workbench placeholder: filled by renderWorkbench when loose aircraft files
-  // (.dat/.dnm/.srf) are dropped, or by the scenery wizard; hidden otherwise.
-  const wbSlot = document.createElement('div');
-  wbSlot.id = 'ysfw-workbench';
-  wbSlot.style.display = 'none';
-  packBody.appendChild(wbSlot);
-
-  // Scenery wizard entry: make a flyable ocean field with your own colors.
-  const sceneryBtn = document.createElement('button');
-  sceneryBtn.textContent = S.sceneryBtn;
-  sceneryBtn.style.cssText =
-    'margin-top:6px;font-size:12px;padding:6px 12px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#8fa3bb';
-  sceneryBtn.addEventListener('click', renderSceneryWizard);
-  packBody.appendChild(sceneryBtn);
+  // Creation lives on its own page: the workbench (assemble aircraft, make a
+  // .dat from stock, draw island maps).  Packs made there are OPFS records,
+  // which this page materializes at every boot — so the link IS the whole
+  // integration.
+  const wbLink = document.createElement('a');
+  wbLink.href = 'workbench.html' + (LANG === 'ja' ? '' : '?lang=' + LANG);
+  wbLink.textContent = S.wbLink;
+  wbLink.title = S.wbLinkTitle;
+  wbLink.style.cssText =
+    'display:block;margin-top:8px;padding:9px 12px;border:1px solid #2a3647;border-radius:6px;' +
+    'color:#8fa3bb;font-size:12.5px;text-decoration:none;text-align:center';
+  packBody.appendChild(wbLink);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
   // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
@@ -1997,12 +1539,7 @@ window.ysfwPacks = {
   packMetaBundleForHost, // multiplayer host (Step 1): serve a pack's .lst/.dat/.stp meta bundle
   installMetaBundle,     // multiplayer joiner (Step 1): sparse-install many packs from one meta bundle
   memfsStats: () => (lru ? lru.stats() : null), // layer3 LRU observability (smoke/debug)
-  workbenchAssembleInstall, // workbench: assemble loose aircraft files + install (smoke/debug)
-  aircraftIdentities,       // workbench: ASCII identities of an installed pack (smoke/debug)
-  workbenchCreateScenery,   // workbench: wizard-made ocean field pack (smoke/debug)
-  workbenchListStock: () => listStockAircraft(FS),   // workbench: stock aircraft for the .dat wizard
-  workbenchMakeDat: (datPath, identify, knobs) =>    // workbench: stock-based .dat (smoke/debug)
-    makeDatFromBase(FS.readFile(datPath), { identify, knobs }),
+  aircraftIdentities,       // test-fly button: ASCII identities of an installed pack (smoke/debug)
 };
 window.ysfwPacksInit = init;
 
