@@ -758,9 +758,46 @@
   });
 
   // PWA: cache the app for instant reload and offline play.
+  //
+  // Update notification: sw.js skipWaiting()s and the HTML is served
+  // network-first, so a RELOAD always picks up a new deploy -- but a long-lived
+  // tab never learns one happened.  In multiplayer that silently leaves one
+  // player on an old build (real incident: a joiner's stale client could not
+  // use a pack field until a hard reload).  So: check for updates periodically
+  // and when the tab becomes visible, and when a new worker takes over show a
+  // small reload chip.  Never auto-reload -- the player may be mid-flight.
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('sw.js').catch(function () {});
+      navigator.serviceWorker.register('sw.js').then(function (reg) {
+        // Only a page that ALREADY had a controller is seeing an update
+        // (first-ever install also fires updatefound; no chip for that).
+        var hadController = !!navigator.serviceWorker.controller;
+        function showUpdateChip() {
+          if (!hadController || document.getElementById('ysfw-update-chip')) return;
+          var ja = ((document.documentElement.lang || navigator.language || '') + '').toLowerCase().indexOf('ja') === 0;
+          var chip = document.createElement('div');
+          chip.id = 'ysfw-update-chip';
+          chip.textContent = ja ? '新しいバージョンがあります — タップで更新' : 'Update available — tap to reload';
+          chip.style.cssText = 'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:10000;' +
+            'background:rgba(30,90,180,.92);color:#fff;padding:9px 16px;border-radius:8px;' +
+            'font:14px system-ui,sans-serif;cursor:pointer;user-select:none;box-shadow:0 2px 10px rgba(0,0,0,.4)';
+          chip.onclick = function () { location.reload(); };
+          document.body.appendChild(chip);
+        }
+        if (reg.waiting) showUpdateChip();
+        reg.addEventListener('updatefound', function () {
+          var w = reg.installing;
+          if (!w) return;
+          w.addEventListener('statechange', function () {
+            if (w.state === 'activated' || w.state === 'waiting') showUpdateChip();
+          });
+        });
+        function checkForUpdate() { try { reg.update().catch(function () {}); } catch (e) {} }
+        setInterval(checkForUpdate, 60 * 60 * 1000);
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') checkForUpdate();
+        });
+      }).catch(function () {});
     });
   }
 
