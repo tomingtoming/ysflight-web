@@ -86,6 +86,19 @@ loose ファイルの組み立ては**ブラウザ内で正規形の zip を合�
 成功させる**（エンジンは欠けたエントリを Cannot Load でスキップして生き続ける——
 挙動は変えず、見えなかったものを見せるだけ）。
 
+## 第五波（2026-07-08 同日実装）: Polygon Crest ファイルブリッジ（P1）
+
+- **OPFSステージング（`web/staging.js`・`workbench-staging/`）が2つのwasmページの橋**:
+  モデラ（modeler.html）で保存した .srf/.dnm/.dat は、ブリッジ（`web/modeler-bridge.js`＝
+  2秒のVFS stat-walkで新規/更新を検出。Emscripten FSに変更通知は無いがpreload外の
+  ツリーは数ファイルなので実質無料）が自動でステージングへ送り、ワークベンチの
+  機体組み立てに「🧊 モデラから届いたファイル」として並ぶ（タブ復帰で自動更新）。
+- **逆方向**: モデラ起動時にステージングの全ファイルを `/home/web_user/workbench/` へ
+  取り込み（File→Openで見える）。取り込んだ分は mtime を記録してエコーバックしない。
+- これで **ブラウザだけで「モデリング（Polygon Crest）→ 組み立て → 自分の島に降りる」が
+  一周する**。ステージング（loose作業ファイル）と blob ストア（content-addressed な
+  パックpayload）は意図的に別物。
+
 ## 第四波（2026-07-08 同日実装）: マイ作品ライブラリとレシピ再編集
 
 - **統合管理（toming「機体やシーナリー生成を統合的に管理できないか」）**: workbench.html の
