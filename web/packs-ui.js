@@ -12,6 +12,7 @@
 // directly.  Install/list only here; enable-disable + uninstall land in M3.
 
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
+import { classifyLoose, assembleAircraftZip } from './workbench.js';
 import * as opfs from './opfs-store.js';
 import { createMemfsLru } from './memfs-lru.js';
 import { unzipSync } from './vendor/fflate.js';
@@ -69,7 +70,36 @@ const S = ({
     urlFail: '直接取得できませんでした（CORS／ネットワーク）。zip をDLしてドロップしてください',
     urlFail404: (s) => 'URL を取得できませんでした（' + s + '）。リンクが正しいか確認してください',
     dropZone: 'パック (.zip) を1つ以上ドロップ / クリックして選択',
-    dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください',
+    dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください。機体の .dat / .dnm / .srf を直接ドロップすると、その場で1機に組み立てられます',
+    wbTitle: '🛠 機体を組む（ワークベンチ）',
+    wbIntro: 'ドロップされたファイルを機体パックに組み立てます。割り当てを確認してください',
+    wbSlotDat: '飛行特性 (.dat) ※必須',
+    wbSlotVisual: '外観モデル (.dnm) ※必須',
+    wbSlotColl: '当たり判定 (.srf) ※必須',
+    wbSlotCockpit: 'コックピット (.srf)',
+    wbSlotCoarse: '遠景モデル (.dnm)',
+    wbName: 'パック名',
+    wbNone: '（なし）',
+    wbAssemble: '組み立てて取り込む',
+    wbClose: '閉じる',
+    wbDone: (n) => '✓ 機体パック「' + n + '」を取り込みました',
+    wbWorking: '組み立て中…',
+    wbWarn: {
+      'coarse-needs-cockpit': '⚠ 遠景モデルは外しました（コックピット指定がないと5番目に置けません）',
+      'no-ascii-identify': '⚠ .dat に ASCII の IDENTIFY が見つかりません（テスト飛行ボタンで機体名を指定できないため、メニューから選んでください）',
+    },
+    wbErrMap: {
+      NO_DAT: '飛行特性 (.dat) を割り当ててください',
+      NO_VISUAL: '外観モデル (.dnm) を割り当ててください',
+      NO_COLLISION: '当たり判定 (.srf) を割り当ててください',
+    },
+    wbIgnored: (names) => '— 対象外のファイル: ' + names.join(', '),
+    flyBtn: '🛫',
+    flyTitle: 'テスト飛行 — この機体で滑走路から即離陸（ページをリロードします）',
+    flyNow: '🛫 テスト飛行',
+    flyPick: '機体を選択:',
+    flyNoIdent: 'この機体は名前指定で起動できません（.dat に ASCII の IDENTIFY が無い）。プレイ開始からメニューで選んでください',
+    diagWarn: (n, samples) => '⚠ パック内のリストが参照する ' + n + ' ファイルが見つかりません（該当エントリは飛べません）' + (samples.length ? ' 例: ' + samples.slice(0, 3).join(', ') : ''),
     postPlayHint: 'プレイ開始後、エンジンのメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
     errMap: {
       noList: 'YSFLIGHT のリスト（aircraft/air*.lst など）が見つかりません。zip の直下に aircraft/ や scenery/ があるか確認してください',
@@ -131,7 +161,36 @@ const S = ({
     urlFail: 'Could not fetch directly (CORS / network). Download the zip and drop it here',
     urlFail404: (s) => 'Could not fetch the URL (' + s + '). Check the link is correct',
     dropZone: 'Drop one or more packs (.zip) / click to choose',
-    dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level',
+    dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level. Drop loose aircraft .dat / .dnm / .srf files to assemble them into a pack right here',
+    wbTitle: '🛠 Aircraft workbench',
+    wbIntro: 'Assembling the dropped files into an aircraft pack — check the slot assignment',
+    wbSlotDat: 'Flight model (.dat) — required',
+    wbSlotVisual: 'Visual model (.dnm) — required',
+    wbSlotColl: 'Collision shell (.srf) — required',
+    wbSlotCockpit: 'Cockpit (.srf)',
+    wbSlotCoarse: 'Coarse/LOD model (.dnm)',
+    wbName: 'Pack name',
+    wbNone: '(none)',
+    wbAssemble: 'Assemble & import',
+    wbClose: 'Close',
+    wbDone: (n) => '✓ Imported aircraft pack “' + n + '”',
+    wbWorking: 'Assembling…',
+    wbWarn: {
+      'coarse-needs-cockpit': '⚠ Coarse model dropped (slot 5 needs a cockpit in slot 4)',
+      'no-ascii-identify': '⚠ No ASCII IDENTIFY in the .dat — the test-fly button can’t name this aircraft; pick it from the engine menu instead',
+    },
+    wbErrMap: {
+      NO_DAT: 'Assign a flight model (.dat)',
+      NO_VISUAL: 'Assign a visual model (.dnm)',
+      NO_COLLISION: 'Assign a collision shell (.srf)',
+    },
+    wbIgnored: (names) => '— not usable here: ' + names.join(', '),
+    flyBtn: '🛫',
+    flyTitle: 'Test-fly — take off with this aircraft right away (reloads the page)',
+    flyNow: '🛫 Test-fly',
+    flyPick: 'Pick an aircraft:',
+    flyNoIdent: 'This aircraft can’t be launched by name (no ASCII IDENTIFY in its .dat). Press Play and pick it from the menu',
+    diagWarn: (n, samples) => '⚠ ' + n + ' file(s) referenced by the pack’s lists are missing (those entries won’t fly)' + (samples.length ? ' e.g. ' + samples.slice(0, 3).join(', ') : ''),
     postPlayHint: 'After Play, open Simulation → Create Flight in the engine menu to fly your installed aircraft & maps',
     errMap: {
       noList: 'No YSFLIGHT list found (aircraft/air*.lst, etc.). Make sure the zip has folders like aircraft/ or scenery/ at its top level',
@@ -366,6 +425,56 @@ function renderList(packs) {
 
       const ctl = document.createElement('div');
       ctl.style.cssText = 'flex:none;display:flex;gap:6px;align-items:center';
+
+      // Test-fly: reload straight into a flight with an aircraft from this pack.
+      // Identities come from the .lst.idx sidecar in the OPFS record (lazy — read
+      // on click, not for every row).  Hidden for scenery/ground-only packs.
+      let fly = null;
+      if (enabled && (p.categories || []).includes('aircraft')) {
+        fly = document.createElement('button');
+        fly.textContent = S.flyBtn;
+        fly.title = S.flyTitle;
+        fly.style.cssText =
+          'font-size:12px;padding:4px 8px;border-radius:5px;cursor:pointer;border:1px solid ' +
+          ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT;
+        fly.addEventListener('click', async () => {
+          const existing = row.nextSibling && row.nextSibling.dataset && row.nextSibling.dataset.flyPicker === p.id
+            ? row.nextSibling : null;
+          if (existing) { existing.remove(); return; } // second click folds the picker
+          fly.disabled = true;
+          try {
+            const ids = await aircraftIdentities(p.id);
+            if (ids.length === 0) {
+              const s = document.getElementById('ysfw-pack-status');
+              if (s) s.textContent = S.flyNoIdent;
+            } else if (ids.length === 1) {
+              flyFreeflight(ids[0]);
+            } else {
+              const picker = document.createElement('div');
+              picker.dataset.flyPicker = p.id;
+              picker.style.cssText =
+                'display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 10px;margin:-2px 0 6px;' +
+                'border:1px dashed #2a3647;border-radius:6px;max-height:8em;overflow-y:auto';
+              const lab = document.createElement('span');
+              lab.textContent = S.flyPick;
+              lab.style.cssText = 'color:#7d93b0;font-size:11px;flex:none';
+              picker.appendChild(lab);
+              for (const idn of ids) {
+                const b = document.createElement('button');
+                b.textContent = idn;
+                b.style.cssText =
+                  'font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#cfe0f5';
+                b.addEventListener('click', () => flyFreeflight(idn));
+                picker.appendChild(b);
+              }
+              row.after(picker);
+            }
+          } finally {
+            fly.disabled = false;
+          }
+        });
+      }
+
       const toggle = document.createElement('button');
       toggle.textContent = enabled ? S.enabled : S.disabled;
       toggle.title = enabled ? S.disableTitle : S.enableTitle;
@@ -400,6 +509,7 @@ function renderList(packs) {
           setErr(e);
         }
       });
+      if (fly) ctl.appendChild(fly);
       ctl.appendChild(toggle);
       ctl.appendChild(del);
 
@@ -479,6 +589,7 @@ async function installCore(bytes, name, sourceUrl) {
   return {
     id: a.id, name: a.name, categories: a.categories, bytes: a.total,
     templates: a.generated.filter((g) => !g.idx).reduce((n, g) => n + g.entries, 0), lists: a.generated.filter((g) => !g.idx).map((g) => g.file),
+    diagnostics: a.diagnostics, // {refs, missing, samples} — unresolved list references
   };
 }
 
@@ -605,8 +716,12 @@ async function handleFiles(fileList) {
   const status = document.getElementById('ysfw-pack-status');
   const all = Array.from(fileList);
   const zips = all.filter((f) => /\.zip$/i.test(f.name));
-  const nonZip = all.filter((f) => !/\.zip$/i.test(f.name));
+  // Loose aircraft files route to the workbench (assembled into a pack in-page)
+  // instead of the "not a zip" skip pile.
+  const loose = all.filter((f) => /\.(dat|dnm|srf)$/i.test(f.name));
+  const nonZip = all.filter((f) => !/\.zip$/i.test(f.name) && !/\.(dat|dnm|srf)$/i.test(f.name));
   const failed = [];          // { name, error }
+  const warned = [];          // import-time diagnostics (unresolved references)
   await ensureCache();        // load the in-memory list once (reliable: nothing writing yet)
   let okCount = 0, done = 0;
   const total = zips.length;
@@ -616,6 +731,7 @@ async function handleFiles(fileList) {
   // "✓ done" next to an empty list.
   const tail = () => [
     ...failed.map((f) => '✗ ' + f.name + ': ' + friendlyErr(f.error)),
+    ...warned,
     ...nonZip.map((f) => '— ' + f.name + ' ' + S.notZip),
   ];
   const setStatus = (head) => { if (status) status.textContent = [head, ...tail()].join('\n'); };
@@ -627,7 +743,10 @@ async function handleFiles(fileList) {
       const file = zips[idx++];
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        await installCore(bytes, file.name.replace(/\.zip$/i, '')); // also upserts `cache`
+        const res = await installCore(bytes, file.name.replace(/\.zip$/i, '')); // also upserts `cache`
+        if (res.diagnostics && res.diagnostics.missing > 0) {
+          warned.push(file.name + ': ' + S.diagWarn(res.diagnostics.missing, res.diagnostics.samples || []));
+        }
         okCount++;
       } catch (e) {
         failed.push({ name: file.name, error: (e && e.message) ? e.message : String(e) });
@@ -652,7 +771,192 @@ async function handleFiles(fileList) {
   // and we already know exactly what we stored.
   renderList(cache);
   await updateStorageLine();
-  setStatus(S.bulkDone(okCount, failed.length)); // done summary LAST, after the list is shown
+  if (zips.length > 0) {
+    setStatus(S.bulkDone(okCount, failed.length)); // done summary LAST, after the list is shown
+  } else if (status) {
+    status.textContent = tail().join('\n'); // loose-only drop: no zip progress to report
+  }
+
+  // Loose aircraft files -> open the workbench with their bytes for assembly.
+  if (loose.length > 0) {
+    const entries = [];
+    for (const f of loose) entries.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+    renderWorkbench(entries);
+  }
+}
+
+// --- workbench (loose-file aircraft assembly + test-fly) ----------------------
+
+// Reload straight into a flight with the given aircraft (engine -freeflight via
+// the shell's ?freeflight= path; default field/start come from index.html).
+// Only lang survives from the current query — everything else is stale intent.
+function flyFreeflight(identify) {
+  const q = new URLSearchParams(location.search);
+  const next = new URLSearchParams();
+  next.set('freeflight', identify);
+  if (q.get('lang')) next.set('lang', q.get('lang'));
+  location.href = location.pathname + '?' + next.toString();
+}
+
+// The ASCII aircraft identities of an installed pack, read from the generated
+// .lst.idx sidecar kept in its OPFS record (datPath\tIDENTIFY\tCATEGORY per
+// line).  A Shift-JIS-named aircraft has no sidecar entry by design (see
+// parseDatIdentity) and so cannot be test-flown by name.
+async function aircraftIdentities(id) {
+  const rec = await opfs.getRecord(id);
+  if (!rec) return [];
+  const out = [];
+  for (const g of rec.generated || []) {
+    if (!/^aircraft\/.*\.lst\.idx$/.test(g.file)) continue;
+    for (const line of (g.text || '').split('\n')) {
+      const t = line.split('\t');
+      if (t.length >= 2 && t[1]) out.push(t[1]);
+    }
+  }
+  return out;
+}
+
+// Assemble loose aircraft files and install the resulting pack through the
+// normal pipeline.  `slots` = {name?, dat, visual, collision, cockpit?, coarse?}
+// with {name, bytes} values.  Shared by the workbench UI and the smoke test.
+async function workbenchAssembleInstall(slots) {
+  const asm = assembleAircraftZip(slots);
+  const res = await installFromBytes(asm.zipBytes, asm.packName);
+  return { ...res, identify: asm.identify, warnings: asm.warnings, packName: asm.packName };
+}
+
+// Render (or re-render) the workbench assembly card for a batch of loose files.
+// Lives in the placeholder div renderPanel leaves after the drop zone.
+function renderWorkbench(entries) {
+  const slot = document.getElementById('ysfw-workbench');
+  if (!slot) return;
+  slot.innerHTML = '';
+  slot.style.display = 'block';
+
+  const { candidates, guess, ignored } = classifyLoose(entries);
+  const byName = new Map(entries.map((e) => [e.name.split(/[\\/]/).pop(), e]));
+
+  const card = document.createElement('div');
+  card.style.cssText =
+    'margin-top:8px;padding:10px;border:1px solid ' + ACCENT + ';border-radius:8px;background:rgba(77,163,255,.05)';
+  const title = document.createElement('div');
+  title.textContent = S.wbTitle;
+  title.style.cssText = 'color:#cfe0f5;font-size:13px;font-weight:600;margin-bottom:2px';
+  card.appendChild(title);
+  const intro = document.createElement('div');
+  intro.textContent = S.wbIntro;
+  intro.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:8px';
+  card.appendChild(intro);
+
+  const mkSelect = (label, cands, preselect, required) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+    const lab = document.createElement('span');
+    lab.textContent = label;
+    lab.style.cssText = 'flex:none;width:46%;color:#8fa3bb;font-size:12px';
+    const sel = document.createElement('select');
+    sel.style.cssText =
+      'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
+    if (!required) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = S.wbNone;
+      sel.appendChild(opt);
+    }
+    for (const c of cands) {
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    }
+    sel.value = preselect || (required ? (cands[0] && cands[0].name) || '' : '');
+    row.appendChild(lab);
+    row.appendChild(sel);
+    card.appendChild(row);
+    return sel;
+  };
+
+  const selDat = mkSelect(S.wbSlotDat, candidates.dat, guess.dat, true);
+  const selVisual = mkSelect(S.wbSlotVisual, candidates.dnm, guess.visual, true);
+  const selColl = mkSelect(S.wbSlotColl, candidates.srf, guess.collision, true);
+  const selCockpit = mkSelect(S.wbSlotCockpit, candidates.srf, guess.cockpit, false);
+  const selCoarse = mkSelect(S.wbSlotCoarse, candidates.dnm, guess.coarse, false);
+
+  const nameRow = document.createElement('div');
+  nameRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+  const nameLab = document.createElement('span');
+  nameLab.textContent = S.wbName;
+  nameLab.style.cssText = 'flex:none;width:46%;color:#8fa3bb;font-size:12px';
+  const nameIn = document.createElement('input');
+  nameIn.type = 'text';
+  nameIn.placeholder = (guess.dat || '').replace(/\.dat$/i, '');
+  nameIn.style.cssText =
+    'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0d141d;color:#e6edf3;font-size:12px';
+  nameRow.appendChild(nameLab);
+  nameRow.appendChild(nameIn);
+  card.appendChild(nameRow);
+
+  const msg = document.createElement('div');
+  msg.style.cssText = 'color:#8fa3bb;font-size:12px;white-space:pre-line;margin-bottom:6px';
+  if (ignored.length) msg.textContent = S.wbIgnored(ignored);
+  card.appendChild(msg);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:6px;justify-content:flex-end';
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = S.wbClose;
+  closeBtn.style.cssText =
+    'font-size:12px;padding:6px 12px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#8fa3bb';
+  closeBtn.addEventListener('click', () => { slot.innerHTML = ''; slot.style.display = 'none'; });
+  const goBtn = document.createElement('button');
+  goBtn.textContent = S.wbAssemble;
+  goBtn.style.cssText =
+    'font-size:12px;padding:6px 14px;border-radius:5px;cursor:pointer;border:1px solid ' +
+    ACCENT + ';background:rgba(77,163,255,.15);color:' + ACCENT;
+  goBtn.addEventListener('click', async () => {
+    goBtn.disabled = true;
+    msg.textContent = S.wbWorking;
+    try {
+      const pick = (sel) => (sel.value ? byName.get(sel.value) : null);
+      const res = await workbenchAssembleInstall({
+        name: nameIn.value.trim() || undefined,
+        dat: pick(selDat), visual: pick(selVisual), collision: pick(selColl),
+        cockpit: pick(selCockpit), coarse: pick(selCoarse),
+      });
+      const lines = [S.wbDone(res.packName)];
+      for (const w of res.warnings) if (S.wbWarn[w]) lines.push(S.wbWarn[w]);
+      msg.textContent = lines.join('\n');
+      // Replace the action row with the payoff: fly the assembled aircraft NOW.
+      btnRow.innerHTML = '';
+      btnRow.appendChild(closeBtn);
+      if (res.identify) {
+        const flyBtn = document.createElement('button');
+        flyBtn.textContent = S.flyNow;
+        flyBtn.title = S.flyTitle;
+        flyBtn.style.cssText =
+          'font-size:12px;padding:6px 14px;border-radius:5px;cursor:pointer;border:1px solid ' +
+          ACCENT + ';background:rgba(77,163,255,.15);color:' + ACCENT;
+        flyBtn.addEventListener('click', () => flyFreeflight(res.identify));
+        btnRow.appendChild(flyBtn);
+      }
+    } catch (e) {
+      const m = (e && e.message) || String(e);
+      msg.textContent = S.errorPrefix + (workbenchFriendlyErr(m) || friendlyErr(m));
+      goBtn.disabled = false;
+    }
+  });
+  btnRow.appendChild(closeBtn);
+  btnRow.appendChild(goBtn);
+  card.appendChild(btnRow);
+  slot.appendChild(card);
+}
+
+// Map workbench assembly errors (workbench.js ERR codes) to friendly strings.
+function workbenchFriendlyErr(m) {
+  if (/missing \.dat/.test(m)) return S.wbErrMap.NO_DAT;
+  if (/missing visual/.test(m)) return S.wbErrMap.NO_VISUAL;
+  if (/missing collision/.test(m)) return S.wbErrMap.NO_COLLISION;
+  return null;
 }
 
 function renderPanel() {
@@ -881,7 +1185,7 @@ function renderPanel() {
   drop.textContent = S.dropZone;
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.zip';
+  input.accept = '.zip,.dat,.dnm,.srf';
   input.multiple = true;
   input.style.display = 'none';
   input.addEventListener('change', () => handleFiles(input.files));
@@ -908,6 +1212,13 @@ function renderPanel() {
   dropHintEl.textContent = S.dropHint;
   dropHintEl.style.cssText = 'color:#7d93b0;font-size:10.5px;margin-top:4px;text-align:center';
   packBody.appendChild(dropHintEl);
+
+  // Workbench placeholder: filled by renderWorkbench when loose aircraft files
+  // (.dat/.dnm/.srf) are dropped; hidden otherwise.
+  const wbSlot = document.createElement('div');
+  wbSlot.id = 'ysfw-workbench';
+  wbSlot.style.display = 'none';
+  packBody.appendChild(wbSlot);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
   // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
@@ -1413,6 +1724,8 @@ window.ysfwPacks = {
   packMetaBundleForHost, // multiplayer host (Step 1): serve a pack's .lst/.dat/.stp meta bundle
   installMetaBundle,     // multiplayer joiner (Step 1): sparse-install many packs from one meta bundle
   memfsStats: () => (lru ? lru.stats() : null), // layer3 LRU observability (smoke/debug)
+  workbenchAssembleInstall, // workbench: assemble loose aircraft files + install (smoke/debug)
+  aircraftIdentities,       // workbench: ASCII identities of an installed pack (smoke/debug)
 };
 window.ysfwPacksInit = init;
 
