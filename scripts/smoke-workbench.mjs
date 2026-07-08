@@ -72,6 +72,40 @@ if (JSON.stringify(ids) !== JSON.stringify(['YSFW_TEST1'])) {
   die('aircraftIdentities mismatch: ' + JSON.stringify(ids));
 }
 
+// 2b. The .dat wizard: derive a renamed, re-tuned .dat from a STOCK aircraft
+//     (readable pre-boot from the /ysflight preload) and assemble it with the
+//     fixture's visual/collision into a second aircraft.
+const wiz = await page
+  .evaluate(async () => {
+    const stock = window.ysfwPacks.workbenchListStock();
+    if (!stock.length) throw new Error('no stock aircraft listed');
+    const f15 = stock.find((a) => a.identify === 'F-15C_EAGLE') || stock[0];
+    const dat = window.ysfwPacks.workbenchMakeDat(f15.datPath, 'WB_CUSTOM1', { engine: 2 });
+    const { unzipSync } = await import('./vendor/fflate.js');
+    const z = unzipSync(new Uint8Array(await (await fetch('/test-pack.zip')).arrayBuffer()));
+    const f = (p) => ({ name: p.split('/').pop(), bytes: z[p] });
+    const r = await window.ysfwPacks.workbenchAssembleInstall({
+      name: 'wbcustom',
+      dat: { name: 'wb_custom1.dat', bytes: dat.bytes },
+      visual: f('user/toming/test1.dnm'),
+      collision: f('user/toming/test1coll.srf'),
+    });
+    return { stockCount: stock.length, identify: r.identify, id: r.id };
+  })
+  .catch((e) => die('dat wizard flow threw: ' + e.message));
+console.log('dat wizard: ' + JSON.stringify(wiz));
+if (wiz.identify !== 'WB_CUSTOM1') die('expected WB_CUSTOM1, got ' + wiz.identify);
+if (wiz.stockCount < 50) die('stock list suspiciously small: ' + wiz.stockCount);
+
+// 2c. The scenery wizard: a minimal ocean field pack, installed like any other.
+const scn = await page
+  .evaluate(() => window.ysfwPacks.workbenchCreateScenery({
+    name: 'WB_ISLAND', ground: [40, 90, 60], sky: [23, 106, 189], startAltM: 800,
+  }))
+  .catch((e) => die('scenery wizard flow threw: ' + e.message));
+console.log('scenery wizard: ' + JSON.stringify({ id: scn.id, ident: scn.ident, start: scn.start }));
+if (scn.ident !== 'WB_ISLAND' || scn.start !== 'START01') die('scenery wizard returned unexpected ident/start');
+
 // 3. Reload straight into a flight with the assembled aircraft.  "Airplane:
 //    YSFW_TEST1" prints ONLY when freeflight resolved it to a loaded template.
 logs.length = 0;
@@ -98,7 +132,37 @@ await page
   if (!loaded) die('engine never set up a flight with the assembled aircraft "YSFW_TEST1"');
 }
 if (fatal.length) die('fatal engine output while flying the assembled aircraft');
+console.log('workbench: assembled pack flew via ?freeflight (real engine)');
+
+// 4. The wizard-made aircraft flies ON the wizard-made field: the full
+//    kid-loop payoff (my plane, my island) in one freeflight boot.
+logs.length = 0;
+fatal.length = 0;
+const ff2 = new URL(url);
+ff2.searchParams.set('freeflight', 'WB_CUSTOM1,WB_ISLAND,START01');
+await page.goto(ff2.toString());
+await page
+  .waitForFunction(
+    () => {
+      const ov = document.getElementById('overlay');
+      return ov && ov.classList.contains('hidden');
+    },
+    { timeout: bootMs },
+  )
+  .catch(() => die('engine did not boot on the custom-field freeflight reload'));
+{
+  const t0 = Date.now();
+  let fieldLoaded = false, airLoaded = false;
+  while (Date.now() - t0 < 30000 && !(fieldLoaded && airLoaded)) {
+    fieldLoaded = fieldLoaded || logs.some((l) => /Field:\s*WB_ISLAND/.test(l));
+    airLoaded = airLoaded || logs.some((l) => /Airplane:\s*WB_CUSTOM1/.test(l));
+    await page.waitForTimeout(250);
+  }
+  if (!fieldLoaded) die('engine never loaded the wizard-made field "WB_ISLAND"');
+  if (!airLoaded) die('field loaded but the wizard-made aircraft "WB_CUSTOM1" did not fly');
+}
+if (fatal.length) die('fatal engine output while flying the wizard-made aircraft on the wizard-made field');
 
 await browser.close();
-console.log('workbench: assembled pack flew via ?freeflight (real engine)');
+console.log('workbench: wizard-made aircraft flew on wizard-made field (real engine)');
 console.log('SMOKE-WORKBENCH PASSED');

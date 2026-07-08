@@ -86,6 +86,37 @@ loose ファイルの組み立ては**ブラウザ内で正規形の zip を合�
 成功させる**（エンジンは欠けたエントリを Cannot Load でスキップして生き続ける——
 挙動は変えず、見えなかったものを見せるだけ）。
 
+## 第二波（2026-07-08 同日実装）: .dat ウィザードとシーナリーウィザード
+
+MVP と同日に2機能を追加。どちらも**エンジン改変ゼロ**（実ソース調査で確定した事実に立つ）。
+
+### .dat ウィザード（「dat の面倒を見る側」）
+
+- **事実**: `/ysflight` の preload は fsReady（pre-boot）時点で全て読める＝stock 88機の
+  `air*.lst`→`.dat`→IDENTIFY が pure JS で列挙できる（実測済み）。
+- **形**: 元になる stock 機体を選ぶ→新しい名前→倍率ノブ4つ（エンジン出力=THRAFTBN/THRMILIT/
+  PROPELLR・機体の重さ=WEIGHCLN・最高速度=MAXSPEED・操縦の鋭さ=CPITMANE/CROLLMAN/CYAWMANE）
+  →生成 .dat が機体組み立ての dat スロットに入る。
+- **安全設計**（fsairplaneproperty.cpp の実調査より）: (a)**未知キーワードは1行でもあると
+  .dat 全体がロード失敗**するので、編集は既存行の in-place 数値スケールのみ・行の追加はしない
+  (b)値は「数値+単位トークン」なので数値だけスケールすれば単位が保存される（倍率方式の理由）
+  (c)IDENTIFY はエンジンと同じ正規化（空白/引用符→`_`・大文字化・31字）をUI側で先に適用し、
+  stock＋導入済みパックとの重複を警告（FindAirplaneTemplate は先勝ち＝重複は片方を黙って影にする）。
+
+### シーナリーウィザード（「マップを作る」）
+
+- **事実**（yssceneryio.cpp / sescenery.cpp の実調査より）: `.fld`/`.stp` は**完全な行指向
+  テキスト**。エンジンが受け付ける最小フィールドはヘッダ8行（`FIELD`/`GND`/`SKY`/
+  `GNDSPECULAR`/`DEFAREA WATER`/`BASEELV`/`MAGVAR`/`CANRESUME`。ENDF は省略可＝EOF終端）、
+  START は .stp 側 6行。**＝JS直書きで生成できる。SeScenery は不要**。
+- **形**: 名前＋地面/海の色＋空の色＋開始高度→ `sce_<name>.lst`（`IDENT fld stp` の3トークン、
+  飛べる実績のある scnpack fixture と同形）＋ `.fld` ＋ `.stp` を zip 合成→既存パイプライン→
+  「🛫 このマップで飛ぶ」（`?freeflight=<機体>,<IDENT>,START01`）。
+- **SeScenery の位置づけ**: `ysscenery_dnm`（sescenery.cpp 含む）は**現行 web ビルドに
+  リンク済み＝追加コストゼロ**で extern "C" 露出できるが、要るのは標高グリッド（TER）や
+  地上物（GOB）の動的追加・Undo付き双方向編集をやる段になってから。滑走路は GOB 参照
+  （`FSGROUNDTYPE_RUNWAY` テンプレート）で足せるのが次の一手（テンプレート名の調査が前提）。
+
 ## upstream/public に眠る資産（2026-07-08 調査・将来拡張の弾薬庫）
 
 upstream/public には **Polygon Crest（YSFLIGHT 公式 3D モデルエディタ ysgebl）のソース一式**が
