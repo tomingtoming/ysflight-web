@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YSFLIGHT Web — Workbench</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 14px 60px;
+    background: #0b1017; color: #e6edf3;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px; line-height: 1.55;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 19px; margin: 0 0 2px; }
+  h2 { font-size: 15px; margin: 0 0 2px; color: #cfe0f5; }
+  .sub { color: #7d93b0; font-size: 12px; margin: 0 0 16px; }
+  .card {
+    border: 1px solid #2a3647; border-radius: 10px; background: #0d141d;
+    padding: 14px; margin-bottom: 16px;
+  }
+  .intro { color: #7d93b0; font-size: 12px; margin: 0 0 10px; }
+  .row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+  .row > .lab { flex: none; width: 44%; max-width: 240px; color: #8fa3bb; font-size: 12.5px; }
+  .row > input[type=text], .row > input[type=number], .row > select {
+    flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid #2a3647; border-radius: 6px;
+    background: #0b1017; color: #e6edf3; font-size: 13px;
+  }
+  .row > input[type=color] { flex: none; width: 52px; height: 30px; padding: 1px; border: 1px solid #2a3647; border-radius: 6px; background: #0b1017; }
+  .row > input[type=range] { flex: 1; min-width: 0; }
+  .row .val { flex: none; width: 40px; text-align: right; color: #cfe0f5; font-size: 12px; }
+  button {
+    font-size: 13px; padding: 7px 14px; border-radius: 6px; cursor: pointer;
+    border: 1px solid #2a3647; background: #0d141d; color: #8fa3bb;
+  }
+  button.accent { border-color: #4da3ff; background: rgba(77,163,255,.14); color: #4da3ff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .btnrow { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 8px; }
+  .msg { color: #8fa3bb; font-size: 12.5px; white-space: pre-line; min-height: 1.2em; margin-top: 8px; }
+  .drop {
+    display: block; padding: 18px 12px; border: 1px dashed #2a3647; border-radius: 8px;
+    color: #8fa3bb; font-size: 13px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop.hot { border-color: #4da3ff; background: rgba(77,163,255,.06); }
+  canvas#island-canvas {
+    display: block; width: 100%; max-width: 640px; aspect-ratio: 1;
+    border: 1px solid #2a3647; border-radius: 8px; touch-action: none; cursor: crosshair;
+    margin: 6px 0;
+  }
+  a { color: #4da3ff; }
+  .top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<main id="app">
+  <noscript>This workbench needs JavaScript.</noscript>
+</main>
+<script type="module" src="./workbench-page.js"></script>
+</body>
+</html>

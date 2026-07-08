@@ -55,6 +55,13 @@ jobs:
         if: github.event_name == 'pull_request'
         run: scripts/smoke-pack.sh
 
+      # Workbench smoke (PR only): assemble an aircraft pack from LOOSE
+      # .dat/.dnm/.srf bytes in-page, install it through the normal pipeline,
+      # then prove the ENGINE flies it via ?freeflight (the instant-test loop).
+      - name: Workbench smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: scripts/smoke-workbench.sh
+
       # Real 2-browser P2P pack transfer over WebRTC (loopback ICE — no STUN/internet):
       # a host serves from OPFS while a joiner pulls a single pack AND a multi-pack set
       # over the 'ysf-pack' DataChannel, plus a corruption-reject negative.  The only

@@ -70,6 +70,14 @@ const S = ({
     urlFail404: (s) => 'URL を取得できませんでした（' + s + '）。リンクが正しいか確認してください',
     dropZone: 'パック (.zip) を1つ以上ドロップ / クリックして選択',
     dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください',
+    wbLink: '🛠 ワークベンチ — 機体とマップを作る',
+    wbLinkTitle: '専用ページで機体を組む・.datを作る・島を描く（作ったものは次回起動から使えます）',
+    looseHint: (names) => '— ' + names.join(', ') + ' : 機体のファイルはワークベンチ（🛠）で組み立てられます',
+    flyBtn: '🛫',
+    flyTitle: 'テスト飛行 — この機体で滑走路から即離陸（ページをリロードします）',
+    flyPick: '機体を選択:',
+    flyNoIdent: 'この機体は名前指定で起動できません（.dat に ASCII の IDENTIFY が無い）。プレイ開始からメニューで選んでください',
+    diagWarn: (n, samples) => '⚠ パック内のリストが参照する ' + n + ' ファイルが見つかりません（該当エントリは飛べません）' + (samples.length ? ' 例: ' + samples.slice(0, 3).join(', ') : ''),
     postPlayHint: 'プレイ開始後、エンジンのメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
     errMap: {
       noList: 'YSFLIGHT のリスト（aircraft/air*.lst など）が見つかりません。zip の直下に aircraft/ や scenery/ があるか確認してください',
@@ -132,6 +140,14 @@ const S = ({
     urlFail404: (s) => 'Could not fetch the URL (' + s + '). Check the link is correct',
     dropZone: 'Drop one or more packs (.zip) / click to choose',
     dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level',
+    wbLink: '🛠 Workbench — build aircraft & maps',
+    wbLinkTitle: 'A dedicated page to assemble aircraft, make a .dat, and draw islands (available in-game on next load)',
+    looseHint: (names) => '— ' + names.join(', ') + ' : assemble loose aircraft files in the Workbench (🛠)',
+    flyBtn: '🛫',
+    flyTitle: 'Test-fly — take off with this aircraft right away (reloads the page)',
+    flyPick: 'Pick an aircraft:',
+    flyNoIdent: 'This aircraft can’t be launched by name (no ASCII IDENTIFY in its .dat). Press Play and pick it from the menu',
+    diagWarn: (n, samples) => '⚠ ' + n + ' file(s) referenced by the pack’s lists are missing (those entries won’t fly)' + (samples.length ? ' e.g. ' + samples.slice(0, 3).join(', ') : ''),
     postPlayHint: 'After Play, open Simulation → Create Flight in the engine menu to fly your installed aircraft & maps',
     errMap: {
       noList: 'No YSFLIGHT list found (aircraft/air*.lst, etc.). Make sure the zip has folders like aircraft/ or scenery/ at its top level',
@@ -366,6 +382,56 @@ function renderList(packs) {
 
       const ctl = document.createElement('div');
       ctl.style.cssText = 'flex:none;display:flex;gap:6px;align-items:center';
+
+      // Test-fly: reload straight into a flight with an aircraft from this pack.
+      // Identities come from the .lst.idx sidecar in the OPFS record (lazy — read
+      // on click, not for every row).  Hidden for scenery/ground-only packs.
+      let fly = null;
+      if (enabled && (p.categories || []).includes('aircraft')) {
+        fly = document.createElement('button');
+        fly.textContent = S.flyBtn;
+        fly.title = S.flyTitle;
+        fly.style.cssText =
+          'font-size:12px;padding:4px 8px;border-radius:5px;cursor:pointer;border:1px solid ' +
+          ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT;
+        fly.addEventListener('click', async () => {
+          const existing = row.nextSibling && row.nextSibling.dataset && row.nextSibling.dataset.flyPicker === p.id
+            ? row.nextSibling : null;
+          if (existing) { existing.remove(); return; } // second click folds the picker
+          fly.disabled = true;
+          try {
+            const ids = await aircraftIdentities(p.id);
+            if (ids.length === 0) {
+              const s = document.getElementById('ysfw-pack-status');
+              if (s) s.textContent = S.flyNoIdent;
+            } else if (ids.length === 1) {
+              flyFreeflight(ids[0]);
+            } else {
+              const picker = document.createElement('div');
+              picker.dataset.flyPicker = p.id;
+              picker.style.cssText =
+                'display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 10px;margin:-2px 0 6px;' +
+                'border:1px dashed #2a3647;border-radius:6px;max-height:8em;overflow-y:auto';
+              const lab = document.createElement('span');
+              lab.textContent = S.flyPick;
+              lab.style.cssText = 'color:#7d93b0;font-size:11px;flex:none';
+              picker.appendChild(lab);
+              for (const idn of ids) {
+                const b = document.createElement('button');
+                b.textContent = idn;
+                b.style.cssText =
+                  'font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#cfe0f5';
+                b.addEventListener('click', () => flyFreeflight(idn));
+                picker.appendChild(b);
+              }
+              row.after(picker);
+            }
+          } finally {
+            fly.disabled = false;
+          }
+        });
+      }
+
       const toggle = document.createElement('button');
       toggle.textContent = enabled ? S.enabled : S.disabled;
       toggle.title = enabled ? S.disableTitle : S.enableTitle;
@@ -400,6 +466,7 @@ function renderList(packs) {
           setErr(e);
         }
       });
+      if (fly) ctl.appendChild(fly);
       ctl.appendChild(toggle);
       ctl.appendChild(del);
 
@@ -479,6 +546,7 @@ async function installCore(bytes, name, sourceUrl) {
   return {
     id: a.id, name: a.name, categories: a.categories, bytes: a.total,
     templates: a.generated.filter((g) => !g.idx).reduce((n, g) => n + g.entries, 0), lists: a.generated.filter((g) => !g.idx).map((g) => g.file),
+    diagnostics: a.diagnostics, // {refs, missing, samples} — unresolved list references
   };
 }
 
@@ -605,8 +673,12 @@ async function handleFiles(fileList) {
   const status = document.getElementById('ysfw-pack-status');
   const all = Array.from(fileList);
   const zips = all.filter((f) => /\.zip$/i.test(f.name));
-  const nonZip = all.filter((f) => !/\.zip$/i.test(f.name));
+  // Loose aircraft files belong in the dedicated workbench page (creation
+  // space); here they just get a pointer instead of the "not a zip" pile.
+  const loose = all.filter((f) => /\.(dat|dnm|srf)$/i.test(f.name));
+  const nonZip = all.filter((f) => !/\.zip$/i.test(f.name) && !/\.(dat|dnm|srf)$/i.test(f.name));
   const failed = [];          // { name, error }
+  const warned = [];          // import-time diagnostics (unresolved references)
   await ensureCache();        // load the in-memory list once (reliable: nothing writing yet)
   let okCount = 0, done = 0;
   const total = zips.length;
@@ -616,6 +688,8 @@ async function handleFiles(fileList) {
   // "✓ done" next to an empty list.
   const tail = () => [
     ...failed.map((f) => '✗ ' + f.name + ': ' + friendlyErr(f.error)),
+    ...warned,
+    ...(loose.length ? [S.looseHint(loose.map((f) => f.name))] : []),
     ...nonZip.map((f) => '— ' + f.name + ' ' + S.notZip),
   ];
   const setStatus = (head) => { if (status) status.textContent = [head, ...tail()].join('\n'); };
@@ -627,7 +701,10 @@ async function handleFiles(fileList) {
       const file = zips[idx++];
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        await installCore(bytes, file.name.replace(/\.zip$/i, '')); // also upserts `cache`
+        const res = await installCore(bytes, file.name.replace(/\.zip$/i, '')); // also upserts `cache`
+        if (res.diagnostics && res.diagnostics.missing > 0) {
+          warned.push(file.name + ': ' + S.diagWarn(res.diagnostics.missing, res.diagnostics.samples || []));
+        }
         okCount++;
       } catch (e) {
         failed.push({ name: file.name, error: (e && e.message) ? e.message : String(e) });
@@ -652,8 +729,44 @@ async function handleFiles(fileList) {
   // and we already know exactly what we stored.
   renderList(cache);
   await updateStorageLine();
-  setStatus(S.bulkDone(okCount, failed.length)); // done summary LAST, after the list is shown
+  if (zips.length > 0) {
+    setStatus(S.bulkDone(okCount, failed.length)); // done summary LAST, after the list is shown
+  } else if (status) {
+    status.textContent = tail().join('\n'); // loose-only drop: point at the workbench page
+  }
 }
+
+// --- workbench (loose-file aircraft assembly + test-fly) ----------------------
+
+// Reload straight into a flight with the given aircraft (engine -freeflight via
+// the shell's ?freeflight= path; default field/start come from index.html).
+// Only lang survives from the current query — everything else is stale intent.
+function flyFreeflight(identify, field, start) {
+  const q = new URLSearchParams(location.search);
+  const next = new URLSearchParams();
+  next.set('freeflight', [identify, field, start].filter(Boolean).join(','));
+  if (q.get('lang')) next.set('lang', q.get('lang'));
+  location.href = location.pathname + '?' + next.toString();
+}
+
+// The ASCII aircraft identities of an installed pack, read from the generated
+// .lst.idx sidecar kept in its OPFS record (datPath\tIDENTIFY\tCATEGORY per
+// line).  A Shift-JIS-named aircraft has no sidecar entry by design (see
+// parseDatIdentity) and so cannot be test-flown by name.
+async function aircraftIdentities(id) {
+  const rec = await opfs.getRecord(id);
+  if (!rec) return [];
+  const out = [];
+  for (const g of rec.generated || []) {
+    if (!/^aircraft\/.*\.lst\.idx$/.test(g.file)) continue;
+    for (const line of (g.text || '').split('\n')) {
+      const t = line.split('\t');
+      if (t.length >= 2 && t[1]) out.push(t[1]);
+    }
+  }
+  return out;
+}
+
 
 function renderPanel() {
   const overlay = document.getElementById('overlay');
@@ -881,7 +994,7 @@ function renderPanel() {
   drop.textContent = S.dropZone;
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.zip';
+  input.accept = '.zip,.dat,.dnm,.srf';
   input.multiple = true;
   input.style.display = 'none';
   input.addEventListener('change', () => handleFiles(input.files));
@@ -908,6 +1021,19 @@ function renderPanel() {
   dropHintEl.textContent = S.dropHint;
   dropHintEl.style.cssText = 'color:#7d93b0;font-size:10.5px;margin-top:4px;text-align:center';
   packBody.appendChild(dropHintEl);
+
+  // Creation lives on its own page: the workbench (assemble aircraft, make a
+  // .dat from stock, draw island maps).  Packs made there are OPFS records,
+  // which this page materializes at every boot — so the link IS the whole
+  // integration.
+  const wbLink = document.createElement('a');
+  wbLink.href = 'workbench.html' + (LANG === 'ja' ? '' : '?lang=' + LANG);
+  wbLink.textContent = S.wbLink;
+  wbLink.title = S.wbLinkTitle;
+  wbLink.style.cssText =
+    'display:block;margin-top:8px;padding:9px 12px;border:1px solid #2a3647;border-radius:6px;' +
+    'color:#8fa3bb;font-size:12.5px;text-decoration:none;text-align:center';
+  packBody.appendChild(wbLink);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
   // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
@@ -1413,6 +1539,7 @@ window.ysfwPacks = {
   packMetaBundleForHost, // multiplayer host (Step 1): serve a pack's .lst/.dat/.stp meta bundle
   installMetaBundle,     // multiplayer joiner (Step 1): sparse-install many packs from one meta bundle
   memfsStats: () => (lru ? lru.stats() : null), // layer3 LRU observability (smoke/debug)
+  aircraftIdentities,       // test-fly button: ASCII identities of an installed pack (smoke/debug)
 };
 window.ysfwPacksInit = init;
 

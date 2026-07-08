@@ -158,7 +158,7 @@ function buildResolver(files) {
 // must keep taking the engine's raw-.dat path so the registered id bytes stay
 // byte-identical with a desktop client in multiplayer.  Returns null when either
 // token is missing or non-ASCII -- the engine then falls back to reading the .dat.
-function parseDatIdentity(bytes) {
+export function parseDatIdentity(bytes) {
   const n = Math.min(bytes.length, 65536); // IDENTIFY/CATEGORY sit in the head
   let identify = null, category = null;
   let lineStart = 0;
@@ -189,6 +189,7 @@ function rewriteFilesLine(line, resolve, prefixDir) {
   if (toks.length === 0) return null;
   let resolved = 0;
   let missing = 0;
+  const missingRefs = [];
   const parts = toks.map((t) => {
     const actual = resolve(t.value);
     if (actual) {
@@ -196,9 +197,10 @@ function rewriteFilesLine(line, resolve, prefixDir) {
       return emitPath(`${prefixDir}/${actual}`);
     }
     missing++;
+    missingRefs.push(t.value);
     return emitPath(t.value); // keep; engine logs "Cannot Load" and skips
   });
-  return { line: parts.join(' '), tokens: toks.length, resolved, missing };
+  return { line: parts.join(' '), tokens: toks.length, resolved, missing, missingRefs };
 }
 
 // scenery: "IDENT <fld> <stp> [<yfs>|""] [MODE]".  Keep the identifier and any
@@ -209,6 +211,7 @@ function rewriteFieldLine(line, resolve, prefixDir) {
   const parts = [toks[0].quoted ? `"${toks[0].value}"` : toks[0].value]; // IDENT
   let resolved = 0;
   let missing = 0;
+  const missingRefs = [];
   for (let i = 1; i < toks.length; i++) {
     const v = toks[i].value;
     if (v === '') {
@@ -226,10 +229,11 @@ function rewriteFieldLine(line, resolve, prefixDir) {
       parts.push(`"${prefixDir}/${actual}"`);
     } else {
       missing++;
+      missingRefs.push(v);
       parts.push(`"${v}"`);
     }
   }
-  return { line: parts.join(' '), tokens: toks.length, resolved, missing };
+  return { line: parts.join(' '), tokens: toks.length, resolved, missing, missingRefs };
 }
 
 // Unzip and return the usable payload files (cruft removed).
@@ -275,10 +279,16 @@ function deriveName(lists) {
 }
 
 // Turn the located lists into the regenerated, path-rewritten lists we will
-// drop into the scanned dirs.  Returns [{category, file, text, entries}].
+// drop into the scanned dirs.  Returns { generated: [{category, file, text,
+// entries}], diagnostics: {refs, missing, samples} } — diagnostics surfaces
+// the references the pack's own lists point at but the archive doesn't
+// contain (the engine will "Cannot Load"-skip those entries at boot; import
+// still succeeds, this just makes the gap visible at import time).
+const DIAG_SAMPLE_CAP = 10;
 function buildGeneratedLists(lists, resolve, id, datIdentity) {
   const prefixDir = `packs/${id}`;
   const generated = [];
+  const diagnostics = { refs: 0, missing: 0, samples: [] };
   for (const c of CATEGORIES) {
     const catLists = lists.filter((l) => l.category.key === c.key);
     if (catLists.length === 0) continue;
@@ -293,6 +303,11 @@ function buildGeneratedLists(lists, resolve, id, datIdentity) {
           : rewriteFilesLine(line, resolve, prefixDir);
         // YSFLIGHT requires >= 3 tokens per usable entry; skip anything shorter.
         if (!rw || rw.tokens < 3) continue;
+        diagnostics.refs += rw.resolved + rw.missing;
+        diagnostics.missing += rw.missing;
+        for (const ref of rw.missingRefs || []) {
+          if (diagnostics.samples.length < DIAG_SAMPLE_CAP) diagnostics.samples.push(ref);
+        }
         outLines.push(rw.line);
         if (c.prefix === 'air' && datIdentity) {
           const first = tokenize(line)[0];
@@ -322,7 +337,7 @@ function buildGeneratedLists(lists, resolve, id, datIdentity) {
       });
     }
   }
-  return generated;
+  return { generated, diagnostics };
 }
 
 // Re-root candidates: the original layout plus each level of a SINGLE common
@@ -451,7 +466,7 @@ export async function analyzePack(zipBytes, opts) {
       if (idn) datIdentity.set(f.path, idn);
     }
   }
-  const generated = buildGeneratedLists(lists, resolve, id, datIdentity);
+  const { generated, diagnostics } = buildGeneratedLists(lists, resolve, id, datIdentity);
   const scanned = generated.filter((g) => !g.idx); // engine-globbed .lst only
   if (scanned.length === 0) throw new Error('pack lists contained no usable entries');
 
@@ -472,7 +487,7 @@ export async function analyzePack(zipBytes, opts) {
   // of the pack-id hash: the id is computed over the archive files only.
   if (sourceUrl) manifest.sourceUrl = sourceUrl;
 
-  return { id, name: packName, categories: manifest.categories, total, files, hashed, generated, manifest, source, now };
+  return { id, name: packName, categories: manifest.categories, total, files, hashed, generated, diagnostics, manifest, source, now };
 }
 
 // Streaming analyze: decompress + hash + persist ONE file at a time so the whole
@@ -541,7 +556,7 @@ export async function analyzePackStreaming(zipBytes, opts) {
       datIdentity.set(layout.prefix ? rawPath.slice(layout.prefix.length) : rawPath, idn);
     }
   }
-  const generated = buildGeneratedLists(lists, resolve, id, datIdentity);
+  const { generated, diagnostics } = buildGeneratedLists(lists, resolve, id, datIdentity);
   const scanned = generated.filter((g) => !g.idx); // engine-globbed .lst only
   if (scanned.length === 0) throw new Error('pack lists contained no usable entries');
 
@@ -553,7 +568,7 @@ export async function analyzePackStreaming(zipBytes, opts) {
   };
   if (sourceUrl) manifest.sourceUrl = sourceUrl;
 
-  return { id, name: packName, categories: manifest.categories, total, hashed, generated, manifest, source, now };
+  return { id, name: packName, categories: manifest.categories, total, hashed, generated, diagnostics, manifest, source, now };
 }
 
 // Install a pack archive into the user dir via the adapter.  Idempotent:
