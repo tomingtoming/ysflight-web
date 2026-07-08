@@ -397,7 +397,7 @@ void FsOpenWindow(const FsOpenWindowOption &opt)
 		// WebGL 2.0 context.  The engine's GL ES 2.0 renderer runs unchanged
 		// on a WebGL2 context (superset), and WebGL2 is the prerequisite for
 		// single-pass stereo (OVR_multiview2) in VR.
-		attr.majorVersion=2;
+		attr.majorVersion=1;
 		attr.minorVersion=0;
 		attr.enableExtensionsByDefault=true;
 		attr.preserveDrawingBuffer=false;
