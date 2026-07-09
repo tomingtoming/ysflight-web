@@ -17,9 +17,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 // data URL that stubs THREE.  Simpler: import with a THREE stub through a loader
 // isn't available here, so we test parseDnm by copying its contract against a
 // known DNM and asserting structure through a dynamic import guarded by a stub.
-let parseDnm;
+let parseDnm, buildObject, setMovable, THREE;
 try {
-  ({ parseDnm } = await import('../web/dnm-preview.js'));
+  ({ parseDnm, buildObject, setMovable } = await import('../web/dnm-preview.js'));
+  THREE = await import('../web/vendor/three.module.js');
 } catch (e) {
   // three.module.js uses browser globals; if the import fails under Node, skip
   // (the browser smoke still covers the whole path).
@@ -59,4 +60,34 @@ test('parseDnm: synthetic movable node keeps STA states', { skip: !parseDnm }, (
   assert.equal(gear.sta.length, 2);
   assert.deepEqual(gear.sta[1], [0, 0, 0, 16384, 0, 0, 1]);
   assert.ok(p.srfByName.get('wheel.srf').faces.length === 1);
+});
+
+// Characterization of the movable transform (the approach webflight proved out
+// against the C++ original): a pure-ROTATION part must keep its hinge (CNT)
+// point stationary in world space while a point away from it moves.  This is
+// what "the rotation axis is at the right place" means, and it guards the
+// C++-faithful RotateXZ/ZY/XY signs against regressing to Three's makeRotation*.
+test('movable part rotates about its hinge (CNT stationary, tip moves)', { skip: !buildObject }, () => {
+  // A flap (CLA 5) hinged at CNT=(2, 0, -4), with geometry offset from the hinge
+  // so a rotation visibly swings the tip.  STA[1] is a pure pitch (p) rotation.
+  const dnm = [
+    'DYNAMODEL', 'DNMVER 1',
+    'PCK flap.srf 8',
+    'SURF', 'V 3 0 -4', 'V 3 0 -5', 'V 2 0 -4', 'F', 'V 0 1 2', 'C 100 100 100', 'E',
+    'SRF "Flap"', 'FIL flap.srf', 'CLA 5', 'NST 2',
+    'STA 0 0 0 0 0 0 1', 'STA 0 0 0 0 8000 0 1', 'CNT 2 0 -4', 'POS 0 0 0 0 0 0 1',
+    '',
+  ].join('\n');
+  const built = buildObject(parseDnm(new TextEncoder().encode(dnm)));
+  const grp = (built.movableGroups.flap || [])[0];
+  assert.ok(grp, 'flap registered as movable');
+  const scene = new THREE.Scene();
+  scene.add(built.object3d);
+  const hingeLocal = new THREE.Vector3(2, 0, -4); // == CNT in local coords
+  const tipLocal = new THREE.Vector3(3, 0, -5);   // a vertex away from the hinge
+  const wp = (pt) => { scene.updateMatrixWorld(true); return grp.localToWorld(pt.clone()); };
+  setMovable(grp, 0); const h0 = wp(hingeLocal), t0 = wp(tipLocal);
+  setMovable(grp, 1); const h1 = wp(hingeLocal), t1 = wp(tipLocal);
+  assert.ok(h0.distanceTo(h1) < 1e-6, 'hinge point stays fixed: ' + h0.distanceTo(h1));
+  assert.ok(t0.distanceTo(t1) > 0.2, 'tip actually swings: ' + t0.distanceTo(t1));
 });
