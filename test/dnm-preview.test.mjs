@@ -48,14 +48,14 @@ test('parseDnm: synthetic movable node keeps STA states', { skip: !parseDnm }, (
     'DYNAMODEL', 'DNMVER 1',
     'PCK wheel.srf 8',
     'SURF', 'V 0 0 0', 'V 1 0 0', 'V 0 1 0', 'F', 'V 0 1 2', 'C 100 100 100', 'E',
-    'SRF "Gear"', 'FIL wheel.srf', 'CLA 16', 'NST 2',
+    'SRF "Gear"', 'FIL wheel.srf', 'CLA 0', 'NST 2',
     'STA 0 0 0 0 0 0 1', 'STA 0 0 0 16384 0 0 1', 'CNT 0 0 0', 'POS 0 0 0 0 0 0 1',
     '',
   ].join('\n');
   const p = parseDnm(new TextEncoder().encode(dnm));
   const gear = p.nodes.get('Gear');
   assert.ok(gear, 'gear node parsed');
-  assert.equal(gear.cla, 16);
+  assert.equal(gear.cla, 0);
   assert.equal(gear.sta.length, 2);
   assert.deepEqual(gear.sta[1], [0, 0, 0, 16384, 0, 0, 1]);
   assert.ok(p.srfByName.get('wheel.srf').faces.length === 1);

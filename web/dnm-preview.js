@@ -90,16 +90,30 @@ export function parseDnm(bytes) {
 
 // --- build Three.js -------------------------------------------------------------
 
-// Movable part CLA classes we expose sliders for (name -> class ids).  These are
-// the ones a kid recognizes; the rest animate at 0 (rest pose).
+// Movable part CLA classes we expose sliders for (name -> class ids, from
+// ysshelldnmident.h).  CLA 0 is overloaded (LANDINGDEVICE *and* the static
+// default), so it only counts as gear when its STA states actually differ —
+// staDiffers() enforces that below, which also drops the main body (3 identical
+// states).  These are the parts a kid recognizes.
 export const MOVABLE = {
-  gear: [16], // landing gear (down at STA0, up at STA-last)
+  gear: [0],      // LANDINGDEVICE
   flap: [5],
-  vgw: [1],   // variable-geometry wing
+  vgw: [1],       // variable-geometry (swing) wing
+  airbrake: [4],
   elevator: [6], aileron: [7], rudder: [8],
 };
 const CLA_GROUP = {};
 for (const [g, ids] of Object.entries(MOVABLE)) for (const id of ids) CLA_GROUP[id] = g;
+
+// A node is genuinely animated only if its first and last STA states differ in
+// some component (position or angle) — excludes the static body (CLA 0 with
+// repeated identical states) and single-state nodes.
+function staDiffers(sta) {
+  if (!sta || sta.length < 2) return false;
+  const a = sta[0], b = sta[sta.length - 1];
+  for (let i = 0; i < 6; i++) if (Math.abs((a[i] || 0) - (b[i] || 0)) > 1e-6) return true;
+  return false;
+}
 
 function faceColor(face) {
   const c = face.color, mx = Math.max(c[0], c[1], c[2]);
@@ -128,7 +142,7 @@ export function buildObject(parsed) {
       if (mesh) { group.add(mesh); meshesByLabel.set(label, { mesh, srf: srfByName.get(n.srf) }); }
     }
     const g = CLA_GROUP[n.cla];
-    if (g && n.sta.length >= 2) {
+    if (g && staDiffers(n.sta)) {
       group.userData.sta = n.sta;
       group.userData.cnt = n.cnt;
       (movableGroups[g] = movableGroups[g] || []).push(group);
