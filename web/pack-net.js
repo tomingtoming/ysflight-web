@@ -483,7 +483,11 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
         pc.oniceconnectionstatechange = () => { if (pc) log('ice: ' + pc.iceConnectionState); };
         pc.ondatachannel = (e) => {
           if (e.channel.label !== 'ysf-pack') return;
-          if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
+          // Do NOT disarm the rejoin here: the captured failure mode is a
+          // channel that is DELIVERED but never leaves 'connecting' (ICE says
+          // connected, SCTP never completes).  The rejoin cycle only stands
+          // down once the channel is actually open.
+          log('datachannel delivered (' + e.channel.readyState + ')');
           ch = e.channel;
           ch.binaryType = 'arraybuffer';
           // The channel can already be OPEN when ondatachannel delivers it
