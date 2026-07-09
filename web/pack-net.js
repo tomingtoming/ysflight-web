@@ -135,6 +135,9 @@ export function prioritizeMissing(missing) {
 const PACK_CHUNK = 16 * 1024;
 const PACK_BUFFER_HIGH = 8 * 1024 * 1024; // pause sending above this bufferedAmount
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+// If the host's offer round never yields a datachannel, re-join the room for a
+// fresh one instead of burning the whole transfer budget (issue-18 hardening).
+const REJOIN_MS = 8000;
 const enc = new TextEncoder();
 // Reserved transfer id for the Step-1 metadata bundle (a real pack id is 16 hex
 // chars, so this never collides with one).
@@ -451,15 +454,40 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
       }
     }
 
-    ws.addEventListener('open', () => sig({ t: 'join', room }));
+    // Residual issue-18 hardening: if the negotiated channel never arrives (a
+    // signaling/ICE round can silently die — the captured CI failure shows the
+    // host never even seeing the peer's request connection while a LATER
+    // connection to the same host works fine), don't burn the whole 30s budget:
+    // tear the pc down and re-join the room for a fresh offer.
+    let rejoinTimer = null, rejoins = 0;
+    const armRejoin = () => {
+      if (rejoinTimer) clearTimeout(rejoinTimer);
+      rejoinTimer = setTimeout(() => {
+        if (done || (ch && ch.readyState === 'open') || rejoins >= 2) return;
+        rejoins++;
+        log('no datachannel after ' + REJOIN_MS + 'ms — rejoining (attempt ' + rejoins + ')');
+        try { if (pc) pc.close(); } catch (e) {}
+        pc = null; ch = null; remoteSet = false; iceQ.length = 0;
+        sig({ t: 'join', room });
+        armRejoin();
+      }, REJOIN_MS);
+    };
+    ws.addEventListener('open', () => { sig({ t: 'join', room }); armRejoin(); });
     ws.addEventListener('message', async (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (m.t === 'no-room') { for (const id of want) failed.push({ id, reason: 'no-room' }); want.length = 0; finish(); }
       else if (m.t === 'sdp') {
+        log('offer received — answering');
         pc = new RTCPeerConnection({ iceServers });
         pc.onicecandidate = (e) => { if (e.candidate) sig({ t: 'ice', data: e.candidate }); };
+        pc.oniceconnectionstatechange = () => { if (pc) log('ice: ' + pc.iceConnectionState); };
         pc.ondatachannel = (e) => {
           if (e.channel.label !== 'ysf-pack') return;
+          // Do NOT disarm the rejoin here: the captured failure mode is a
+          // channel that is DELIVERED but never leaves 'connecting' (ICE says
+          // connected, SCTP never completes).  The rejoin cycle only stands
+          // down once the channel is actually open.
+          log('datachannel delivered (' + e.channel.readyState + ')');
           ch = e.channel;
           ch.binaryType = 'arraybuffer';
           // The channel can already be OPEN when ondatachannel delivers it

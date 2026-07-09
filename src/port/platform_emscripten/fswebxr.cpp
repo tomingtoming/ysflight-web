@@ -22,6 +22,12 @@ that owns the session and fills that state every frame:
     the lifetime of the session.
   - The 2D menus are not presented in VR, so the session auto-ends when
     the simulation stops drawing (FsVrConsumeSimDrawnFrames stays 0).
+  - Each XR frame also drives the hand controllers into the engine's VR
+    control-state block (fsvr.h / FsVrControlDataPointer): the right grip
+    is a virtual stick (grab + wrist deflection -> aileron/elevator/rudder),
+    the left grip is a virtual throttle lever (grab + forward push ->
+    throttle), and the face buttons/triggers fire synthetic KeyboardEvents
+    on the default key bindings (fire gun, gear, spoiler/brake, flaps).
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -70,6 +76,15 @@ extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrEyeDataPointer(int eye)
 	return FsVrEyeDataPointer(eye);
 }
 
+// Forwards to the engine's VR controller-state block (fsvr.h): the JS
+// controller runtime below writes aileron/elevator/rudder/throttle here
+// every XR frame; FsFlightControl::ApplyVrControlOverride reads it while
+// FsVrIsActive.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrControlDataPointer(void)
+{
+	return FsVrControlDataPointer();
+}
+
 extern "C" int EMSCRIPTEN_KEEPALIVE YsfwVrConsumeSimDrawnFrames(void)
 {
 	return FsVrConsumeSimDrawnFrames();
@@ -97,7 +112,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 		mvFb:null,
 		mvDepth:null,
 		mvDepthSize:null,
-		testMode:false
+		testMode:false,
+		// Hand-controller state (virtual stick + throttle + button latches).
+		// See fsvr.h / FsVrControlDataPointer for the 16-float block this
+		// feeds, and updateControllers/processControllerPlain below.
+		ctl:{
+			stick:{grabbed:false,q0:null},
+			thr:{grabbed:false,p0:null,fwd0:null,base:0,value:0,ever:false},
+			rightTrigger:false,
+			rightA:false,
+			rightB:false,
+			leftX:false,
+			leftY:false,
+			keys:{}
+		}
 	};
 	Module.ysfwVr=vr;
 
@@ -129,6 +157,255 @@ EM_JS(void,YsfwInstallWebXR,(),
 				}
 				vr.origBind.call(GLctx,target,fb);
 			};
+		}
+	}
+
+	// ---- VR controller -> flight-control state block --------------------
+	// Writes into the 16-float block at _YsfwVrControlDataPointer() (see
+	// fsvr.h for the layout).  All the actual per-controller logic lives in
+	// processControllerPlain, driven by a plain {hand,pos,quat,squeeze,
+	// trigger,buttons} shape so the real XR path (updateControllers) and the
+	// headless test hook (vr.pokeControllerFrame) share one implementation.
+
+	var MAX_ANGLE=Math.PI/4;   // 45 degrees: full stick deflection.
+	var THROTTLE_SENS=6;       // 1/6 m (~17cm) forward push = full 0..1 range.
+	var GRAB_THRESHOLD=0.75;   // xr-standard squeeze/trigger value = "pressed".
+
+	function clamp(v,lo,hi){ return v<lo ? lo : (v>hi ? hi : v); }
+
+	// Minimal quaternion math, no external libs, unit quaternions only.
+	function quatMultiply(a,b)
+	{
+		return {
+			x:a.w*b.x+a.x*b.w+a.y*b.z-a.z*b.y,
+			y:a.w*b.y-a.x*b.z+a.y*b.w+a.z*b.x,
+			z:a.w*b.z+a.x*b.y-a.y*b.x+a.z*b.w,
+			w:a.w*b.w-a.x*b.x-a.y*b.y-a.z*b.z
+		};
+	}
+	function quatConjugate(q)
+	{
+		// Unit quaternion: conjugate == inverse.
+		return {x:-q.x,y:-q.y,z:-q.z,w:q.w};
+	}
+	function rotateVecByQuat(v,q)
+	{
+		var vq={x:v.x,y:v.y,z:v.z,w:0};
+		var t=quatMultiply(quatMultiply(q,vq),quatConjugate(q));
+		return {x:t.x,y:t.y,z:t.z};
+	}
+	function vecSub(a,b){ return {x:a.x-b.x,y:a.y-b.y,z:a.z-b.z}; }
+	function vecDot(a,b){ return a.x*b.x+a.y*b.y+a.z*b.z; }
+	function vecLen(v){ return Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z); }
+
+	// Decompose the grip rotation since grab-begin (deltaQ = q*conjugate(q0))
+	// into pitch/yaw/roll deflection.  Deflections are expected well under
+	// 45 degrees, so gimbal order is not a practical concern.  Reference
+	// vectors: f=(0,0,-1) forward, r=(1,0,0) right; rotate both by deltaQ:
+	//   pitch = asin(f'.y)          -- forward tilting up/down
+	//   yaw   = atan2(-f'.x,-f'.z)  -- forward swinging left/right
+	//   roll  = asin(r'.y)          -- right-hand-reference tilting up/down
+	// Sign conventions, matching fsvr.h (aileron+ = roll right, elevator+ =
+	// nose up, rudder+ = nose left):
+	//   elevator=+pitch: the controller's front tilting upward (f'.y>0) is
+	//     the wrist pitching back -- nose up -- direct, no flip.
+	//   rudder=+yaw: the front swinging to the user's left (f'.x<0) is
+	//     yawing left -- direct, no flip.
+	//   aileron=-roll: a positive rotation about the local forward (roll)
+	//     axis swings the right-reference vector UP (r'.y>0), which is the
+	//     wrist rolling LEFT as the user sees it looking down their own arm
+	//     (that rotation is counter-clockwise from the user's viewpoint) --
+	//     so the sign is flipped here to make "wrist rolls right" (r'.y<0)
+	//     read as positive aileron.
+	function deflectionFromDeltaQ(dq)
+	{
+		var f=rotateVecByQuat({x:0,y:0,z:-1},dq);
+		var r=rotateVecByQuat({x:1,y:0,z:0},dq);
+		var pitch=Math.asin(clamp(f.y,-1,1));
+		var yaw=Math.atan2(-f.x,-f.z);
+		var roll=Math.asin(clamp(r.y,-1,1));
+		return {
+			elevator:clamp(pitch/MAX_ANGLE,-1,1),
+			rudder:clamp(yaw/MAX_ANGLE,-1,1),
+			aileron:clamp(-roll/MAX_ANGLE,-1,1)
+		};
+	}
+
+	// Synthetic-key dispatch, matching the on-screen touch controls in
+	// web/index.html exactly: a plain KeyboardEvent on window, keyed by
+	// e.code, firing only on press/release edges (not every frame).
+	function vrKeyEdge(code,pressed)
+	{
+		if(!code || !!vr.ctl.keys[code]===!!pressed)
+		{
+			return;
+		}
+		vr.ctl.keys[code]=!!pressed;
+		window.dispatchEvent(new KeyboardEvent(pressed ? 'keydown' : 'keyup',{code:code,bubbles:true}));
+	}
+	function vrReleaseAllKeys()
+	{
+		for(var code in vr.ctl.keys)
+		{
+			vrKeyEdge(code,false);
+		}
+	}
+	function vrHapticPulse(rawSrc)
+	{
+		try
+		{
+			var act=rawSrc && rawSrc.gamepad && rawSrc.gamepad.hapticActuators && rawSrc.gamepad.hapticActuators[0];
+			if(act)
+			{
+				act.pulse(0.25,50);
+			}
+		}
+		catch(e){}
+	}
+
+	// The shared per-controller update.  entry is the plain data shape;
+	// viewerQuat is the headset orientation this frame ({x,y,z,w}, used only
+	// by the left/throttle hand); rawSrc is the real XRInputSource if this
+	// call came from live XR input (haptics only -- null from the test hook).
+	function processControllerPlain(entry,viewerQuat,rawSrc)
+	{
+		var ptr=_YsfwVrControlDataPointer()>>2;
+		var grabbed=entry.squeeze>GRAB_THRESHOLD;
+
+		if('right'===entry.hand)
+		{
+			var st=vr.ctl.stick;
+			if(grabbed && !st.grabbed)
+			{
+				st.q0=entry.quat;
+				vrHapticPulse(rawSrc);
+			}
+			else if(!grabbed && st.grabbed)
+			{
+				// Self-centering: release springs the virtual stick back to
+				// neutral, like a real spring-loaded stick.
+				HEAPF32[ptr+0]=0;
+				HEAPF32[ptr+1]=0;
+				HEAPF32[ptr+2]=0;
+				HEAPF32[ptr+3]=0;
+				vrHapticPulse(rawSrc);
+			}
+			st.grabbed=grabbed;
+			if(grabbed && st.q0)
+			{
+				var dq=quatMultiply(entry.quat,quatConjugate(st.q0));
+				var defl=deflectionFromDeltaQ(dq);
+				HEAPF32[ptr+0]=1;
+				HEAPF32[ptr+1]=defl.aileron;
+				HEAPF32[ptr+2]=defl.elevator;
+				HEAPF32[ptr+3]=defl.rudder;
+			}
+
+			var triggerPressed=entry.trigger>GRAB_THRESHOLD;
+			if(triggerPressed && !vr.ctl.rightTrigger)
+			{
+				vrHapticPulse(rawSrc);
+			}
+			vrKeyEdge('Space',triggerPressed); // Default fire-gun key (FSBTF_FIREWEAPON).
+			vr.ctl.rightTrigger=triggerPressed;
+
+			var aPressed=!!(entry.buttons && entry.buttons.a);
+			vrKeyEdge('KeyG',aPressed); // Default landing-gear key.
+			vr.ctl.rightA=aPressed;
+
+			var bPressed=!!(entry.buttons && entry.buttons.b);
+			vrKeyEdge('KeyB',bPressed); // Default spoiler/air-brake key.
+			vr.ctl.rightB=bPressed;
+		}
+		else if('left'===entry.hand)
+		{
+			var th=vr.ctl.thr;
+			if(grabbed && !th.grabbed)
+			{
+				th.p0=entry.pos;
+				var vq=viewerQuat||{x:0,y:0,z:0,w:1};
+				var fwd=rotateVecByQuat({x:0,y:0,z:-1},vq);
+				fwd.y=0;
+				var flen=vecLen(fwd);
+				th.fwd0=(1e-4<flen) ? {x:fwd.x/flen,y:0,z:fwd.z/flen} : {x:0,y:0,z:-1};
+				th.base=th.value; // Latch the current value as this grab's baseline.
+				vrHapticPulse(rawSrc);
+			}
+			else if(!grabbed && th.grabbed)
+			{
+				vrHapticPulse(rawSrc);
+			}
+			th.grabbed=grabbed;
+			if(grabbed && th.p0)
+			{
+				var d=vecSub(entry.pos,th.p0);
+				var value=clamp(th.base+vecDot(d,th.fwd0)*THROTTLE_SENS,0,1);
+				HEAPF32[ptr+4]=1;
+				HEAPF32[ptr+5]=value;
+				HEAPF32[ptr+6]=1;
+				th.value=value;
+				th.ever=true;
+			}
+			else
+			{
+				HEAPF32[ptr+4]=0;
+				// [5] (throttle) is intentionally left as-is: a real lever
+				// stays where it was left after release.  [6] stays 1 once
+				// ever grabbed (see fsvr.h).
+				if(th.ever)
+				{
+					HEAPF32[ptr+6]=1;
+				}
+			}
+
+			var xPressed=!!(entry.buttons && entry.buttons.a);
+			vrKeyEdge('KeyF',xPressed); // Default flaps-down key.
+			vr.ctl.leftX=xPressed;
+
+			var yPressed=!!(entry.buttons && entry.buttons.b);
+			vrKeyEdge('KeyR',yPressed); // Default flaps-up key.
+			vr.ctl.leftY=yPressed;
+		}
+	}
+
+	// Real XR path: adapt each live XRInputSource + this frame's grip pose
+	// into the plain shape and run it through processControllerPlain.  Only
+	// called when a valid viewer pose exists this frame (see onXRFrame).
+	function updateControllers(frame,pose)
+	{
+		var viewerQuat=pose.transform.orientation;
+		var sources=frame.session.inputSources;
+		for(var i=0; i<sources.length; ++i)
+		{
+			var src=sources[i];
+			if(!src.gripSpace || !src.gamepad)
+			{
+				continue;
+			}
+			var hand=src.handedness;
+			if('left'!==hand && 'right'!==hand)
+			{
+				continue;
+			}
+			var gpose=frame.getPose(src.gripSpace,vr.refSpace);
+			if(!gpose)
+			{
+				continue; // No pose this frame for this source: skip it.
+			}
+			var gp=src.gamepad;
+			var squeeze=(gp.buttons[1] ? gp.buttons[1].value : 0);
+			var trigger=(gp.buttons[0] ? gp.buttons[0].value : 0);
+			processControllerPlain({
+				hand:hand,
+				pos:gpose.transform.position,
+				quat:gpose.transform.orientation,
+				squeeze:squeeze,
+				trigger:trigger,
+				buttons:{
+					a:!!(gp.buttons[4] && gp.buttons[4].pressed),
+					b:!!(gp.buttons[5] && gp.buttons[5].pressed)
+				}
+			},viewerQuat,src);
 		}
 	}
 
@@ -255,6 +532,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(pose)
 			{
 				writeEyeDataMv(pose);
+				updateControllers(frame,pose);
 			}
 		}
 		else
@@ -263,6 +541,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(pose)
 			{
 				writeEyeData(pose,layer);
+				updateControllers(frame,pose);
 			}
 			vr.xrFb=layer.framebuffer;
 		}
@@ -417,6 +696,26 @@ EM_JS(void,YsfwInstallWebXR,(),
 						vr.mvDepthSize=null;
 					}
 					vr.simSilentFrames=0;
+
+					// Controller state: zero the whole 16-float block for
+					// cleanliness (FsVrIsActive is 0 from here on, so the
+					// engine ignores it regardless) and reset the JS-side
+					// grab/latch state, releasing any synthetic keys still
+					// held down.
+					var ctlPtr=_YsfwVrControlDataPointer()>>2;
+					for(var zi=0; zi<16; ++zi)
+					{
+						HEAPF32[ctlPtr+zi]=0;
+					}
+					vrReleaseAllKeys();
+					vr.ctl.stick={grabbed:false,q0:null};
+					vr.ctl.thr={grabbed:false,p0:null,fwd0:null,base:0,value:0,ever:false};
+					vr.ctl.rightTrigger=false;
+					vr.ctl.rightA=false;
+					vr.ctl.rightB=false;
+					vr.ctl.leftX=false;
+					vr.ctl.leftY=false;
+
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -466,6 +765,47 @@ EM_JS(void,YsfwInstallWebXR,(),
 	vr.setPresenting=function(presenting)
 	{
 		_YsfwVrSetPresenting(presenting ? 1 : 0);
+	};
+
+	// Headless test hook for the controller path: scripts/smoke-vrctl.mjs
+	// drives this without a live XR session (call vr.setPresenting(true)
+	// first so FsVrIsActive is true and the engine trusts the block).
+	//   list: array of {hand:'left'|'right', pos:[x,y,z], quat:[x,y,z,w],
+	//         squeeze:0..1, trigger:0..1, buttons:{a:bool,b:bool}}
+	//   viewerQuat: optional [x,y,z,w] headset orientation (default identity,
+	//         forward -Z).
+	// Goes through the exact same processControllerPlain as the real XR path
+	// (updateControllers) -- no duplicated control logic.
+	vr.pokeControllerFrame=function(list,viewerQuat)
+	{
+		var vq=viewerQuat ? {x:viewerQuat[0],y:viewerQuat[1],z:viewerQuat[2],w:viewerQuat[3]} : {x:0,y:0,z:0,w:1};
+		for(var i=0; i<list.length; ++i)
+		{
+			var e=list[i];
+			processControllerPlain({
+				hand:e.hand,
+				pos:{x:e.pos[0],y:e.pos[1],z:e.pos[2]},
+				quat:{x:e.quat[0],y:e.quat[1],z:e.quat[2],w:e.quat[3]},
+				squeeze:(undefined!==e.squeeze ? e.squeeze : 0),
+				trigger:(undefined!==e.trigger ? e.trigger : 0),
+				buttons:e.buttons||{}
+			},vq,null);
+		}
+	};
+	// Debug/test hook: read the 16-float control block back as a plain array
+	// (see fsvr.h for the layout).  The hosting page has no HEAPF32 access
+	// (this build does not export it), so scripts/smoke-vrctl.mjs uses this
+	// instead of reading the wasm heap directly -- the read-side counterpart
+	// of pokeEye's write.
+	vr.readControlBlock=function()
+	{
+		var ptr=_YsfwVrControlDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<16; ++i)
+		{
+			out.push(HEAPF32[ptr+i]);
+		}
+		return out;
 	};
 
 	// Headless test hooks for single-pass stereo: render into an

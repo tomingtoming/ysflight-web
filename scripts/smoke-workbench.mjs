@@ -68,29 +68,40 @@ if (res.identify !== 'YSFW_TEST1') die('expected identify YSFW_TEST1, got ' + re
 if (res.templates !== 1) die('expected 1 template, got ' + res.templates);
 if ((res.warnings || []).length !== 0) die('unexpected warnings: ' + JSON.stringify(res.warnings));
 
-// 2. The .dat wizard: stock base (dist/stock, no wasm preload) -> renamed,
-//    re-tuned .dat -> second aircraft with the fixture's visual/collision.
+// 2. The ZERO-FILE aircraft: borrow a stock airframe (visual/collision staged
+//    at build), REPAINT the visual (palette swap, lights auto-protected), and
+//    pair it with a wizard .dat carrying second-tier SET knobs.
 const wiz = await page
   .evaluate(async () => {
     const stock = await window.ysfwWorkbench.listStock();
     if (!stock.length) throw new Error('no stock aircraft listed');
     const f15 = stock.find((a) => a.identify === 'F-15C_EAGLE') || stock[0];
-    const dat = await window.ysfwWorkbench.makeDat(f15.file, 'WB_CUSTOM1', { engine: 2 });
-    const { unzipSync } = await import('./vendor/fflate.js');
-    const z = unzipSync(new Uint8Array(await (await fetch('/test-pack.zip')).arrayBuffer()));
-    const f = (p) => ({ name: p.split('/').pop(), bytes: z[p] });
+    if (!f15.visual || !f15.collision) throw new Error('stock entry lacks airframe slots: ' + JSON.stringify(f15));
+    const dat = await window.ysfwWorkbench.makeDat(
+      f15.file, 'WB_CUSTOM1', { engine: 2 },
+      { strength: 25, smoke: [255, 80, 80] },
+    );
+    const fv = async (rel) => new Uint8Array(await (await fetch('./stock/' + rel)).arrayBuffer());
+    const vis = await fv(f15.visual);
+    const colors = window.ysfwWorkbench.extractDnmColors(vis);
+    if (!colors.length) throw new Error('no paintable colors in stock visual');
+    const painted = window.ysfwWorkbench.repaintDnm(vis, { [colors[0].key]: [255, 0, 255] });
     const r = await window.ysfwWorkbench.assembleInstall({
       name: 'wbcustom',
       dat: { name: 'wb_custom1.dat', bytes: dat.bytes },
-      visual: f('user/toming/test1.dnm'),
-      collision: f('user/toming/test1coll.srf'),
+      visual: { name: f15.visual.split('/').pop(), bytes: painted.bytes },
+      collision: { name: f15.collision.split('/').pop(), bytes: await fv(f15.collision) },
     });
-    return { stockCount: stock.length, identify: r.identify, id: r.id };
+    return { stockCount: stock.length, identify: r.identify, id: r.id, repainted: painted.replaced, datApplied: dat.applied };
   })
-  .catch((e) => die('dat wizard flow threw: ' + e.message));
-console.log('dat wizard: ' + JSON.stringify(wiz));
+  .catch((e) => die('zero-file aircraft flow threw: ' + e.message));
+console.log('zero-file aircraft: ' + JSON.stringify(wiz));
 if (wiz.identify !== 'WB_CUSTOM1') die('expected WB_CUSTOM1, got ' + wiz.identify);
 if (wiz.stockCount < 50) die('stock list suspiciously small: ' + wiz.stockCount);
+if (!(wiz.repainted > 0)) die('repaint touched no faces');
+if (!wiz.datApplied.includes('STRENGTH') || !wiz.datApplied.includes('SMOKECOL')) {
+  die('dat extras not applied: ' + JSON.stringify(wiz.datApplied));
+}
 
 // 3. The island scenery: a DRAWN map — islands (PC2 visual + PST LAND) plus the
 //    rich layer: stock ground objects (carrier + elevated runway), a cosine

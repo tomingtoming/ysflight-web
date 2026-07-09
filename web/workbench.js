@@ -168,6 +168,89 @@ export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coa
   };
 }
 
+// --- paint shop (.dnm recolor) ---------------------------------------------------
+
+// DNM files are line-based text: PCK "<name>" <N> embeds an SRF as the next N
+// lines, and polygon colors are `C r g b [a]` lines inside those blocks.  The
+// node section that follows maps each embedded SRF (FIL <name>) to a CLA class
+// id — 30..34 are the light classes (nav/beacon/strobe/landing), whose pure
+// colors must never be repainted.  Everything here is exact line surgery on the
+// latin1 text, so untouched bytes (including Shift-JIS names) survive verbatim.
+
+const PCK_RE = /^PCK\s+("?)([^"\s]+)\1\s+(\d+)/;
+const C_RE = /^(\s*C\s+)(\d+)\s+(\d+)\s+(\d+)((?:\s+\d+)?\s*)$/;
+
+// Enumerate PCK block line-ranges and the set of light-class block names.
+function dnmLayout(lines) {
+  const blocks = []; // {name, start, end} — lines[start..end] inclusive are the SRF body
+  for (let i = 0; i < lines.length; i++) {
+    const m = PCK_RE.exec(lines[i]);
+    if (!m) continue;
+    const n = parseInt(m[3], 10);
+    blocks.push({ name: m[2], start: i + 1, end: Math.min(i + n, lines.length - 1) });
+    i += n;
+  }
+  const inBlock = new Set();
+  for (const b of blocks) for (let j = b.start; j <= b.end; j++) inBlock.add(j);
+  const claOf = new Map();
+  let lastFil = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (inBlock.has(i)) continue;
+    const line = lines[i].trim();
+    const fil = /^FIL\s+("?)([^"\s]+)\1/.exec(line);
+    if (fil) { lastFil = fil[2]; continue; }
+    const cla = /^CLA\s+(\d+)/.exec(line);
+    if (cla && lastFil !== null) { claOf.set(lastFil, parseInt(cla[1], 10)); lastFil = null; }
+  }
+  const isLight = (name) => { const c = claOf.get(name); return c !== undefined && c >= 30 && c <= 34; };
+  return { blocks, isLight };
+}
+
+// Unique paintable colors of a .dnm (light-class blocks excluded), most-used
+// first.  Returns [{key: 'r,g,b', r, g, b, count}].
+export function extractDnmColors(bytes) {
+  const lines = b2s(bytes).split('\n');
+  const { blocks, isLight } = dnmLayout(lines);
+  const counts = new Map();
+  for (const b of blocks) {
+    if (isLight(b.name)) continue;
+    for (let j = b.start; j <= b.end; j++) {
+      const m = C_RE.exec(lines[j].replace(/\r$/, ''));
+      if (!m) continue;
+      const key = m[2] + ',' + m[3] + ',' + m[4];
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([key, count]) => {
+      const [r, g, b] = key.split(',').map(Number);
+      return { key, r, g, b, count };
+    })
+    .sort((a, b) => b.count - a.count);
+}
+
+// Repaint: mapping = {'r,g,b': [r2,g2,b2], ...}.  Alpha components and line
+// endings are preserved; light-class blocks are never touched.  Returns
+// {bytes, replaced} — replaced = number of C lines rewritten.
+export function repaintDnm(bytes, mapping) {
+  const lines = b2s(bytes).split('\n');
+  const { blocks, isLight } = dnmLayout(lines);
+  let replaced = 0;
+  for (const b of blocks) {
+    if (isLight(b.name)) continue;
+    for (let j = b.start; j <= b.end; j++) {
+      const hasCR = lines[j].endsWith('\r');
+      const m = C_RE.exec(hasCR ? lines[j].slice(0, -1) : lines[j]);
+      if (!m) continue;
+      const to = mapping[m[2] + ',' + m[3] + ',' + m[4]];
+      if (!to) continue;
+      lines[j] = m[1] + to[0] + ' ' + to[1] + ' ' + to[2] + m[5] + (hasCR ? '\r' : '');
+      replaced++;
+    }
+  }
+  return { bytes: s2b(lines.join('\n')), replaced };
+}
+
 // --- .dat wizard ---------------------------------------------------------------
 
 // Enumerate the stock aircraft readable at fsReady: the .data preload is fully
@@ -221,7 +304,16 @@ const KNOB_KEYS = {
 // Build a new .dat from a stock base: rename IDENTIFY and scale the whitelisted
 // knobs.  knobs = {engine?, weight?, speed?, agility?} as multipliers (1 = keep).
 // Byte-preserving outside the touched lines.  Returns {bytes, identify, applied}.
-export function makeDatFromBase(baseBytes, { identify, knobs = {} }) {
+// extras — SET-style knobs on top of the multiplier ones.  All keys are in the
+// engine's keyword list, so ADDING a line a base .dat lacks is accepted (only
+// UNKNOWN keywords fail the load); none of them feed AUTOCALC, so appending at
+// the end is order-safe:
+//   strength    : int (STRENGTH — hits to kill; ~1..99)
+//   radarCross  : number (RADARCRS — 0.1 = stealth; weapons hanging outside
+//                 force it back to 1.0, engine rule)
+//   gunInterval : seconds (GUNINTVL — smaller = faster fire)
+//   smoke       : [r,g,b] (SMOKECOL ALL + a tail SMOKEGEN when the base has none)
+export function makeDatFromBase(baseBytes, { identify, knobs = {}, extras = {} }) {
   const clean = sanitizeIdentify(identify);
   if (!clean) throw new Error('workbench: new aircraft name is required');
   const scaleOf = (key) => {
@@ -253,6 +345,24 @@ export function makeDatFromBase(baseBytes, { identify, knobs = {} }) {
     });
   });
   if (!renamed) throw new Error('workbench: base .dat has no IDENTIFY line');
+
+  // SET-style extras: replace the key's line when present, append when absent.
+  const setKey = (key, value) => {
+    const re = new RegExp('^' + key + '\\b');
+    const idx = lines.findIndex((l) => re.test(l));
+    if (idx >= 0) lines[idx] = key + ' ' + value + (lines[idx].endsWith('\r') ? '\r' : '');
+    else lines.push(key + ' ' + value);
+    applied.push(key);
+  };
+  if (Number.isFinite(extras.strength)) setKey('STRENGTH', String(Math.max(1, Math.round(extras.strength))));
+  if (Number.isFinite(extras.radarCross)) setKey('RADARCRS', String(extras.radarCross));
+  if (Number.isFinite(extras.gunInterval)) setKey('GUNINTVL', String(extras.gunInterval));
+  if (Array.isArray(extras.smoke) && extras.smoke.length === 3) {
+    for (let i = lines.length - 1; i >= 0; i--) if (/^SMOKECOL\b/.test(lines[i])) lines.splice(i, 1);
+    if (!lines.some((l) => /^SMOKEGEN\b/.test(l))) lines.push('SMOKEGEN 0.0m 0.0m -6.0m');
+    lines.push('SMOKECOL ALL ' + extras.smoke.map((v) => Math.max(0, Math.min(255, v | 0))).join(' '));
+    applied.push('SMOKECOL');
+  }
   return { bytes: s2b(lines.join('\n')), identify: clean, applied };
 }
 
