@@ -93,7 +93,8 @@ H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js
   "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" \
   "$ROOT/web/workbench.js" "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" \
   "$ROOT/web/staging.js" "$ROOT/web/modeler-bridge.js" "$ROOT/web/modeler.html" \
-  "$ROOT/web/dnm-preview.js" \
+  "$ROOT/web/dnm-preview.js" "$ROOT/web/studio-shared.js" \
+  "$ROOT/web/studio-aircraft.js" "$ROOT/web/studio-scenery.js" "$ROOT/web/studio-pack.js" \
   "$ROOT/web/sw.js" 2>/dev/null | sha1sum | cut -c1-8)
 BUILD_ID=$(printf '%s%s%s%s' "$H_JS" "$H_WASM" "$H_DATA" "$H_SHELL" | sha1sum | cut -c1-12)
 
@@ -113,10 +114,14 @@ cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/w
 mkdir -p "$DIST_DIR/vendor"
 cp "$ROOT/web/vendor/fflate.js" "$DIST_DIR/vendor/"
 
-# Workbench page: engine-less creation space (aircraft assembly, .dat wizard,
-# island drawing).  Stock .dat files + identity index are staged statically so
-# the page never needs the wasm preload.
-cp "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" "$ROOT/web/dnm-preview.js" "$DIST_DIR/"
+# Workbench hub + the dedicated full-screen studio pages (aircraft / scenery /
+# pack composition).  All engine-less: stock .dat files + identity index are
+# staged statically so none of these pages needs the wasm preload.
+cp "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" "$ROOT/web/dnm-preview.js" \
+   "$ROOT/web/studio-shared.js" \
+   "$ROOT/web/studio-aircraft.html" "$ROOT/web/studio-aircraft.js" \
+   "$ROOT/web/studio-scenery.html" "$ROOT/web/studio-scenery.js" \
+   "$ROOT/web/studio-pack.html" "$ROOT/web/studio-pack.js" "$DIST_DIR/"
 cp "$ROOT/web/vendor/three.module.js" "$DIST_DIR/vendor/"
 node "$ROOT/scripts/gen-stock-index.mjs" "$ROOT/upstream/YSFLIGHT/runtime" "$DIST_DIR/stock"
 
@@ -136,7 +141,7 @@ sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',dat
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
 
 # Service worker: build id + precache list.
-PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"studio-pack.html\",\"studio-pack.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 
