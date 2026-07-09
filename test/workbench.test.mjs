@@ -297,13 +297,14 @@ test('paint shop: packed 15-bit C <n> colors decode and repaint (amp.dnm form)',
   const colors = extractDnmColors(bytes);
   const keys = colors.map((c) => c.key);
   assert.ok(keys.includes('255,189,115'), 'packed skin decoded: ' + JSON.stringify(keys));
-  assert.ok(keys.includes('246,0,0'), 'packed red decoded');
+  assert.ok(keys.includes('247,0,0'), 'packed red decoded: ' + JSON.stringify(keys)); // 30*255/31=246.8->247
   // Repaint by decoded key; matched packed line becomes a triplet, line count kept.
   const out = repaintDnm(bytes, { '255,189,115': [10, 20, 30] });
   assert.equal(out.replaced, 1);
   const text = new TextDecoder().decode(out.bytes);
   assert.match(text, /^C 10 20 30$/m);
   assert.match(text, /^C 960$/m); // untouched packed color stays packed
+  void colors;
   assert.equal(text.split('\n').length, dnm.split('\n').length); // same line count
 });
 
