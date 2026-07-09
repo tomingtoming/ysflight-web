@@ -90,6 +90,15 @@ extern "C" int EMSCRIPTEN_KEEPALIVE YsfwVrConsumeSimDrawnFrames(void)
 	return FsVrConsumeSimDrawnFrames();
 }
 
+// Forwards to the engine's VR HUD composite state block (fsvr.h, 8 floats):
+// the JS runtime writes [enable,fbo,texArray,texW,texH] here when single-pass
+// stereo engages; SimDrawAllScreen reads it to render the flat HUD into the
+// off-screen two-layer multiview framebuffer and composite it onto a quad.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrHudDataPointer(void)
+{
+	return FsVrHudDataPointer();
+}
+
 // clang-format off
 EM_JS(void,YsfwInstallWebXR,(),
 {
@@ -113,6 +122,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		mvDepth:null,
 		mvDepthSize:null,
 		testMode:false,
+		// VR HUD composite (fsvr.h FsVrHudDataPointer): an off-screen two-layer
+		// multiview framebuffer the engine renders the flat HUD into, plus the
+		// emscripten GL-table ids so the C++ side can bind them by integer name.
+		hud:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
 		// See fsvr.h / FsVrControlDataPointer for the 16-float block this
 		// feeds, and updateControllers/processControllerPlain below.
@@ -158,6 +171,100 @@ EM_JS(void,YsfwInstallWebXR,(),
 				vr.origBind.call(GLctx,target,fb);
 			};
 		}
+	}
+
+	// ---- VR HUD composite resources -------------------------------------
+	// Allocate the off-screen two-layer multiview HUD framebuffer + RGBA8
+	// texture array (1024x1024x2) and publish them, by emscripten GL-table
+	// integer id, into the engine's HUD state block (fsvr.h).  The engine
+	// renders the flat HUD into layer-both once per frame and composites the
+	// array onto a cockpit quad.  Kill switch: Module.ysfwVrOptions.hud===false
+	// leaves the whole feature off (enable stays 0, no GL objects created).
+	function setupHud()
+	{
+		var opts=Module.ysfwVrOptions||{};
+		if(false===opts.hud)
+		{
+			return;
+		}
+		if(vr.hud)
+		{
+			return;
+		}
+		var ext=vr.mvExt||GLctx.getExtension('OCULUS_multiview')||GLctx.getExtension('OVR_multiview2');
+		if(!ext)
+		{
+			return;
+		}
+		var W=1024,H=1024;
+
+		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
+		GLctx.activeTexture(GLctx.TEXTURE15);
+		var tex=GLctx.createTexture();
+		GLctx.bindTexture(GLctx.TEXTURE_2D_ARRAY,tex);
+		GLctx.texStorage3D(GLctx.TEXTURE_2D_ARRAY,1,GLctx.RGBA8,W,H,2);
+		// levels=1: must pick a non-mipmapping filter or the texture is
+		// mip-incomplete and samples as black.
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_MIN_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_MAG_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_WRAP_S,GLctx.CLAMP_TO_EDGE);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_WRAP_T,GLctx.CLAMP_TO_EDGE);
+		GLctx.bindTexture(GLctx.TEXTURE_2D_ARRAY,null);
+		GLctx.activeTexture(prevActive);
+
+		var fb=GLctx.createFramebuffer();
+		var prevFb=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,fb);
+		// No depth attachment: the HUD is 2D painter's-order (FsSet2DDrawing uses
+		// glDepthFunc(ALWAYS)/glDepthMask(FALSE)); no depth buffer is needed.
+		ext.framebufferTextureMultiviewOVR(GLctx.FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,tex,0,0,2);
+		var st=GLctx.checkFramebufferStatus(GLctx.FRAMEBUFFER);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prevFb);
+		if(st!==GLctx.FRAMEBUFFER_COMPLETE)
+		{
+			console.warn('[vr] HUD framebuffer incomplete 0x'+st.toString(16)+' -- HUD disabled');
+			GLctx.deleteFramebuffer(fb);
+			GLctx.deleteTexture(tex);
+			return;
+		}
+
+		// Register the JS objects into emscripten's GL tables so the C++ side
+		// can reference them by the integer ids it stores as GLuint.
+		var fbId=GL.getNewId(GL.framebuffers);
+		GL.framebuffers[fbId]=fb;
+		fb.name=fbId;
+		var texId=GL.getNewId(GL.textures);
+		GL.textures[texId]=tex;
+		tex.name=texId;
+
+		var p=_YsfwVrHudDataPointer()>>2;
+		HEAPF32[p+0]=1;     // enable
+		HEAPF32[p+1]=fbId;  // hudFbo
+		HEAPF32[p+2]=texId; // hudTexArray
+		HEAPF32[p+3]=W;
+		HEAPF32[p+4]=H;
+		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
+
+		vr.hud={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H};
+		console.log('[vr] HUD composite '+W+'x'+H+'x2 (fbId='+fbId+' texId='+texId+')');
+	}
+
+	function teardownHud()
+	{
+		var p=_YsfwVrHudDataPointer()>>2;
+		for(var i=0; i<8; ++i)
+		{
+			HEAPF32[p+i]=0;
+		}
+		if(!vr.hud)
+		{
+			return;
+		}
+		try{ GLctx.deleteFramebuffer(vr.hud.fb); }catch(e){}
+		try{ GLctx.deleteTexture(vr.hud.tex); }catch(e){}
+		GL.framebuffers[vr.hud.fbId]=null;
+		GL.textures[vr.hud.texId]=null;
+		vr.hud=null;
 	}
 
 	// ---- VR controller -> flight-control state block --------------------
@@ -716,6 +823,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.leftX=false;
 					vr.ctl.leftY=false;
 
+					teardownHud();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -726,6 +834,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 				});
 
 				_YsfwVrSetMultiview(vr.mvLayer ? 1 : 0);
+				if(vr.mvLayer)
+				{
+					setupHud();
+				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
 				vr.simSilentFrames=0;
@@ -847,6 +959,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.xrFb=fb;
 		installFbRedirect();
 		_YsfwVrSetMultiview(1);
+		setupHud();
 		_YsfwVrSetPresenting(1);
 		return 'ok';
 	};
@@ -892,6 +1005,45 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
 		GLctx.deleteFramebuffer(rfb);
 		return { meanDiff:sum/(a.length/4)/3 };
+	};
+
+	// Headless test hooks for the VR HUD composite (scripts/smoke-vrhud.mjs).
+	// readHudData exposes the 8-float HUD state block (see fsvr.h);
+	// readHudLayerStats reads back a given layer of the HUD texture array and
+	// reports mean luminance AND mean alpha -- nonzero alpha proves the HUD was
+	// actually drawn into the texture (not just cleared transparent).
+	vr.readHudData=function()
+	{
+		var p=_YsfwVrHudDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<8; ++i)
+		{
+			out.push(HEAPF32[p+i]);
+		}
+		return out;
+	};
+	vr.readHudLayerStats=function(layer)
+	{
+		if(!vr.hud)
+		{
+			return { lum:0, alpha:0 };
+		}
+		var w=vr.hud.w,h=vr.hud.h;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.hud.tex,0,layer);
+		var px=new Uint8Array(w*h*4);
+		GLctx.readPixels(0,0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		var lum=0,alpha=0;
+		for(var i=0; i<px.length; i+=4)
+		{
+			lum+=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+			alpha+=px[i+3];
+		}
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		return { lum:lum/(px.length/4), alpha:alpha/(px.length/4) };
 	};
 });
 // clang-format on

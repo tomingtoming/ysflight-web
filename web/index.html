@@ -1158,6 +1158,7 @@
       if (q.get('vrfov') !== null && q.get('vrfov') !== '') o.foveation = parseFloat(q.get('vrfov'));
       if (q.get('vrfps')) o.frameRate = parseFloat(q.get('vrfps'));
       if (q.get('vraa')) o.antialias = q.get('vraa') === '1';
+      if (q.get('vrhud') === '0') o.hud = false; // kill switch for the VR HUD composite
       Module.ysfwVrOptions = o;
     })();
     var vrBtn = document.createElement('button');

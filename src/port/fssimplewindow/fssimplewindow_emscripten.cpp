@@ -491,8 +491,30 @@ void FsResizeWindow(int,int)
 	// Canvas size is owned by the hosting page.
 }
 
+// Optional window-size override.  The VR HUD off-screen pass (engine side)
+// sets this so all pixel-space HUD placement is computed against the HUD
+// texture instead of the real canvas.  Kept as a plain local so fssimplewindow
+// stays dependency-free (tools that link it without the VR engine, e.g. the
+// modeler, simply never call the setter).
+static int fsWinSizeOverrideActive=0;
+static int fsWinSizeOverrideW=0;
+static int fsWinSizeOverrideH=0;
+
+extern "C" void FsSetWindowSizeOverride(int active,int w,int h)
+{
+	fsWinSizeOverrideActive=(0!=active ? 1 : 0);
+	fsWinSizeOverrideW=w;
+	fsWinSizeOverrideH=h;
+}
+
 void FsGetWindowSize(int &wid,int &hei)
 {
+	if(0!=fsWinSizeOverrideActive)
+	{
+		wid=fsWinSizeOverrideW;
+		hei=fsWinSizeOverrideH;
+		return;
+	}
 	wid=winWid;
 	hei=winHei;
 }
