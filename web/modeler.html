@@ -37,6 +37,14 @@
   fitCanvas();
   window.addEventListener('resize', fitCanvas);
 
+  // Polygon Crest's standard view control is SHIFT+right-drag = rotate /
+  // SHIFT+both-buttons = zoom (fsgui3dviewcontrol.cpp SetMouseStateYsStandard),
+  // so the browser context menu must never open on the canvas.  Middle-drag
+  // (CATIA-compatible mode) likewise must not trigger autoscroll/paste.
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  canvas.addEventListener('mousedown', function (e) { if (e.button === 1) e.preventDefault(); });
+  canvas.addEventListener('auxclick', function (e) { e.preventDefault(); });
+
   var Module = {
     canvas: canvas,
     arguments: [],
@@ -62,5 +70,6 @@
   s.src = ASSET.js;
   document.body.appendChild(s);
 </script>
+<script type="module" src="./modeler-bridge.js"></script>
 </body>
 </html>

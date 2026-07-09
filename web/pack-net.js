@@ -462,8 +462,14 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
           if (e.channel.label !== 'ysf-pack') return;
           ch = e.channel;
           ch.binaryType = 'arraybuffer';
+          // The channel can already be OPEN when ondatachannel delivers it
+          // (zero-latency loopback makes this common): an onopen assigned after
+          // the fact then never fires and the joiner never sends a single
+          // request — the all-timeout flake (issue #18).  requestNext() is
+          // idempotent (`current` guard), so kick both ways.
           ch.onopen = () => requestNext();
           ch.onmessage = (ev2) => onChMessage(ev2.data);
+          if (ch.readyState === 'open') requestNext();
         };
         await pc.setRemoteDescription(m.data);
         remoteSet = true;
@@ -543,8 +549,17 @@ export function fetchMetaBundle(gameRoom, ids, opts) {
           if (e.channel.label !== 'ysf-pack') return;
           ch = e.channel;
           ch.binaryType = 'arraybuffer';
-          ch.onopen = () => { try { ch.send(JSON.stringify({ op: 'want-meta', ids })); } catch (e2) {} };
+          // Same already-open race as joinPackHost (issue #18); guard the
+          // request so the onopen + readyState paths can't double-send.
+          let sent = false;
+          const kick = () => {
+            if (sent) return;
+            sent = true;
+            try { ch.send(JSON.stringify({ op: 'want-meta', ids })); } catch (e2) {}
+          };
+          ch.onopen = kick;
           ch.onmessage = (ev2) => onChMessage(ev2.data);
+          if (ch.readyState === 'open') kick();
         };
         await pc.setRemoteDescription(m.data);
         remoteSet = true;

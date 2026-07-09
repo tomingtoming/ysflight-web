@@ -15,6 +15,7 @@ import {
 } from './workbench.js';
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
+import { listStaged, getStaged, removeStaged, putStaged } from './staging.js';
 
 const ACCENT = '#4da3ff';
 const DEFAULT_FLY_AIRCRAFT = 'F-15C_EAGLE';
@@ -37,6 +38,20 @@ const S = ({
     acTitle: '✈️ 機体を組む',
     acIntro: 'モデラーで作った .dnm / .srf と、飛行特性 .dat を1機に組み立てます。.dat が無ければ下の「stockから作る」で。',
     acDrop: '機体のファイル (.dat / .dnm / .srf) をドロップ / クリックして選択',
+    stagedTitle: '🧊 モデラから届いたファイル',
+    stagedHint: 'Polygon Crest（3Dモデラ）で保存したファイルは自動でここに届きます',
+    stagedAdd: '追加',
+    stagedAddTitle: '機体組み立てのファイルに加える',
+    stagedEmpty: '（まだありません — 🧊 でモデルを作って保存すると届きます）',
+    stagedAdded: (n) => '✓ ' + n + ' を組み立てに追加しました',
+    stagedDl: '⬇', stagedDlTitle: 'ダウンロード（手元に保存）',
+    stagedSend: '＋ ファイルを送る',
+    stagedSendTitle: '手持ちの .srf/.dnm/.dat をモデラと組み立ての共有領域に入れる',
+    stagedSent: (n) => '✓ ' + n + ' 件を送りました（モデラでは次回起動時に File→Open で見えます）',
+    libModeler: '🧊', libModelerTitle: 'この機体のモデルをモデラに送る（次回起動の File→Open で開けます）',
+    libModelerSent: (n) => '✓ モデルを ' + n + ' 件モデラに送りました。🧊 を開くと File→Open で見えます',
+    modelerLink: '🧊 3Dモデラを開く（Polygon Crest）',
+    modelerLinkTitle: 'YSFLIGHT公式の3Dモデルエディタ（実験版）。保存したモデルはここに届きます',
     slotDat: '飛行特性 (.dat) ※必須',
     slotVisual: '外観モデル (.dnm) ※必須',
     slotColl: '当たり判定 (.srf) ※必須',
@@ -101,6 +116,20 @@ const S = ({
     acTitle: '✈️ Assemble an aircraft',
     acIntro: 'Combine your modeler-made .dnm / .srf with a flight-model .dat. No .dat? Make one below from a stock base.',
     acDrop: 'Drop aircraft files (.dat / .dnm / .srf) / click to choose',
+    stagedTitle: '🧊 From the modeler',
+    stagedHint: 'Files you save in Polygon Crest (the 3D modeler) arrive here automatically',
+    stagedAdd: 'Add',
+    stagedAddTitle: 'Add to the aircraft assembly files',
+    stagedEmpty: '(Nothing yet — make and save a model in 🧊 and it lands here)',
+    stagedAdded: (n) => '✓ Added ' + n + ' to the assembly',
+    stagedDl: '⬇', stagedDlTitle: 'Download a copy',
+    stagedSend: '＋ Send a file',
+    stagedSendTitle: 'Put your own .srf/.dnm/.dat into the shared modeler/assembly area',
+    stagedSent: (n) => '✓ Sent ' + n + ' file(s) (visible in the modeler’s File→Open on its next start)',
+    libModeler: '🧊', libModelerTitle: 'Send this aircraft’s model to the modeler (File→Open on its next start)',
+    libModelerSent: (n) => '✓ Sent ' + n + ' model file(s) to the modeler — open 🧊 and use File→Open',
+    modelerLink: '🧊 Open the 3D modeler (Polygon Crest)',
+    modelerLinkTitle: 'YSFLIGHT’s official model editor (experimental). Saved models arrive here',
     slotDat: 'Flight model (.dat) — required',
     slotVisual: 'Visual model (.dnm) — required',
     slotColl: 'Collision shell (.srf) — required',
@@ -366,6 +395,19 @@ function creationsCard() {
           else location.href = flyUrl(lastAircraftIdentify || DEFAULT_FLY_AIRCRAFT, it.sceneryIdent, SCENERY_START);
         });
       }
+      // Send an aircraft's model files to the modeler (via staging) for editing.
+      if (it.kind === 'aircraft') {
+        const toModeler = btn(S.libModeler, S.libModelerTitle, false);
+        toModeler.addEventListener('click', async () => {
+          const payload = (await packPayload(it.id, 'aircraft/')).filter((f) => /\.(dnm|srf)$/i.test(f.name));
+          for (const f of payload) await putStaged(f.name, f.bytes);
+          const st = document.createElement('div');
+          st.textContent = S.libModelerSent(payload.length);
+          st.className = 'msg';
+          rowEl.after(st);
+          setTimeout(() => st.remove(), 5000);
+        });
+      }
       if (it.recipeSha) {
         const ed = btn(S.libEdit, S.libEditTitle, false);
         ed.addEventListener('click', async () => {
@@ -401,6 +443,15 @@ function aircraftCard() {
   card.appendChild(el('h2', null, S.acTitle));
   card.appendChild(el('p', 'intro', S.acIntro));
 
+  // The modeler is where the .dnm/.srf come from when you have none yet.
+  const modelerLink = el('a', null, S.modelerLink);
+  modelerLink.href = './modeler.html';
+  modelerLink.title = S.modelerLinkTitle;
+  modelerLink.style.cssText =
+    'display:inline-block;margin:0 0 10px;padding:6px 12px;border:1px solid #2a3647;border-radius:6px;' +
+    'color:#8fa3bb;font-size:12.5px;text-decoration:none';
+  card.appendChild(modelerLink);
+
   const drop = el('label', 'drop', S.acDrop);
   const input = document.createElement('input');
   input.type = 'file';
@@ -411,6 +462,13 @@ function aircraftCard() {
   ['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('hot'); }));
   ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('hot'); }));
   card.appendChild(drop);
+
+  // Files the modeler saved arrive here via the OPFS staging bridge — one
+  // click puts them into the assembly.  Refreshed whenever the tab comes back
+  // into view (the user flips between the modeler and this page).
+  const stagedBox = el('div');
+  stagedBox.style.marginTop = '8px';
+  card.appendChild(stagedBox);
 
   const slotsBox = el('div');
   slotsBox.style.marginTop = '10px';
@@ -513,6 +571,85 @@ function aircraftCard() {
   };
   input.addEventListener('change', () => addFiles(input.files));
   drop.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files); });
+
+  const renderStaged = async () => {
+    let staged = [];
+    try { staged = await listStaged(); } catch (e) { /* OPFS unavailable — hide */ }
+    stagedBox.innerHTML = '';
+    const title = el('div', null, S.stagedTitle);
+    title.style.cssText = 'color:#cfe0f5;font-size:12.5px;font-weight:600';
+    const hint = el('div', null, staged.length ? S.stagedHint : S.stagedEmpty);
+    hint.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:4px';
+    stagedBox.appendChild(title);
+    stagedBox.appendChild(hint);
+    for (const s of staged) {
+      const rowEl = el('div');
+      rowEl.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 8px;border:1px solid #2a3647;border-radius:6px;margin-bottom:4px';
+      const nm = el('span', null, s.name);
+      nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6edf3;font-size:12.5px';
+      const sz = el('span', null, (s.size / 1024).toFixed(1) + 'KB');
+      sz.style.cssText = 'flex:none;color:#7d93b0;font-size:11px';
+      const add = el('button', 'accent', S.stagedAdd);
+      add.title = S.stagedAddTitle;
+      add.style.cssText += ';font-size:11.5px;padding:3px 10px;flex:none';
+      add.addEventListener('click', async () => {
+        try {
+          const bytes = await getStaged(s.name);
+          entries = entries.filter((e) => e.name !== s.name);
+          entries.push({ name: s.name, bytes });
+          rebuildSlots();
+          msg.textContent = S.stagedAdded(s.name);
+        } catch (e) { msg.textContent = S.errorPrefix + ((e && e.message) || e); }
+      });
+      const dl = el('button', null, S.stagedDl);
+      dl.title = S.stagedDlTitle;
+      dl.style.cssText += ';font-size:11.5px;padding:3px 8px;flex:none';
+      dl.addEventListener('click', async () => {
+        const bytes = await getStaged(s.name);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([bytes]));
+        a.download = s.name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      });
+      const del = el('button', null, '🗑');
+      del.style.cssText += ';font-size:11.5px;padding:3px 8px;flex:none;color:#c75d6a';
+      del.addEventListener('click', async () => { await removeStaged(s.name); renderStaged(); });
+      rowEl.appendChild(nm);
+      rowEl.appendChild(sz);
+      rowEl.appendChild(add);
+      rowEl.appendChild(dl);
+      rowEl.appendChild(del);
+      stagedBox.appendChild(rowEl);
+    }
+    // Local files INTO the shared area (they reach the modeler's File->Open on
+    // its next start; the assembly can add them from this same list).
+    const sendLab = el('label', null, S.stagedSend);
+    sendLab.title = S.stagedSendTitle;
+    sendLab.style.cssText =
+      'display:inline-block;margin-top:2px;padding:4px 10px;border:1px dashed #2a3647;border-radius:6px;' +
+      'color:#7d93b0;font-size:11.5px;cursor:pointer';
+    const sendIn = document.createElement('input');
+    sendIn.type = 'file';
+    sendIn.accept = '.srf,.dnm,.dat';
+    sendIn.multiple = true;
+    sendIn.style.display = 'none';
+    sendIn.addEventListener('change', async () => {
+      let n = 0;
+      for (const f of Array.from(sendIn.files)) {
+        if (!/\.(srf|dnm|dat)$/i.test(f.name)) continue;
+        await putStaged(f.name, new Uint8Array(await f.arrayBuffer()));
+        n++;
+      }
+      if (n) msg.textContent = S.stagedSent(n);
+      renderStaged();
+    });
+    sendLab.appendChild(sendIn);
+    stagedBox.appendChild(sendLab);
+  };
+  renderStaged();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderStaged(); });
+  window.addEventListener('focus', renderStaged);
 
   acSetGeneratedDat = (dat, recipeInfo) => { generatedDat = dat; datRecipe = recipeInfo || null; rebuildSlots(); };
 
@@ -758,6 +895,7 @@ async function main() {
     listStock: stockIndex,
     listCreations,
     loadRecipe,
+    listStaged, getStaged, putStaged, removeStaged, // modeler file bridge (smoke/debug)
     deleteCreation: async (id) => {
       await opfs.removeRecord(id);
       try { await opfs.gc(); } catch (e) {}
