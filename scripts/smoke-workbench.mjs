@@ -196,6 +196,43 @@ const delCheck = await page.evaluate(async () => {
 if (!delCheck.gone || delCheck.count !== 3) die('delete failed: ' + JSON.stringify(delCheck));
 console.log('library: delete works (back to 3 creations)');
 
+// ---- studio pages: boot + ?edit= restore ----------------------------------------
+
+// Each dedicated studio page must boot engine-less and expose its hook; the
+// aircraft and scenery studios must restore a creation from ?edit=<record id>.
+{
+  const creations = await page.evaluate(() => window.ysfwWorkbench.listCreations());
+  const air = creations.find((c) => c.kind === 'aircraft');
+  const isl = creations.find((c) => c.kind === 'scenery');
+  if (!air || !isl) die('expected an aircraft and a scenery creation before the studio checks');
+
+  const bootStudio = async (pageName, params) => {
+    const u = new URL(url);
+    u.pathname = u.pathname.replace(/index\.html$/, pageName);
+    for (const [k, v] of Object.entries(params || {})) u.searchParams.set(k, v);
+    await page.goto(u.toString());
+    await page
+      .waitForFunction(() => window.ysfwStudio && window.ysfwStudio.ready === true, { timeout: 30000 })
+      .catch(() => die(pageName + ' never became ready (window.ysfwStudio)'));
+    return page.evaluate(() => window.ysfwStudio.page);
+  };
+
+  if ((await bootStudio('studio-aircraft.html', { edit: air.id })) !== 'aircraft') die('aircraft studio wrong page id');
+  const acEntries = await page.evaluate(() => window.ysfwStudio.getEntries());
+  if (!Array.isArray(acEntries) || acEntries.length < 2) die('aircraft studio did not restore entries from ?edit: ' + JSON.stringify(acEntries));
+
+  if ((await bootStudio('studio-scenery.html', { edit: isl.id })) !== 'scenery') die('scenery studio wrong page id');
+  const scCounts = await page.evaluate(() => window.ysfwStudio.counts());
+  if (!scCounts || !(scCounts.islands >= 1)) die('scenery studio did not restore islands from ?edit: ' + JSON.stringify(scCounts));
+
+  if ((await bootStudio('studio-pack.html')) !== 'pack') die('pack studio wrong page id');
+  const packCount = await page.evaluate(() => window.ysfwStudio.count());
+  if (!(packCount >= 3)) die('pack studio inventory did not list the installed records: ' + packCount);
+
+  console.log('studios: aircraft/scenery/pack booted; ?edit restored ' +
+    acEntries.length + ' aircraft entries + ' + scCounts.islands + ' island(s); inventory=' + packCount);
+}
+
 // ---- game page: fly what the workbench made (the OPFS bridge) -------------------
 
 // 4. The loose-assembled aircraft flies.
