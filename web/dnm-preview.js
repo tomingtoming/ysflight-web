@@ -128,24 +128,36 @@ function staDiffers(sta) {
   return false;
 }
 
+// The engine's exact rotation matrices (YsMatrix4x4 RotateXZ/ZY/XY, verified
+// against the C++ via webflight's characterization tests).  Crucially the SIGNS
+// are NOT Three's makeRotationX/Y/Z:
+//   RotateXZ(a) = [c 0 -s; 0 1 0; s 0 c]   (= makeRotationY(-a))
+//   RotateZY(a) = [1 0 0; 0 c s; 0 -s c]   (= makeRotationX(-a))
+//   RotateXY(a) = [c -s 0; s c 0; 0 0 1]   (= makeRotationZ(+a))
+// webflight's convertMatrix is IDENTITY (the C++ matrix drives raw SRF verts
+// directly; view orientation is the camera's job), so we build in these
+// conventions with no coordinate swap.
+function rotXZ(THREE, a) { const c = Math.cos(a), s = Math.sin(a); return new THREE.Matrix4().set(c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1); }
+function rotZY(THREE, a) { const c = Math.cos(a), s = Math.sin(a); return new THREE.Matrix4().set(1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1); }
+function rotXY(THREE, a) { const c = Math.cos(a), s = Math.sin(a); return new THREE.Matrix4().set(c, -s, 0, 0, s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1); }
+
 // The engine's per-node transform (ysshelldnmtemplate.h CacheTransformation),
 // composed onto LOCAL vertices and applied hierarchically (parent * child):
-//   T(POS) . R(POS h,p,b) . T(STA.pos) . R(STA h,p,b) . T(-CNT)
-// where the engine's RotateXZ(h)/RotateZY(p)/RotateXY(b) are rotations about
-// Y / X / Z.  pos = [x,y,z,h,p,b], sta = [x,y,z,h,p,b] (angles in 32768=pi), cnt
-// = [x,y,z].  Returns a THREE.Matrix4.
+//   T(POS) . RotateXZ(h) . RotateZY(p) . RotateXY(b)
+//         . T(STA.pos) . RotateXZ(h) . RotateZY(p) . RotateXY(b) . T(-CNT)
+// pos = [x,y,z,h,p,b], sta = [x,y,z,h,p,b] (angles 32768=pi), cnt = [x,y,z].
 function nodeMatrix(THREE, pos, sta, cnt) {
   const M = new THREE.Matrix4();
-  const tmp = new THREE.Matrix4();
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
   M.makeTranslation(pos[0], pos[1], pos[2]);
-  M.multiply(tmp.makeRotationY(pos[3] * A2R));
-  M.multiply(tmp.makeRotationX(pos[4] * A2R));
-  M.multiply(tmp.makeRotationZ(pos[5] * A2R));
-  M.multiply(tmp.makeTranslation(sta[0], sta[1], sta[2]));
-  M.multiply(tmp.makeRotationY(sta[3] * A2R));
-  M.multiply(tmp.makeRotationX(sta[4] * A2R));
-  M.multiply(tmp.makeRotationZ(sta[5] * A2R));
-  M.multiply(tmp.makeTranslation(-cnt[0], -cnt[1], -cnt[2]));
+  M.multiply(rotXZ(THREE, pos[3] * A2R));
+  M.multiply(rotZY(THREE, pos[4] * A2R));
+  M.multiply(rotXY(THREE, pos[5] * A2R));
+  M.multiply(T(sta[0], sta[1], sta[2]));
+  M.multiply(rotXZ(THREE, sta[3] * A2R));
+  M.multiply(rotZY(THREE, sta[4] * A2R));
+  M.multiply(rotXY(THREE, sta[5] * A2R));
+  M.multiply(T(-cnt[0], -cnt[1], -cnt[2]));
   return M;
 }
 
