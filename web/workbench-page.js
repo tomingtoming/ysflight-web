@@ -14,6 +14,7 @@ import {
   makeDatFromBase, assembleSceneryZip, SCENERY_START, RECIPE_FILE,
   extractDnmColors, repaintDnm,
 } from './workbench.js';
+import { mountPreview } from './dnm-preview.js';
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
 import { listStaged, getStaged, removeStaged, putStaged } from './staging.js';
@@ -78,8 +79,8 @@ const S = ({
     stagedSent: (n) => '✓ ' + n + ' 件を送りました（モデラでは次回起動時に File→Open で見えます）',
     libModeler: '🧊', libModelerTitle: 'この機体のモデルをモデラに送る（次回起動の File→Open で開けます）',
     libModelerSent: (n) => '✓ モデルを ' + n + ' 件モデラに送りました。🧊 を開くと File→Open で見えます',
-    modelerLink: '🧊 3Dモデラを開く（Polygon Crest）',
-    modelerLinkTitle: 'YSFLIGHT公式の3Dモデルエディタ（実験版）。保存したモデルはここに届きます',
+    modelerLink: '🧊 3Dモデラを開く（Polygon Crest・上級者向け）',
+    modelerLinkTitle: 'ゼロから新しい形を作りたい人向けのYSFLIGHT公式3Dエディタ（実験版・操作は本格的）。見るだけ・色を変えるだけなら「👁 プレビュー」と「🎨 塗装」で十分です',
     slotDat: '飛行特性 (.dat) ※必須',
     slotVisual: '外観モデル (.dnm) ※必須',
     slotColl: '当たり判定 (.srf) ※必須',
@@ -118,6 +119,11 @@ const S = ({
     paintApply: '塗り替える',
     paintDone: (n) => '✓ ' + n + ' 面を塗り替えました',
     paintNone: '（この見た目に塗れる色が見つかりません — .dnm を選んでください）',
+    previewBtn: '👁 プレビュー',
+    previewTitle: '選んだ外観モデルを3Dで確認（ドラッグで回転・ホイールで拡大縮小・塗装は即反映）',
+    previewNone: 'プレビューには外観モデル (.dnm) を選んでください',
+    animGear: '脚', animFlap: 'フラップ', animVgw: '可変翼', animElevator: '昇降舵', animAileron: '補助翼', animRudder: '方向舵',
+    animNone: '（この機体に動く部品はありません）',
     datUse: 'この .dat を使う',
     datGenerated: (n) => '（生成）' + n + '.dat',
     datSet: (n) => '✓ ' + n + ' を機体組み立ての .dat スロットに入れました',
@@ -188,8 +194,8 @@ const S = ({
     stagedSent: (n) => '✓ Sent ' + n + ' file(s) (visible in the modeler’s File→Open on its next start)',
     libModeler: '🧊', libModelerTitle: 'Send this aircraft’s model to the modeler (File→Open on its next start)',
     libModelerSent: (n) => '✓ Sent ' + n + ' model file(s) to the modeler — open 🧊 and use File→Open',
-    modelerLink: '🧊 Open the 3D modeler (Polygon Crest)',
-    modelerLinkTitle: 'YSFLIGHT’s official model editor (experimental). Saved models arrive here',
+    modelerLink: '🧊 Open the 3D modeler (Polygon Crest — advanced)',
+    modelerLinkTitle: 'YSFLIGHT’s official 3D editor for making new geometry from scratch (experimental, a serious tool). To just look or recolor, use 👁 Preview and 🎨 Paint',
     slotDat: 'Flight model (.dat) — required',
     slotVisual: 'Visual model (.dnm) — required',
     slotColl: 'Collision shell (.srf) — required',
@@ -227,6 +233,11 @@ const S = ({
     paintApply: 'Apply paint',
     paintDone: (n) => '✓ Repainted ' + n + ' faces',
     paintNone: '(No paintable colors found — select a .dnm visual)',
+    previewBtn: '👁 Preview',
+    previewTitle: 'See the selected visual in 3D (drag to rotate, wheel to zoom, paint reflects live)',
+    previewNone: 'Select a visual model (.dnm) to preview',
+    animGear: 'Gear', animFlap: 'Flap', animVgw: 'Swing wing', animElevator: 'Elevator', animAileron: 'Aileron', animRudder: 'Rudder',
+    animNone: '(This aircraft has no moving parts)',
     datUse: 'Use this .dat',
     datGenerated: (n) => '(generated) ' + n + '.dat',
     datSet: (n) => '✓ Placed ' + n + ' into the assembly’s .dat slot',
@@ -625,8 +636,51 @@ function aircraftCard() {
     paintRow.style.justifyContent = 'flex-start';
     const paintBtn = el('button', null, S.paintBtn);
     paintBtn.title = S.paintTitle;
+    const previewBtn = el('button', null, S.previewBtn);
+    previewBtn.title = S.previewTitle;
+    paintRow.appendChild(previewBtn);
     paintRow.appendChild(paintBtn);
     slotsBox.appendChild(paintRow);
+
+    // Live 3D preview of the selected visual .dnm (Three.js; the game is truth).
+    const previewBox = el('div');
+    previewBox.style.cssText = 'display:none;margin:6px 0;border:1px solid #2a3647;border-radius:8px;overflow:hidden;background:#0b1017';
+    const previewCanvasWrap = el('div');
+    previewCanvasWrap.style.cssText = 'width:100%;height:260px';
+    const previewCtl = el('div');
+    previewCtl.style.cssText = 'padding:6px 8px;border-top:1px solid #2a3647';
+    previewBox.appendChild(previewCanvasWrap);
+    previewBox.appendChild(previewCtl);
+    slotsBox.appendChild(previewBox);
+    let preview = null;
+    const disposePreview = () => { if (preview) { preview.dispose(); preview = null; } };
+    previewBtn.addEventListener('click', () => {
+      if (previewBox.style.display !== 'none') { previewBox.style.display = 'none'; disposePreview(); return; }
+      const ent = byName.get(sels.visual.value);
+      if (!ent || !/\.dnm$/i.test(ent.name)) { msg.textContent = S.previewNone; return; }
+      previewBox.style.display = 'block';
+      previewCanvasWrap.innerHTML = ''; previewCtl.innerHTML = '';
+      disposePreview();
+      try {
+        preview = mountPreview(previewCanvasWrap, ent.bytes);
+      } catch (e) { msg.textContent = S.errorPrefix + ((e && e.message) || e); previewBox.style.display = 'none'; return; }
+      // Animation sliders for whatever movable parts this model has.
+      const labels = { gear: S.animGear, flap: S.animFlap, vgw: S.animVgw, elevator: S.animElevator, aileron: S.animAileron, rudder: S.animRudder };
+      let any = false;
+      for (const [g, groups] of Object.entries(preview.movable)) {
+        if (!groups.length) continue;
+        any = true;
+        const r = el('div', 'row'); r.style.margin = '2px 0';
+        const lab = el('span', 'lab', labels[g] || g); lab.style.width = '40%';
+        const sl = Object.assign(document.createElement('input'), { type: 'range', min: '0', max: '1', step: '0.02', value: '0' });
+        sl.style.cssText = 'flex:1;min-width:0';
+        sl.addEventListener('input', () => { for (const grp of groups) preview.setMovable(grp, Number(sl.value)); });
+        r.appendChild(lab); r.appendChild(sl);
+        previewCtl.appendChild(r);
+      }
+      if (!any) previewCtl.appendChild(el('div', 'msg', S.animNone));
+    });
+
     const paintPanel = el('div');
     slotsBox.appendChild(paintPanel);
     paintBtn.addEventListener('click', () => {
@@ -664,6 +718,7 @@ function aircraftCard() {
         }
         const out = repaintDnm(ent.bytes, mapping);
         ent.bytes = out.bytes; // same entry object -> the assembly picks up the paint
+        if (preview) preview.setPaint(mapping); // live reflect in the open 3D view
         msg.textContent = S.paintDone(out.replaced);
         paintPanel.innerHTML = '';
       });

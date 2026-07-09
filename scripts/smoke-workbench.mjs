@@ -103,6 +103,32 @@ if (!wiz.datApplied.includes('STRENGTH') || !wiz.datApplied.includes('SMOKECOL')
   die('dat extras not applied: ' + JSON.stringify(wiz.datApplied));
 }
 
+// 2b. 3D preview (Three.js): mount the stock F-15 visual, confirm geometry built
+//     and its landing gear is an animatable movable part, and that live paint
+//     updates the color buffer without throwing.
+const prev = await page
+  .evaluate(async () => {
+    const stock = await window.ysfwWorkbench.listStock();
+    const f15 = stock.find((a) => a.identify === 'F-15C_EAGLE') || stock[0];
+    const vis = new Uint8Array(await (await fetch('./stock/' + f15.visual)).arrayBuffer());
+    const mod = await import('./dnm-preview.js');
+    const parsed = mod.parseDnm(vis);
+    const div = document.createElement('div');
+    div.style.cssText = 'width:320px;height:240px';
+    document.body.appendChild(div);
+    const h = mod.mountPreview(div, vis);
+    const gear = (h.movable.gear || []).length;
+    const colors = mod.parseDnm ? (await import('./workbench.js')).extractDnmColors(vis) : [];
+    h.setPaint({ [colors[0].key]: [255, 0, 255] }); // must not throw
+    h.dispose();
+    div.remove();
+    return { nodes: parsed.nodes.size, srfs: parsed.srfByName.size, gear };
+  })
+  .catch((e) => die('3D preview flow threw: ' + e.message));
+console.log('3D preview: ' + JSON.stringify(prev));
+if (!(prev.nodes > 10) || !(prev.srfs > 10)) die('preview parsed too little geometry: ' + JSON.stringify(prev));
+if (!(prev.gear >= 1)) die('F-15 preview had no animatable landing gear');
+
 // 3. The island scenery: a DRAWN map — islands (PC2 visual + PST LAND) plus the
 //    rich layer: stock ground objects (carrier + elevated runway), a cosine
 //    TER mountain, and an extra low-and-slow start.
