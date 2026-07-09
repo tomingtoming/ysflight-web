@@ -30,6 +30,19 @@ const A2R = Math.PI / 32768; // STA/POS angle unit -> radians
 
 // --- parse ----------------------------------------------------------------------
 
+// Decode an SRF `C` color line's tokens (everything after "C").  Two forms:
+//   C r g b [a]   direct 0..255 RGB(A)
+//   C <n>         packed 15-bit GGGGG RRRRR BBBBB (YsColor::Set15BitRGB) — the
+//                 old format still used by legacy models (e.g. amp.dnm).
+// Returns [r,g,b] in 0..255.
+export function decodeSrfColor(tok) {
+  if (tok.length >= 3) return [+tok[0], +tok[1], +tok[2]];
+  const c = (parseInt(tok[0], 10) || 0) & 32767;
+  // Rounded so face-color keys match the paint shop's (workbench.js cLineRgb).
+  return [((c >> 5) & 31) * 255 / 31, ((c >> 10) & 31) * 255 / 31, (c & 31) * 255 / 31]
+    .map((v) => Math.round(v));
+}
+
 // Parse the embedded SRF text (the N lines after a PCK header) into geometry:
 // { vertices: [[x,y,z],...], faces: [{idx:[...], color:[r,g,b], unlit}] }.
 function parseSrf(lines) {
@@ -45,7 +58,7 @@ function parseSrf(lines) {
         const f = lines[i].trim().split(/\s+/);
         if (f[0] === 'E') break;
         if (f[0] === 'V') face.idx = f.slice(1).map(Number);
-        else if (f[0] === 'C') face.color = [+f[1], +f[2], +f[3]];
+        else if (f[0] === 'C') face.color = decodeSrfColor(f.slice(1));
         else if (f[0] === 'B') face.unlit = true;
       }
       if (face.idx.length >= 3) faces.push(face);
@@ -115,49 +128,71 @@ function staDiffers(sta) {
   return false;
 }
 
+// The engine's per-node transform (ysshelldnmtemplate.h CacheTransformation),
+// composed onto LOCAL vertices and applied hierarchically (parent * child):
+//   T(POS) . R(POS h,p,b) . T(STA.pos) . R(STA h,p,b) . T(-CNT)
+// where the engine's RotateXZ(h)/RotateZY(p)/RotateXY(b) are rotations about
+// Y / X / Z.  pos = [x,y,z,h,p,b], sta = [x,y,z,h,p,b] (angles in 32768=pi), cnt
+// = [x,y,z].  Returns a THREE.Matrix4.
+function nodeMatrix(THREE, pos, sta, cnt) {
+  const M = new THREE.Matrix4();
+  const tmp = new THREE.Matrix4();
+  M.makeTranslation(pos[0], pos[1], pos[2]);
+  M.multiply(tmp.makeRotationY(pos[3] * A2R));
+  M.multiply(tmp.makeRotationX(pos[4] * A2R));
+  M.multiply(tmp.makeRotationZ(pos[5] * A2R));
+  M.multiply(tmp.makeTranslation(sta[0], sta[1], sta[2]));
+  M.multiply(tmp.makeRotationY(sta[3] * A2R));
+  M.multiply(tmp.makeRotationX(sta[4] * A2R));
+  M.multiply(tmp.makeRotationZ(sta[5] * A2R));
+  M.multiply(tmp.makeTranslation(-cnt[0], -cnt[1], -cnt[2]));
+  return M;
+}
+
 function faceColor(face) {
   const c = face.color, mx = Math.max(c[0], c[1], c[2]);
   const s = mx > 1 ? 1 / 255 : 1; // some DNM use 0..1
   return [c[0] * s, c[1] * s, c[2] * s];
 }
 
-// Build a THREE.Object3D from a parsed DNM.  CRUCIAL: DNM geometry is in
-// ABSOLUTE aircraft coordinates (an elevator's vertices already sit at the tail),
-// so meshes go into the scene at IDENTITY — no POS translation, no parent nesting
-// (both would double-apply and float the part off the body: the "webflight
-// nightmare").  POS/CNT/STA are for ANIMATION only.  A movable node's mesh is
-// parented to a pivot Group placed at CNT so a slider rotates it about its hinge;
-// at rest (STA[0], all zero) the pivot is unrotated and the part sits exactly on
-// the body.  Returns { object3d, movableGroups:{gear:[pivot],...}, meshesByLabel }.
+// Build a THREE.Object3D from a parsed DNM by replicating the engine's node
+// transform EXACTLY (nodeMatrix) — vertices are LOCAL, each node is a Group whose
+// matrix is the composed POS/STA/CNT transform, and children nest under their
+// parent (CLD).  This is the correct model: an earlier "flatten + absolute coords"
+// shortcut floated any node with a non-zero POS (gear), and "POS + absolute"
+// double-applied position (the webflight nightmare).  Movable nodes keep enough
+// state to recompute their matrix as a slider scrubs STA[0]->STA[last].
+// Returns { object3d, movableGroups:{gear:[Group],...}, meshesByLabel }.
 export function buildObject(parsed) {
   const { nodes, srfByName } = parsed;
   const movableGroups = {};
   const meshesByLabel = new Map();
-  const root = new THREE.Group();
 
-  for (const [label, n] of nodes) {
-    if (!n.srf || !srfByName.has(n.srf)) continue;
-    const mesh = srfToMesh(srfByName.get(n.srf));
-    if (!mesh) continue;
-    meshesByLabel.set(label, { mesh, srf: srfByName.get(n.srf) });
-
+  const buildNode = (label) => {
+    const n = nodes.get(label);
+    if (!n) return null;
+    const group = new THREE.Group();
+    group.matrixAutoUpdate = false;
     const g = CLA_GROUP[n.cla];
-    if (g && staDiffers(n.sta)) {
-      // Pivot at CNT; absolute-coord mesh offset by -CNT so it lands back on the
-      // body when the pivot is at CNT and unrotated.  Rotating the pivot rotates
-      // the part about its hinge.
-      const pivot = new THREE.Group();
-      pivot.position.set(n.cnt[0], n.cnt[1], n.cnt[2]);
-      mesh.position.set(-n.cnt[0], -n.cnt[1], -n.cnt[2]);
-      pivot.add(mesh);
-      pivot.userData.sta = n.sta;
-      pivot.userData.cnt = n.cnt;
-      root.add(pivot);
-      (movableGroups[g] = movableGroups[g] || []).push(pivot);
-    } else {
-      root.add(mesh); // static: absolute geometry at identity
+    const movable = g && staDiffers(n.sta);
+    const sta0 = n.sta[0] || [0, 0, 0, 0, 0, 0];
+    group.matrix.copy(nodeMatrix(THREE, n.pos, sta0, n.cnt));
+    if (movable) {
+      group.userData.pos = n.pos;
+      group.userData.sta = n.sta;
+      group.userData.cnt = n.cnt;
+      (movableGroups[g] = movableGroups[g] || []).push(group);
     }
-  }
+    if (n.srf && srfByName.has(n.srf)) {
+      const mesh = srfToMesh(srfByName.get(n.srf));
+      if (mesh) { group.add(mesh); meshesByLabel.set(label, { mesh, srf: srfByName.get(n.srf) }); }
+    }
+    for (const c of n.children) { const cg = buildNode(c); if (cg) group.add(cg); }
+    return group;
+  };
+
+  const root = new THREE.Group();
+  for (const r of parsed.roots) { const g = buildNode(r); if (g) root.add(g); }
   // YSFLIGHT model space (X east, Y up, Z south/front) -> face the camera nicely.
   root.rotation.y = Math.PI;
   return { object3d: root, movableGroups, meshesByLabel };
@@ -194,18 +229,17 @@ function srfToMesh(srf) {
 
 // --- animation ------------------------------------------------------------------
 
-// Drive a movable pivot to t in [0,1]: interpolate STA[0]->STA[last].  The pivot
-// sits at CNT; rotation (h,p,b) turns the part about its hinge, and the STA x,y,z
-// translation (small, e.g. an elevator sliding as it deflects) shifts the pivot.
-// At t matching STA[0] (all zero) the pivot is exactly at CNT, unrotated -> the
-// part rests on the body.
-export function setMovable(pivot, t) {
-  const sta = pivot.userData.sta, cnt = pivot.userData.cnt;
+// Drive a movable node's Group to t in [0,1] by interpolating its STA[0]->STA[last]
+// and recomposing the full engine transform (POS fixed, STA interpolated, CNT
+// pivot).  At t=0 it equals the rest matrix built in buildObject, so the part
+// stays attached and hinges about its real axis.
+export function setMovable(group, t) {
+  const { pos, sta, cnt } = group.userData;
   if (!sta) return;
   const a = sta[0], b = sta[sta.length - 1];
-  const lerp = (i) => (a[i] + (b[i] - a[i]) * t);
-  pivot.rotation.set(lerp(4) * A2R, lerp(3) * A2R, lerp(5) * A2R, 'YXZ');
-  pivot.position.set(cnt[0] + lerp(0), cnt[1] + lerp(1), cnt[2] + lerp(2));
+  const staT = [0, 1, 2, 3, 4, 5].map((i) => a[i] + (b[i] - a[i]) * t);
+  group.matrix.copy(nodeMatrix(THREE, pos, staT, cnt));
+  group.matrixWorldNeedsUpdate = true;
 }
 
 // --- live paint -----------------------------------------------------------------

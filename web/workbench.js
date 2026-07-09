@@ -178,7 +178,20 @@ export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coa
 // latin1 text, so untouched bytes (including Shift-JIS names) survive verbatim.
 
 const PCK_RE = /^PCK\s+("?)([^"\s]+)\1\s+(\d+)/;
-const C_RE = /^(\s*C\s+)(\d+)\s+(\d+)\s+(\d+)((?:\s+\d+)?\s*)$/;
+// A face color line: either `C r g b [a]` (triplet, group 'rgb') or `C <n>`
+// (packed 15-bit, group 'packed').  amp.dnm and other legacy models use packed.
+const C_RE = /^(\s*C\s+)(?:(\d+)\s+(\d+)\s+(\d+)((?:\s+\d+)?)|(\d+))\s*$/;
+
+// The [r,g,b] (0..255) a `C` line encodes, or null if not a color line.
+// Mirrors YsColor::Set15BitRGB for the packed form (GGGGG RRRRR BBBBB).
+function cLineRgb(line) {
+  const m = C_RE.exec(line.replace(/\r$/, ''));
+  if (!m) return null;
+  if (m[2] !== undefined) return [+m[2], +m[3], +m[4]];
+  const c = (parseInt(m[6], 10) || 0) & 32767;
+  return [((c >> 5) & 31) * 255 / 31, ((c >> 10) & 31) * 255 / 31, (c & 31) * 255 / 31]
+    .map((v) => Math.round(v));
+}
 
 // Enumerate PCK block line-ranges and the set of light-class block names.
 function dnmLayout(lines) {
@@ -215,9 +228,9 @@ export function extractDnmColors(bytes) {
   for (const b of blocks) {
     if (isLight(b.name)) continue;
     for (let j = b.start; j <= b.end; j++) {
-      const m = C_RE.exec(lines[j].replace(/\r$/, ''));
-      if (!m) continue;
-      const key = m[2] + ',' + m[3] + ',' + m[4];
+      const rgb = cLineRgb(lines[j]);
+      if (!rgb) continue;
+      const key = rgb.join(',');
       counts.set(key, (counts.get(key) || 0) + 1);
     }
   }
@@ -229,9 +242,11 @@ export function extractDnmColors(bytes) {
     .sort((a, b) => b.count - a.count);
 }
 
-// Repaint: mapping = {'r,g,b': [r2,g2,b2], ...}.  Alpha components and line
-// endings are preserved; light-class blocks are never touched.  Returns
-// {bytes, replaced} — replaced = number of C lines rewritten.
+// Repaint: mapping = {'r,g,b': [r2,g2,b2], ...} keyed by the DECODED rgb (so a
+// packed `C <n>` and a triplet map by the same key).  A matched line is rewritten
+// as a `C r g b` triplet (the engine accepts both forms; the line count in its
+// PCK header is unchanged since it's still one line).  Light-class blocks are
+// never touched.  Returns {bytes, replaced}.
 export function repaintDnm(bytes, mapping) {
   const lines = b2s(bytes).split('\n');
   const { blocks, isLight } = dnmLayout(lines);
@@ -239,12 +254,13 @@ export function repaintDnm(bytes, mapping) {
   for (const b of blocks) {
     if (isLight(b.name)) continue;
     for (let j = b.start; j <= b.end; j++) {
-      const hasCR = lines[j].endsWith('\r');
-      const m = C_RE.exec(hasCR ? lines[j].slice(0, -1) : lines[j]);
-      if (!m) continue;
-      const to = mapping[m[2] + ',' + m[3] + ',' + m[4]];
+      const rgb = cLineRgb(lines[j]);
+      if (!rgb) continue;
+      const to = mapping[rgb.join(',')];
       if (!to) continue;
-      lines[j] = m[1] + to[0] + ' ' + to[1] + ' ' + to[2] + m[5] + (hasCR ? '\r' : '');
+      const hasCR = lines[j].endsWith('\r');
+      const indent = (lines[j].match(/^(\s*)C/) || ['', ''])[1];
+      lines[j] = indent + 'C ' + to[0] + ' ' + to[1] + ' ' + to[2] + (hasCR ? '\r' : '');
       replaced++;
     }
   }
