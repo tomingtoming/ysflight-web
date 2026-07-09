@@ -26,8 +26,17 @@ that owns the session and fills that state every frame:
     control-state block (fsvr.h / FsVrControlDataPointer): the right grip
     is a virtual stick (grab + wrist deflection -> aileron/elevator/rudder),
     the left grip is a virtual throttle lever (grab + forward push ->
-    throttle), and the face buttons/triggers fire synthetic KeyboardEvents
-    on the default key bindings (fire gun, gear, spoiler/brake, flaps).
+    throttle), and the face buttons fire synthetic KeyboardEvents on the
+    default key bindings (gear, spoiler/brake, flaps).
+  - Each hand's trigger is a SaccFlight-style radial "function dial":
+    pushing that hand's thumbstick past a deadzone picks one of 4 sectors
+    (up/right/down/left), the pick sticks after the stick recentres, and
+    the trigger then dispatches whichever function is currently selected
+    (see RIGHT_DIAL/LEFT_DIAL below). While a session uses the WebXR
+    layers path (single-pass stereo, see YsfwVrSetMultiview above), each
+    hand also gets a small head-locked XRQuadLayer showing the dial so the
+    selection is visible in-headset; without layers the dial still works,
+    it is just invisible.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -113,6 +122,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		mvDepth:null,
 		mvDepthSize:null,
 		testMode:false,
+		// Head-locked function-dial quad layers (lazily created, layers path
+		// only). viewerSpace: the session's 'viewer' reference space the
+		// quads are anchored to. dialRes[hand]: undefined = not yet
+		// attempted, false = attempted and unavailable (no quad-layer
+		// support), object = {canvas,ctx,quad,inLayers} once created.
+		viewerSpace:null,
+		dialRes:{right:undefined,left:undefined},
 		// Hand-controller state (virtual stick + throttle + button latches).
 		// See fsvr.h / FsVrControlDataPointer for the 16-float block this
 		// feeds, and updateControllers/processControllerPlain below.
@@ -124,10 +140,69 @@ EM_JS(void,YsfwInstallWebXR,(),
 			rightB:false,
 			leftX:false,
 			leftY:false,
-			keys:{}
+			leftTrigger:false,
+			keys:{},
+			// Radial function-dial state per hand (see RIGHT_DIAL/LEFT_DIAL).
+			// sel: sticky selected sector ('up'|'right'|'down'|'left').
+			// engaged: the function snapshot captured at the trigger's press
+			//   edge (see processControllerPlain) -- kept for the whole press
+			//   so a mid-press dial flick can't retarget an already-firing
+			//   trigger. visible/hideAt drive the quad layer's on/off fade.
+			dial:{
+				right:{sel:'up',engaged:null,visible:false,hideAt:0},
+				left:{sel:'up',engaged:null,visible:false,hideAt:0}
+			}
 		}
 	};
 	Module.ysfwVr=vr;
+
+	// ---- Radial function-dial tables (SaccFlightAndVehicles-style) ------
+	// One function per sector per hand.  keyCode is the DOM KeyboardEvent
+	// code dispatched (see fssimplewindow_emscripten.cpp's keyCodeMapping
+	// for the code->FSKEY table); mode 'hold' mirrors the trigger's raw
+	// press/release (key held as long as the trigger is), mode 'tap' fires
+	// one keydown+keyup pulse on the trigger's press edge only. Every key
+	// below is cross-checked against FsControlAssignment::SetDefaultKeyAssign
+	// (upstream/YSFLIGHT/src/core/fscontrol.cpp) -- see the per-entry notes.
+	var RIGHT_DIAL={
+		// FSBTF_FIREWEAPON (Space): a level-sensed virtual button in the
+		// engine (fscontrol.cpp's "implemented through virtual buttons of
+		// FsAirplaneProperty" switch) -- fires while held, so 'hold'.
+		up:   {label:'Gun',    code:'Space', mode:'hold'},
+		// FSBTF_SELECTWEAPON (Digit2): cycles the selected weapon
+		// (FsGroundProperty::CycleWeaponOfChoiceByUser / ctlCycleWeaponButtonExt)
+		// on the press edge -- a 'tap', not a hold, and matches the touch UI's
+		// own weapon-select button (web/index.html's tap('Digit2')).
+		right:{label:'武器切替',code:'Digit2',mode:'tap'},
+		// FSBTF_LANDINGGEAR (KeyG): fscontrol.cpp toggles
+		// ctlGear=(ctlGear<0.5?1.0:0.0) on each press -- a toggle, so 'tap'
+		// (one edge per trigger pull, not a sustained hold).
+		down: {label:'Gear',   code:'KeyG',  mode:'tap'},
+		// FSBTF_SPOILERBRAKE (KeyB): same toggle pattern as gear
+		// (ctlSpoiler=(ctlSpoiler<0.5?1.0:0.0) in fscontrol.cpp) -- 'tap',
+		// not 'hold', despite the name "brake" suggesting a held button.
+		left: {label:'Brake',  code:'KeyB',  mode:'tap'}
+	};
+	var LEFT_DIAL={
+		// FSBTF_FLAPUP (KeyR): steps one flap position per press -- 'tap'.
+		up:   {label:'Flap+',  code:'KeyR', mode:'tap'},
+		// FSBTF_FLAPDOWN (KeyF): steps one flap position per press -- 'tap'.
+		down: {label:'Flap-',  code:'KeyF', mode:'tap'},
+		// No default key targets FSBTF_SMOKE itself (SetDefaultKeyAssign
+		// binds only FSKEY_P -> FSBTF_CYCLESMOKESELECTOR); that cycle
+		// function advances the smoke-generator channel on the press edge
+		// (FsAirplaneProperty::CycleSmokeSelector, called from
+		// IsCycleSmokeSelectorButtonJustPressed) -- an edge action, so
+		// 'tap' here (deviates from the brief's "hold" guess: there is no
+		// holdable smoke key in the shipped defaults).
+		right:{label:'Smoke',  code:'KeyP', mode:'tap'},
+		// Free slot: FSBTF_OPENAUTOPILOTMENU (Backspace) opens the
+		// autopilot dialog -- a deliberately calm, occasional action (the
+		// tablet touch UI already treats it as a tap), which fits the left
+		// hand well since that hand's grip already owns the continuous
+		// throttle control and its trigger is otherwise idle.
+		left: {label:'AP',     code:'Backspace',mode:'tap'}
+	};
 
 	if(!navigator.xr || !navigator.xr.isSessionSupported)
 	{
@@ -262,6 +337,64 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		catch(e){}
 	}
+	// One-shot key pulse for 'tap' dial functions: a real keyboard tap is a
+	// keydown immediately followed by a keyup, independent of how long the VR
+	// trigger stays physically pulled (mirrors web/index.html's own tap()).
+	// Dispatched directly (not through vrKeyEdge's vr.ctl.keys de-dupe) since
+	// that map tracks sustained "is this code currently held" state, which a
+	// tap does not participate in.
+	function vrKeyTap(code)
+	{
+		if(!code)
+		{
+			return;
+		}
+		window.dispatchEvent(new KeyboardEvent('keydown',{code:code,bubbles:true}));
+		setTimeout(function()
+		{
+			window.dispatchEvent(new KeyboardEvent('keyup',{code:code,bubbles:true}));
+		},60);
+	}
+
+	// ---- Radial dial: thumbstick -> sticky sector selection --------------
+	// thumb is [x,y] off the xr-standard "xr-standard" gamepad mapping's
+	// thumbstick axes (gamepad.axes[2],[3] -- see updateControllers). Per the
+	// WebXR gamepads-module / MDN: for that mapping, +y is BACKWARD (stick
+	// pulled toward the user), so "pushing the stick away" (the intuitive
+	// "up" sector) is y NEGATIVE. Flip to upY=-y once here so the rest of
+	// this function reads in plain screen terms (up=away, down=toward,
+	// matching a top-down view of the stick).
+	var DIAL_SELECT_THRESHOLD=0.6;  // magnitude to (re)pick a sector.
+	var DIAL_VISIBLE_THRESHOLD=0.3; // magnitude to fade the dial layer in.
+	var DIAL_HIDE_DELAY_MS=1200;    // time after re-centring before it hides.
+	function updateDialStick(dial,thumb,rawSrc)
+	{
+		var x=(thumb ? thumb[0] : 0)||0;
+		var upY=(thumb ? -thumb[1] : 0)||0;
+		var mag=Math.sqrt(x*x+upY*upY);
+		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
+		if(DIAL_SELECT_THRESHOLD<mag)
+		{
+			// Canvas/atan2 convention: 0deg=up (x=0,upY=1), 90deg=right,
+			// +-180deg=down, -90deg=left.
+			var deg=Math.atan2(x,upY)*180/Math.PI;
+			var sector=(-45<=deg && deg<45) ? 'up' : (45<=deg && deg<135) ? 'right' : (-135<=deg && deg<-45) ? 'left' : 'down';
+			if(sector!==dial.sel)
+			{
+				dial.sel=sector;
+				vrHapticPulse(rawSrc);
+			}
+		}
+		if(DIAL_VISIBLE_THRESHOLD<mag)
+		{
+			dial.visible=true;
+			dial.hideAt=now+DIAL_HIDE_DELAY_MS;
+		}
+		else if(dial.visible && now>=dial.hideAt)
+		{
+			dial.visible=false;
+		}
+	}
 
 	// The shared per-controller update.  entry is the plain data shape;
 	// viewerQuat is the headset orientation this frame ({x,y,z,w}, used only
@@ -301,12 +434,30 @@ EM_JS(void,YsfwInstallWebXR,(),
 				HEAPF32[ptr+3]=defl.rudder;
 			}
 
+			var rdial=vr.ctl.dial.right;
+			updateDialStick(rdial,entry.thumb,rawSrc);
 			var triggerPressed=entry.trigger>GRAB_THRESHOLD;
-			if(triggerPressed && !vr.ctl.rightTrigger)
+			var triggerEdgeUp=triggerPressed && !vr.ctl.rightTrigger;
+			if(triggerEdgeUp)
 			{
 				vrHapticPulse(rawSrc);
+				rdial.engaged=RIGHT_DIAL[rdial.sel]; // snapshot: dial flicks mid-press don't retarget it.
 			}
-			vrKeyEdge('Space',triggerPressed); // Default fire-gun key (FSBTF_FIREWEAPON).
+			if(rdial.engaged)
+			{
+				if('hold'===rdial.engaged.mode)
+				{
+					vrKeyEdge(rdial.engaged.code,triggerPressed);
+				}
+				else if(triggerEdgeUp)
+				{
+					vrKeyTap(rdial.engaged.code);
+				}
+				if(!triggerPressed)
+				{
+					rdial.engaged=null;
+				}
+			}
 			vr.ctl.rightTrigger=triggerPressed;
 
 			var aPressed=!!(entry.buttons && entry.buttons.a);
@@ -365,6 +516,35 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var yPressed=!!(entry.buttons && entry.buttons.b);
 			vrKeyEdge('KeyR',yPressed); // Default flaps-up key.
 			vr.ctl.leftY=yPressed;
+
+			// Left trigger: dial-selected function (see LEFT_DIAL). New
+			// behaviour -- the left trigger was previously unused (the grip
+			// already owns the throttle lever), so this is purely additive.
+			var ldial=vr.ctl.dial.left;
+			updateDialStick(ldial,entry.thumb,rawSrc);
+			var ltriggerPressed=entry.trigger>GRAB_THRESHOLD;
+			var ltriggerEdgeUp=ltriggerPressed && !vr.ctl.leftTrigger;
+			if(ltriggerEdgeUp)
+			{
+				vrHapticPulse(rawSrc);
+				ldial.engaged=LEFT_DIAL[ldial.sel];
+			}
+			if(ldial.engaged)
+			{
+				if('hold'===ldial.engaged.mode)
+				{
+					vrKeyEdge(ldial.engaged.code,ltriggerPressed);
+				}
+				else if(ltriggerEdgeUp)
+				{
+					vrKeyTap(ldial.engaged.code);
+				}
+				if(!ltriggerPressed)
+				{
+					ldial.engaged=null;
+				}
+			}
+			vr.ctl.leftTrigger=ltriggerPressed;
 		}
 	}
 
@@ -395,12 +575,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var gp=src.gamepad;
 			var squeeze=(gp.buttons[1] ? gp.buttons[1].value : 0);
 			var trigger=(gp.buttons[0] ? gp.buttons[0].value : 0);
+			// xr-standard mapping: axes[2],axes[3] = thumbstick x,y (axes[0],[1]
+			// are the touchpad, if present). Default to 0 if the gamepad
+			// exposes fewer axes than that (some controllers/emulators don't).
+			var thumb=[gp.axes[2]||0,gp.axes[3]||0];
 			processControllerPlain({
 				hand:hand,
 				pos:gpose.transform.position,
 				quat:gpose.transform.orientation,
 				squeeze:squeeze,
 				trigger:trigger,
+				thumb:thumb,
 				buttons:{
 					a:!!(gp.buttons[4] && gp.buttons[4].pressed),
 					b:!!(gp.buttons[5] && gp.buttons[5].pressed)
@@ -489,6 +674,172 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.xrFb=vr.mvFb;
 	}
 
+	// ---- Radial dial visuals: head-locked XRQuadLayer per hand -----------
+	// Layers-path only (vr.mvBinding). Best-effort: any failure here leaves
+	// the dial logic (selection + trigger routing, above) fully working,
+	// just without the in-headset visual -- every step is try/catch-guarded
+	// and callers treat "no resource" as "draw nothing this frame".
+	var DIAL_LABELS={
+		right:{up:RIGHT_DIAL.up.label,right:RIGHT_DIAL.right.label,down:RIGHT_DIAL.down.label,left:RIGHT_DIAL.left.label},
+		left: {up:LEFT_DIAL.up.label, right:LEFT_DIAL.right.label, down:LEFT_DIAL.down.label, left:LEFT_DIAL.left.label}
+	};
+	// Canvas-space angle (0deg=east/+x, 90deg=south/+y, clockwise, matching
+	// CanvasRenderingContext2D.arc's convention) for each sector's wedge
+	// centre -- "up" is drawn at the top of the texture (-90deg).
+	var DIAL_SECTOR_CANVAS_DEG={up:-90,right:0,down:90,left:180};
+	function drawDial(ctx,hand,sel)
+	{
+		var w=256,h=256,cx=128,cy=128,rOuter=110;
+		ctx.clearRect(0,0,w,h);
+		ctx.fillStyle='rgba(10,14,20,0.55)';
+		ctx.beginPath();
+		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
+		ctx.fill();
+		var sectors=['up','right','down','left'];
+		for(var i=0; i<sectors.length; ++i)
+		{
+			var dir=sectors[i];
+			var centerRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
+			var a0=centerRad-Math.PI/4, a1=centerRad+Math.PI/4;
+			ctx.beginPath();
+			ctx.moveTo(cx,cy);
+			ctx.arc(cx,cy,rOuter,a0,a1);
+			ctx.closePath();
+			ctx.fillStyle=(dir===sel) ? 'rgba(77,163,255,0.85)' : 'rgba(143,163,187,0.28)';
+			ctx.fill();
+			ctx.strokeStyle='rgba(230,237,243,0.6)';
+			ctx.lineWidth=2;
+			ctx.stroke();
+			var labelR=rOuter*0.62;
+			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
+			ctx.fillStyle='#fff';
+			ctx.font='bold 22px sans-serif';
+			ctx.textAlign='center';
+			ctx.textBaseline='middle';
+			ctx.fillText(DIAL_LABELS[hand][dir],lx,ly);
+		}
+		ctx.beginPath();
+		ctx.arc(cx,cy,14,0,2*Math.PI);
+		ctx.fillStyle='rgba(230,237,243,0.85)';
+		ctx.fill();
+	}
+	function ensureDialResources(hand)
+	{
+		if(undefined!==vr.dialRes[hand])
+		{
+			return vr.dialRes[hand]; // cached: an object, or false (unavailable).
+		}
+		var res=false;
+		try
+		{
+			if(vr.mvBinding && vr.viewerSpace)
+			{
+				var canvas=document.createElement('canvas');
+				canvas.width=256;
+				canvas.height=256;
+				var quad=vr.mvBinding.createQuadLayer({
+					space:vr.viewerSpace,
+					viewPixelWidth:256,
+					viewPixelHeight:256,
+					layout:'mono',
+					width:0.12,
+					height:0.12,
+					transform:new XRRigidTransform({x:('right'===hand ? 0.18 : -0.18),y:-0.18,z:-0.8})
+				});
+				try
+				{
+					if('blendTextureSourceAlpha' in quad)
+					{
+						quad.blendTextureSourceAlpha=true;
+					}
+				}catch(e){}
+				res={canvas:canvas,ctx:canvas.getContext('2d'),quad:quad,inLayers:false};
+			}
+		}
+		catch(e)
+		{
+			console.warn('[vr] dial quad layer unavailable ('+hand+'): '+(e&&e.message?e.message:e));
+			res=false;
+		}
+		vr.dialRes[hand]=res;
+		return res;
+	}
+	function uploadCanvasToSubImage(canvas,sub)
+	{
+		// Save/restore every bit of GL state this touches: the engine renders
+		// right after this call and must not see a changed active texture
+		// unit, binding, or unpack flags.
+		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
+		var prevTex=GLctx.getParameter(GLctx.TEXTURE_BINDING_2D);
+		var prevFlipY=GLctx.getParameter(GLctx.UNPACK_FLIP_Y_WEBGL);
+		var prevPremult=GLctx.getParameter(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
+		GLctx.activeTexture(GLctx.TEXTURE0);
+		GLctx.bindTexture(GLctx.TEXTURE_2D,sub.colorTexture);
+		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,false);
+		GLctx.pixelStorei(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+		GLctx.texSubImage2D(GLctx.TEXTURE_2D,0,0,0,GLctx.RGBA,GLctx.UNSIGNED_BYTE,canvas);
+		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,prevFlipY);
+		GLctx.pixelStorei(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL,prevPremult);
+		GLctx.bindTexture(GLctx.TEXTURE_2D,prevTex);
+		GLctx.activeTexture(prevActive);
+	}
+	// Per-frame dial-layer maintenance: create resources lazily, redraw the
+	// canvas only when the visible selection changed, upload only when the
+	// canvas changed, and keep session.renderState.layers in sync with which
+	// quads are currently visible (projection layer always first/background).
+	function updateDialLayers(frame)
+	{
+		if(!vr.mvBinding)
+		{
+			return;
+		}
+		var hands=['right','left'],layersChanged=false;
+		for(var i=0; i<hands.length; ++i)
+		{
+			var hand=hands[i];
+			var dial=vr.ctl.dial[hand];
+			var res=vr.dialRes[hand];
+			if(!dial.visible)
+			{
+				if(res && res.inLayers)
+				{
+					res.inLayers=false;
+					layersChanged=true;
+				}
+				continue;
+			}
+			res=ensureDialResources(hand);
+			if(!res)
+			{
+				continue; // No quad-layer support: dial logic still ran above, just no visual.
+			}
+			if(!res.inLayers)
+			{
+				res.inLayers=true;
+				res.drawnSel=null; // Force a redraw+upload on (re)appearance.
+				layersChanged=true;
+			}
+			if(res.drawnSel!==dial.sel)
+			{
+				try
+				{
+					drawDial(res.ctx,hand,dial.sel);
+					var sub=vr.mvBinding.getSubImage(res.quad,frame);
+					uploadCanvasToSubImage(res.canvas,sub);
+					res.drawnSel=dial.sel;
+				}
+				catch(e){} // Leave res.drawnSel unset so the next frame retries.
+			}
+		}
+		if(layersChanged)
+		{
+			var layers=[vr.mvLayer];
+			if(vr.dialRes.right && vr.dialRes.right.inLayers){ layers.push(vr.dialRes.right.quad); }
+			if(vr.dialRes.left && vr.dialRes.left.inLayers){ layers.push(vr.dialRes.left.quad); }
+			try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
+		}
+	}
+
 	function onXRFrame(t,frame)
 	{
 		var session=vr.session;
@@ -533,6 +884,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				writeEyeDataMv(pose);
 				updateControllers(frame,pose);
+				updateDialLayers(frame);
 			}
 		}
 		else
@@ -663,7 +1015,21 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}).then(function(refSpace)
 			{
 				vr.refSpace=refSpace;
-
+				// Head-locked space for the dial quad layers (see
+				// ensureDialResources); requested once up front rather than
+				// lazily since 'viewer' is always available on an
+				// immersive-vr session and a rejected promise here should
+				// only skip the dial visuals, not the whole session.
+				return session.requestReferenceSpace('viewer').then(function(viewerSpace)
+				{
+					vr.viewerSpace=viewerSpace;
+				}).catch(function(e)
+				{
+					console.warn('[vr] viewer reference space unavailable, dial layers disabled: '+(e&&e.message?e.message:e));
+					vr.viewerSpace=null;
+				});
+			}).then(function()
+			{
 				installFbRedirect();
 
 				session.addEventListener('end',function()
@@ -715,6 +1081,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.rightB=false;
 					vr.ctl.leftX=false;
 					vr.ctl.leftY=false;
+					vr.ctl.leftTrigger=false;
+					vr.ctl.dial.right={sel:'up',engaged:null,visible:false,hideAt:0};
+					vr.ctl.dial.left={sel:'up',engaged:null,visible:false,hideAt:0};
+					vr.viewerSpace=null;
+					vr.dialRes={right:undefined,left:undefined};
 
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
@@ -771,7 +1142,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// drives this without a live XR session (call vr.setPresenting(true)
 	// first so FsVrIsActive is true and the engine trusts the block).
 	//   list: array of {hand:'left'|'right', pos:[x,y,z], quat:[x,y,z,w],
-	//         squeeze:0..1, trigger:0..1, buttons:{a:bool,b:bool}}
+	//         squeeze:0..1, trigger:0..1, thumb:[x,y] (optional, dial stick),
+	//         buttons:{a:bool,b:bool}}
 	//   viewerQuat: optional [x,y,z,w] headset orientation (default identity,
 	//         forward -Z).
 	// Goes through the exact same processControllerPlain as the real XR path
@@ -788,6 +1160,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				quat:{x:e.quat[0],y:e.quat[1],z:e.quat[2],w:e.quat[3]},
 				squeeze:(undefined!==e.squeeze ? e.squeeze : 0),
 				trigger:(undefined!==e.trigger ? e.trigger : 0),
+				thumb:e.thumb,
 				buttons:e.buttons||{}
 			},vq,null);
 		}
