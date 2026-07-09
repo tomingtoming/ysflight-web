@@ -218,9 +218,9 @@ test('paint shop: real stock f15.dnm — extract palette, repaint, lights protec
   assert.ok(colors.length >= 5 && colors.length <= 24, 'sane palette size: ' + colors.length);
   const main = colors[0]; // most-used = the airframe color (82,139,172 on stock f15)
   assert.equal(main.key, '82,139,172');
-  // Nav-light pure colors live in CLA 30-34 blocks and must not be offered.
-  assert.ok(!colors.some((c) => c.key === '255,0,0' || c.key === '0,255,0' || c.key === '0,0,255'),
-    'light colors excluded from the paintable palette');
+  // NOTE: pure red/green also live in the CLA-2 afterburner blocks, which stay
+  // paintable ON PURPOSE (blue flames are a feature) — light-class protection
+  // is asserted deterministically on the synthetic DNM below.
 
   const out = repaintDnm(f15, { '82,139,172': [255, 0, 255] });
   assert.ok(out.replaced > 100, 'the airframe color covers many faces: ' + out.replaced);
@@ -233,6 +233,27 @@ test('paint shop: real stock f15.dnm — extract palette, repaint, lights protec
   const colors2 = extractDnmColors(out.bytes);
   assert.ok(colors2.some((c) => c.key === '255,0,255'));
   assert.ok(!colors2.some((c) => c.key === '82,139,172'));
+});
+
+test('paint shop: CLA 30-34 light blocks are protected (synthetic DNM)', () => {
+  const dnm = [
+    'DYNAMODEL', 'DNMVER 1',
+    'PCK body.srf 6',
+    'Surf', 'V 0 0 0', 'F', 'C 10 20 30', 'E', 'ENDO',
+    'PCK light.srf 6',
+    'Surf', 'V 0 0 0', 'F', 'C 200 0 0', 'E', 'ENDO',
+    'SRF "Body"', 'FIL body.srf', 'CLA 0',
+    'SRF "Nav"', 'FIL light.srf', 'CLA 30',
+    'END', '',
+  ].join('\n');
+  const bytes = new TextEncoder().encode(dnm);
+  const colors = extractDnmColors(bytes);
+  assert.deepEqual(colors.map((c) => c.key), ['10,20,30']); // light-block color excluded
+  const out = repaintDnm(bytes, { '10,20,30': [1, 2, 3], '200,0,0': [9, 9, 9] });
+  const text = new TextDecoder().decode(out.bytes);
+  assert.match(text, /^C 1 2 3$/m);      // body repainted
+  assert.match(text, /^C 200 0 0$/m);    // light untouched even when mapped
+  assert.equal(out.replaced, 1);
 });
 
 test('recipe embedding: workbench.json rides the pack and survives the pipeline', async () => {
