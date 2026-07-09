@@ -195,6 +195,53 @@ test('assembleSceneryZip without islands stays the proven 8-line header', async 
   assert.equal(fld.trim().split('\n').length, 8);
 });
 
+test('assembleSceneryZip rich: GOB objects, TER mountains, extra starts', async () => {
+  const asm = assembleSceneryZip({
+    name: 'RICH',
+    islands: [{ points: [[-2000, -2000], [2000, -2000], [0, 2000]] }],
+    objects: [
+      { nam: 'AIRCRAFTCARRIER', x: 3000, z: -1000, headingDeg: 90 },
+      { nam: 'ELEVATED_RUNWAY_1000X60', x: 0, z: 0 },
+    ],
+    mountains: [{ x: 500, z: -500, radiusM: 1000, heightM: 200 }],
+    starts: [{ x: 3000, z: -1000, altM: 40, speedMS: 0, headingDeg: 180, name: 'DECK' }],
+  });
+  const { unzipSync } = await import('../web/vendor/fflate.js');
+  const z = unzipSync(asm.zipBytes);
+  const fld = new TextDecoder().decode(z['scenery/rich.fld']);
+  const stp = new TextDecoder().decode(z['scenery/rich.stp']);
+
+  // GOB: static placement (no MPN/MPS), heading in 32768=pi units (90deg -> 16384).
+  assert.match(fld, /^GOB\nPOS 3000\.00 0\.00 -1000\.00 16384 0 0\nID 0\nTAG "WB_OBJ_0"\nNAM AIRCRAFTCARRIER\nIFF 0\nFLG 0\nEND$/m);
+  assert.match(fld, /^NAM ELEVATED_RUNWAY_1000X60$/m);
+  assert.doesNotMatch(fld, /^MPN /m);
+
+  // TER: exact PCK line count, grid origin shifted by -radius to center it.
+  const m = fld.match(/^PCK "00000000\.ter" (\d+)$/m);
+  assert.ok(m, 'mountain PCK present');
+  const lines = fld.split('\n');
+  const at = lines.findIndex((l) => l.startsWith('PCK "00000000.ter"'));
+  const declared = parseInt(m[1], 10);
+  const ter = lines.slice(at + 1, at + 1 + declared);
+  assert.equal(ter[0], 'TerrMesh');
+  assert.equal(ter[ter.length - 1], 'END');
+  assert.equal(ter.filter((l) => l.startsWith('BLO ')).length, 17 * 17);
+  assert.ok(ter.includes('BLO 200.00 R 1 34 139 34 1 34 139 34'), 'peak node at full height');
+  assert.match(fld, /^TER\nFIL "00000000\.ter"\nPOS -500\.00 0\.00 -1500\.00 0 0 0\nID 0\nEND$/m);
+
+  // Extra start: named, low+slow => throttle 0, gear down.
+  assert.match(stp, /^N DECK$/m);
+  assert.match(stp, /^C POSITION 3000\.00m 40\.00m -1000\.00m$/m);
+  assert.match(stp, /^C ATTITUDE 180\.00deg 0\.00deg 0\.00deg$/m);
+  assert.match(stp, /^C CTLLDGEA TRUE$/m);
+  assert.match(stp, /^N START01$/m); // the default start is still first
+
+  // Still a valid pack through the normal pipeline.
+  const a = await analyzePack(asm.zipBytes, { sha256 });
+  assert.deepEqual(a.categories, ['scenery']);
+  assert.equal(a.diagnostics.missing, 0);
+});
+
 test('makeDatFromBase extras: SET knobs replace-or-append, smoke gets a generator', () => {
   const base = new TextEncoder().encode(
     'IDENTIFY "X"\nCATEGORY FIGHTER\nSTRENGTH 10\nGUNINTVL 0.075\n',
