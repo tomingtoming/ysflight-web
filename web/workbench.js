@@ -276,7 +276,45 @@ const num = (v, d) => (Math.round(v * 100) / 100).toFixed(d);
 //   (b) a PST loop with AREA LAND (the LANDABLE override over DEFAREA WATER;
 //       no TER means the island is flat at BASEELV 0m, so you can touch down).
 // Returns {zipBytes, ident, packName}.
-export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80], startAltM = 1000, startSpeedMS = 100, islands = [], recipe }) {
+// GOB heading/pitch/bank ride the .fld as 32768 = pi radians (yssceneryio.cpp
+// reads att * YsPi/32768); degrees convert with this.
+const deg32768 = (deg) => String(Math.round(((deg || 0) % 360) * 32768 / 180));
+
+// One cosine-falloff mountain as a TER (TerrMesh) text block: NBL n n nodes,
+// green->brown elevation gradient (CBE), last-row/col nodes in the saver's
+// shorthand form.  Landable real terrain: GetElevation reads the grid and the
+// crash test uses the triangle normal, so gentle slopes can be touched down on.
+function mountainTer({ radiusM = 1500, heightM = 300, n = 16 }) {
+  const cell = (radiusM * 2) / n;
+  const lines = [
+    'TerrMesh',
+    'SPEC FALSE',
+    'NBL ' + n + ' ' + n,
+    'TMS ' + num(cell, 2) + ' ' + num(cell, 2),
+    'CBE 0.00 ' + num(heightM, 2) + ' 34 139 34 139 90 43',
+  ];
+  const c = n / 2;
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) {
+      const dist = Math.hypot(i - c, j - c) * cell;
+      const y = dist <= radiusM ? heightM * 0.5 * (1 + Math.cos(Math.PI * dist / radiusM)) : 0;
+      lines.push(i === n || j === n
+        ? 'BLO ' + num(y, 2)
+        : 'BLO ' + num(y, 2) + ' R 1 34 139 34 1 34 139 34');
+    }
+  }
+  lines.push('END');
+  return lines;
+}
+
+export function assembleSceneryZip({
+  name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80],
+  startAltM = 1000, startSpeedMS = 100, islands = [],
+  objects = [],    // [{nam, x, z, headingDeg?, tag?}] stock ground-object placements
+  mountains = [],  // [{x, z, radiusM?, heightM?}] cosine-falloff TER hills
+  starts = [],     // [{name?, x, z, altM?, speedMS?, headingDeg?}] extra spawn points
+  recipe,
+}) {
   const ident = sanitizeIdentify(name);
   if (!ident) throw new Error('workbench: map name is required');
   const packName = ident.toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
@@ -312,20 +350,64 @@ export function assembleSceneryZip({ name, ground = [40, 90, 60], sky = [23, 106
       fldLines.push('FIL ""', 'POS 0.00 0.00 0.00 0.00 0.00 0.00', 'ID 0', 'END');
     }
   }
+  // Mountains: one PCK'd TER each; the PCK line count must equal the embedded
+  // text EXACTLY, and the grid origin is the -X/-Z corner, so POS shifts the
+  // grid by -radius to center it on the click point.  TER both draws the
+  // terrain mesh and provides the ground elevation (max wins over BASEELV).
+  (mountains || []).forEach((m, i) => {
+    const ter = mountainTer(m);
+    const fn = String(i).padStart(8, '0') + '.ter';
+    fldLines.push('PCK "' + fn + '" ' + ter.length);
+    fldLines.push(...ter);
+    fldLines.push('', '');
+    fldLines.push(
+      'TER',
+      'FIL "' + fn + '"',
+      'POS ' + num(m.x - (m.radiusM || 1500), 2) + ' 0.00 ' + num(m.z - (m.radiusM || 1500), 2) + ' 0 0 0',
+      'ID 0',
+      'END',
+    );
+  });
+  // Stock ground objects by IDENTIFY name (all 108 stock templates are in the
+  // engine preload, so NAM always links).  No MPN/MPS = the object stays put —
+  // including AIRCRAFTCARRIER, whose arresting wire + catapult still work.
+  (objects || []).forEach((o, i) => {
+    fldLines.push(
+      'GOB',
+      'POS ' + num(o.x, 2) + ' ' + num(o.y || 0, 2) + ' ' + num(o.z, 2) + ' ' + deg32768(o.headingDeg) + ' 0 0',
+      'ID 0',
+      'TAG "WB_OBJ_' + i + '"',
+      'NAM ' + o.nam,
+      'IFF 0',
+      'FLG 0',
+      'END',
+    );
+  });
   fldLines.push('');
   const fld = fldLines.join('\n');
 
-  // Spawn upwind of the origin so a drawn island around (0,0) is in front of
-  // the nose (heading 0 = north = -Z) rather than under the tail.
-  const stp = [
+  // Default spawn upwind of the origin so a drawn island around (0,0) is in
+  // front of the nose (heading 0 = north = -Z); user-placed starts follow.
+  const stpBlocks = [[
     'N ' + SCENERY_START,
-    'C POSITION 0.00m ' + num(startAltM, 2) + 'm ' + num(polys.length ? 6000 : 0, 2) + 'm',
+    'C POSITION 0.00m ' + num(startAltM, 2) + 'm ' + num(polys.length || objects.length || mountains.length ? 6000 : 0, 2) + 'm',
     'C ATTITUDE 0.00deg 0.00deg 0.00deg',
     'C INITSPED ' + num(startSpeedMS, 2) + 'm/s',
     'C CTLTHROT 0.80',
     'C CTLLDGEA FALSE',
-    '',
-  ].join('\n');
+  ]];
+  (starts || []).forEach((s, i) => {
+    const speed = s.speedMS === undefined ? 100 : s.speedMS;
+    stpBlocks.push([
+      'N ' + sanitizeIdentify(s.name || 'START' + String(i + 2).padStart(2, '0')),
+      'C POSITION ' + num(s.x, 2) + 'm ' + num(s.altM === undefined ? 1000 : s.altM, 2) + 'm ' + num(s.z, 2) + 'm',
+      'C ATTITUDE ' + num(s.headingDeg || 0, 2) + 'deg 0.00deg 0.00deg',
+      'C INITSPED ' + num(speed, 2) + 'm/s',
+      'C CTLTHROT ' + (speed > 0 ? '0.80' : '0.00'),
+      'C CTLLDGEA ' + (speed < 40 ? 'TRUE' : 'FALSE'),
+    ]);
+  });
+  const stp = stpBlocks.map((b) => b.join('\n')).join('\n\n') + '\n';
 
   const enc = new TextEncoder();
   const entries = {

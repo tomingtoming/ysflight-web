@@ -92,7 +92,9 @@ console.log('dat wizard: ' + JSON.stringify(wiz));
 if (wiz.identify !== 'WB_CUSTOM1') die('expected WB_CUSTOM1, got ' + wiz.identify);
 if (wiz.stockCount < 50) die('stock list suspiciously small: ' + wiz.stockCount);
 
-// 3. The island scenery: a DRAWN map (two polygons -> PC2 visual + PST LAND).
+// 3. The island scenery: a DRAWN map — islands (PC2 visual + PST LAND) plus the
+//    rich layer: stock ground objects (carrier + elevated runway), a cosine
+//    TER mountain, and an extra low-and-slow start.
 const scn = await page
   .evaluate(() => window.ysfwWorkbench.createScenery({
     name: 'WB_ISLAND', ground: [13, 58, 102], sky: [23, 106, 189], land: [60, 140, 80],
@@ -101,6 +103,13 @@ const scn = await page
       { points: [[-2000, -1500], [1500, -2200], [2400, 600], [0, 1800], [-2300, 900]] },
       { points: [[3500, 3000], [4500, 2800], [4200, 4000]], color: [200, 180, 120] },
     ],
+    objects: [
+      { nam: 'AIRCRAFTCARRIER', x: 5000, z: 5000, headingDeg: 90 },
+      { nam: 'ELEVATED_RUNWAY_1000X60', x: -4000, z: -4000 },
+      { nam: 'BIGBEN', x: 0, z: 0 },
+    ],
+    mountains: [{ x: -1000, z: 500, radiusM: 1200, heightM: 250 }],
+    starts: [{ name: 'DECKSIDE', x: 5000, z: 6000, altM: 60, speedMS: 0, headingDeg: 0 }],
   }))
   .catch((e) => die('island scenery flow threw: ' + e.message));
 console.log('island scenery: ' + JSON.stringify({ id: scn.id, ident: scn.ident, start: scn.start }));

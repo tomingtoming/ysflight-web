@@ -21,6 +21,29 @@ const ACCENT = '#4da3ff';
 const DEFAULT_FLY_AIRCRAFT = 'F-15C_EAGLE';
 const WORLD_M = 16000; // the island canvas spans a 16km x 16km sea
 
+// Curated stock ground objects for the map editor (NAM = the .dat IDENTIFY the
+// engine's preloaded ground templates register under; all 108 always link).
+const OBJECT_PALETTE = [
+  { nam: 'AIRCRAFTCARRIER', ja: '空母（着艦/発艦可）', en: 'Carrier (land/launch!)', glyph: '🚢' },
+  { nam: 'ELEVATED_RUNWAY_1000X60', ja: '滑走路（高架 1km）', en: 'Runway (elevated 1km)', glyph: '🛬' },
+  { nam: 'ISLAND_BASE', ja: '島基地（ILS付き）', en: 'Island base (ILS)', glyph: '🏝' },
+  { nam: 'HMS_INVINCIBLE', ja: '軽空母', en: 'Light carrier', glyph: '⚓' },
+  { nam: 'BIGBEN', ja: 'ビッグベン', en: 'Big Ben', glyph: '🕰' },
+  { nam: 'CASTLE', ja: '城', en: 'Castle', glyph: '🏰' },
+  { nam: 'PALACE', ja: '宮殿', en: 'Palace', glyph: '🏛' },
+  { nam: 'BRIDGE1', ja: '橋', en: 'Bridge', glyph: '🌉' },
+  { nam: 'HANGAR1', ja: '格納庫', en: 'Hangar', glyph: '🏬' },
+  { nam: 'TERMINAL', ja: '空港ターミナル', en: 'Terminal', glyph: '🏢' },
+  { nam: 'POWER_PLANT', ja: '発電所', en: 'Power plant', glyph: '🏭' },
+  { nam: 'TREES_400M_20M', ja: '森', en: 'Forest', glyph: '🌲' },
+  { nam: 'TREE1', ja: '木', en: 'Tree', glyph: '🌳' },
+  { nam: 'ELEPHANT', ja: '象', en: 'Elephant', glyph: '🐘' },
+  { nam: 'JEEP', ja: 'ジープ', en: 'Jeep', glyph: '🚙' },
+  { nam: 'M1A1ABRAMS', ja: '戦車', en: 'Tank', glyph: '🛡' },
+  { nam: 'SAM', ja: '対空ミサイル（撃ってくる）', en: 'SAM (it shoots!)', glyph: '🚀' },
+  { nam: 'VOR', ja: 'VORビーコン', en: 'VOR beacon', glyph: '📡' },
+];
+
 const LANG = (function () {
   try {
     const l = String((new URLSearchParams(location.search).get('lang')) || navigator.language || 'en').toLowerCase();
@@ -101,8 +124,24 @@ const S = ({
     isName: 'マップ名（英数字）',
     isSea: '海の色', isSky: '空の色', isLand: '島の色',
     isAlt: '開始高度 (m)',
-    isUndo: '↩ 島を1つ消す', isClear: '全部消す',
+    isUndo: '↩ 1つ戻す', isClear: '全部消す',
     isMake: 'マップを保存する',
+    modeDraw: '✏️ 島を描く',
+    modeObject: '🚢 置き物',
+    modeMountain: '⛰ 山',
+    modeStart: '🛫 スタート',
+    modeHint: {
+      draw: 'ドラッグで海岸線を描くと島になります',
+      object: '置きたい物を選んでクリックで配置（空母は本当に着艦・発艦できます）',
+      mountain: 'クリックで山を置きます（なだらかな本物の地形＝緩い斜面には着陸もできます）',
+      start: 'クリックで開始地点を置きます（低高度・速度0なら降着装置が下りた状態で始まります）',
+    },
+    objPick: '置く物',
+    headingDeg: '向き (°)',
+    mtRadius: '山の半径 (m)',
+    mtHeight: '山の高さ (m)',
+    stAlt: '開始高度 (m)',
+    stSpeed: '開始速度 (m/s)',
     isDone: (n, k) => '✓ マップ「' + n + '」（島 ' + k + ' 個）を保存しました',
     isEmptyOk: '（島ゼロでも保存できます＝ただの海）',
     flyWhat: 'テスト飛行の機体',
@@ -176,8 +215,24 @@ const S = ({
     isName: 'Map name (ASCII)',
     isSea: 'Sea color', isSky: 'Sky color', isLand: 'Island color',
     isAlt: 'Start altitude (m)',
-    isUndo: '↩ Remove last island', isClear: 'Clear all',
+    isUndo: '↩ Undo', isClear: 'Clear all',
     isMake: 'Save the map',
+    modeDraw: '✏️ Draw islands',
+    modeObject: '🚢 Objects',
+    modeMountain: '⛰ Mountains',
+    modeStart: '🛫 Starts',
+    modeHint: {
+      draw: 'Drag to draw coastlines — each stroke becomes an island',
+      object: 'Pick something and click to place it (the carrier really works for landing/launching)',
+      mountain: 'Click to place a mountain (real terrain — gentle slopes are landable)',
+      start: 'Click to place a spawn point (low + slow starts with gear down)',
+    },
+    objPick: 'Object',
+    headingDeg: 'Heading (°)',
+    mtRadius: 'Mountain radius (m)',
+    mtHeight: 'Mountain height (m)',
+    stAlt: 'Start altitude (m)',
+    stSpeed: 'Start speed (m/s)',
     isDone: (n, k) => '✓ Saved map “' + n + '” (' + k + ' island' + (k === 1 ? '' : 's') + ')',
     isEmptyOk: '(Zero islands is fine too — plain sea)',
     flyWhat: 'Test-fly aircraft',
@@ -745,6 +800,58 @@ function islandCard() {
   const landIn = row(card, S.isLand, Object.assign(document.createElement('input'), { type: 'color', value: '#3c8c50' }));
   const altIn = row(card, S.isAlt, Object.assign(document.createElement('input'), { type: 'number', value: '1000', min: '100', max: '10000' }));
 
+  // --- mode toolbar (draw / objects / mountains / starts) -----------------------
+  let mode = 'draw';
+  const modeBar = el('div', 'btnrow');
+  modeBar.style.cssText += ';justify-content:flex-start;margin:4px 0 2px';
+  const modeHint = el('div', null, S.modeHint.draw);
+  modeHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:4px';
+  const modeBtns = {};
+  const modeCtl = {}; // per-mode control rows, shown for the active mode
+  const setMode = (m) => {
+    mode = m;
+    modeHint.textContent = S.modeHint[m];
+    for (const [k, b] of Object.entries(modeBtns)) b.className = k === m ? 'accent' : '';
+    for (const [k, r] of Object.entries(modeCtl)) r.style.display = k === mode ? 'flex' : 'none';
+  };
+  for (const [m, label] of [['draw', S.modeDraw], ['object', S.modeObject], ['mountain', S.modeMountain], ['start', S.modeStart]]) {
+    const b = el('button', m === 'draw' ? 'accent' : null, label);
+    b.addEventListener('click', () => setMode(m));
+    modeBtns[m] = b;
+    modeBar.appendChild(b);
+  }
+  card.appendChild(modeBar);
+  card.appendChild(modeHint);
+
+  const ctlRow = (m, children) => {
+    const r = el('div', 'row');
+    r.style.display = 'none';
+    for (const c of children) r.appendChild(c);
+    modeCtl[m] = r;
+    card.appendChild(r);
+    return r;
+  };
+  const lab = (t) => { const s = el('span', 'lab', t); s.style.width = 'auto'; return s; };
+  const numIn = (v, min, max, w) => {
+    const i = Object.assign(document.createElement('input'), { type: 'number', value: String(v), min: String(min), max: String(max) });
+    i.style.cssText = 'width:' + (w || 90) + 'px;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+    return i;
+  };
+  const objSel = document.createElement('select');
+  objSel.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+  for (const o of OBJECT_PALETTE) {
+    objSel.appendChild(Object.assign(el('option'), { value: o.nam, textContent: o.glyph + ' ' + (LANG === 'ja' ? o.ja : o.en) }));
+  }
+  const objHead = numIn(0, 0, 359, 70);
+  ctlRow('object', [lab(S.objPick), objSel, lab(S.headingDeg), objHead]);
+  const mtRad = numIn(1500, 300, 6000, 90);
+  const mtHt = numIn(300, 30, 2000, 90);
+  ctlRow('mountain', [lab(S.mtRadius), mtRad, lab(S.mtHeight), mtHt]);
+  const stAlt = numIn(300, 0, 10000, 90);
+  const stSpd = numIn(80, 0, 400, 80);
+  const stHead = numIn(0, 0, 359, 70);
+  ctlRow('start', [lab(S.stAlt), stAlt, lab(S.stSpeed), stSpd, lab(S.headingDeg), stHead]);
+
   const canvas = document.createElement('canvas');
   canvas.id = 'island-canvas';
   canvas.width = 640;
@@ -752,8 +859,22 @@ function islandCard() {
   card.appendChild(canvas);
   const ctx = canvas.getContext('2d');
 
-  const polygons = []; // in canvas px: [[x,y],...]
+  const polygons = [];   // islands, in canvas px: [[x,y],...]
+  const objects = [];    // {nam, x, z, headingDeg} in WORLD meters
+  const mountains = [];  // {x, z, radiusM, heightM} in WORLD meters
+  const starts = [];     // {x, z, altM, speedMS, headingDeg} in WORLD meters
+  const placed = [];     // undo order: 'poly' | 'object' | 'mountain' | 'start'
   let stroke = null;
+
+  const toWorld = ([x, y]) => [
+    (x / canvas.width - 0.5) * WORLD_M,   // X = east
+    (y / canvas.height - 0.5) * WORLD_M,  // canvas down = Z = south
+  ];
+  const fromWorld = ([x, z]) => [
+    (x / WORLD_M + 0.5) * canvas.width,
+    (z / WORLD_M + 0.5) * canvas.height,
+  ];
+  const pxPerM = canvas.width / WORLD_M;
 
   const redraw = () => {
     ctx.fillStyle = seaIn.value;
@@ -770,6 +891,41 @@ function islandCard() {
       ctx.strokeStyle = 'rgba(255,255,255,.5)';
       ctx.stroke();
     }
+    for (const m of mountains) {
+      const [cx, cy] = fromWorld([m.x, m.z]);
+      const r = m.radiusM * pxPerM;
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, 'rgba(139,90,43,.9)');
+      g.addColorStop(0.6, 'rgba(90,120,60,.6)');
+      g.addColorStop(1, 'rgba(90,120,60,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const o of objects) {
+      const [x, y] = fromWorld([o.x, o.z]);
+      const glyph = (OBJECT_PALETTE.find((p) => p.nam === o.nam) || {}).glyph || '📦';
+      ctx.font = '20px sans-serif';
+      ctx.fillText(glyph, x, y);
+    }
+    for (const s of starts) {
+      const [x, y] = fromWorld([s.x, s.z]);
+      // Heading tick: 0 = north = up on the map (canvas -y).
+      const hx = Math.sin((s.headingDeg || 0) * Math.PI / 180);
+      const hy = -Math.cos((s.headingDeg || 0) * Math.PI / 180);
+      ctx.strokeStyle = '#ffd34d';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + hx * 16, y + hy * 16);
+      ctx.stroke();
+      ctx.font = '16px sans-serif';
+      ctx.fillText('🛫', x, y);
+    }
+    ctx.lineWidth = 1;
   };
   seaIn.addEventListener('input', redraw);
   landIn.addEventListener('input', redraw);
@@ -779,8 +935,24 @@ function islandCard() {
     return [((e.clientX - r.left) / r.width) * canvas.width, ((e.clientY - r.top) / r.height) * canvas.height];
   };
   canvas.addEventListener('pointerdown', (e) => {
-    canvas.setPointerCapture(e.pointerId);
-    stroke = [pt(e)];
+    const p = pt(e);
+    if (mode === 'draw') {
+      canvas.setPointerCapture(e.pointerId);
+      stroke = [p];
+      return;
+    }
+    const [wx, wz] = toWorld(p);
+    if (mode === 'object') {
+      objects.push({ nam: objSel.value, x: wx, z: wz, headingDeg: Number(objHead.value) || 0 });
+      placed.push('object');
+    } else if (mode === 'mountain') {
+      mountains.push({ x: wx, z: wz, radiusM: Number(mtRad.value) || 1500, heightM: Number(mtHt.value) || 300 });
+      placed.push('mountain');
+    } else if (mode === 'start') {
+      starts.push({ x: wx, z: wz, altM: Number(stAlt.value) || 0, speedMS: Number(stSpd.value) || 0, headingDeg: Number(stHead.value) || 0 });
+      placed.push('start');
+    }
+    redraw();
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!stroke) return;
@@ -789,7 +961,7 @@ function islandCard() {
     if (Math.hypot(p[0] - last[0], p[1] - last[1]) >= 6) { stroke.push(p); redraw(); }
   });
   const endStroke = () => {
-    if (stroke && stroke.length >= 3) polygons.push(stroke);
+    if (stroke && stroke.length >= 3) { polygons.push(stroke); placed.push('poly'); }
     stroke = null;
     redraw();
   };
@@ -799,9 +971,19 @@ function islandCard() {
   const tools = el('div', 'btnrow');
   tools.style.justifyContent = 'flex-start';
   const undoBtn = el('button', null, S.isUndo);
-  undoBtn.addEventListener('click', () => { polygons.pop(); redraw(); });
+  undoBtn.addEventListener('click', () => {
+    const kind = placed.pop();
+    if (kind === 'poly') polygons.pop();
+    else if (kind === 'object') objects.pop();
+    else if (kind === 'mountain') mountains.pop();
+    else if (kind === 'start') starts.pop();
+    redraw();
+  });
   const clearBtn = el('button', null, S.isClear);
-  clearBtn.addEventListener('click', () => { polygons.length = 0; redraw(); });
+  clearBtn.addEventListener('click', () => {
+    polygons.length = 0; objects.length = 0; mountains.length = 0; starts.length = 0; placed.length = 0;
+    redraw();
+  });
   tools.appendChild(undoBtn);
   tools.appendChild(clearBtn);
   card.appendChild(tools);
@@ -811,14 +993,6 @@ function islandCard() {
   const btnRow = el('div', 'btnrow');
   const goBtn = el('button', 'accent', S.isMake);
   const hex2rgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
-  const toWorld = ([x, y]) => [
-    (x / canvas.width - 0.5) * WORLD_M,   // X = east
-    (y / canvas.height - 0.5) * WORLD_M,  // canvas down = Z = south
-  ];
-  const fromWorld = ([x, z]) => [
-    (x / WORLD_M + 0.5) * canvas.width,
-    (z / WORLD_M + 0.5) * canvas.height,
-  ];
   goBtn.addEventListener('click', async () => {
     goBtn.disabled = true;
     msg.textContent = S.working;
@@ -830,6 +1004,9 @@ function islandCard() {
         land: hex2rgb(landIn.value),
         startAltM: Math.max(100, Number(altIn.value) || 1000),
         islands: polygons.map((poly) => ({ points: poly.map(toWorld) })),
+        objects: objects.slice(),
+        mountains: mountains.slice(),
+        starts: starts.slice(),
       };
       const asm = assembleSceneryZip({ ...scenery, recipe: { scenery } });
       const res = await saveOrReplace(asm.zipBytes, asm.packName, editingId);
@@ -868,6 +1045,13 @@ function islandCard() {
     if (sc.startAltM) altIn.value = String(sc.startAltM);
     polygons.length = 0;
     for (const isl of sc.islands || []) polygons.push((isl.points || []).map(fromWorld));
+    objects.length = 0;
+    for (const o of sc.objects || []) objects.push({ ...o });
+    mountains.length = 0;
+    for (const m of sc.mountains || []) mountains.push({ ...m });
+    starts.length = 0;
+    for (const s of sc.starts || []) starts.push({ ...s });
+    placed.length = 0; // undo history does not survive a re-open; clear-all still works
     editingId = it.id;
     editBadge.textContent = S.libEditingBadge(it.name || it.id);
     redraw();
