@@ -775,7 +775,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var prevPremult=GLctx.getParameter(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL);
 		GLctx.activeTexture(GLctx.TEXTURE0);
 		GLctx.bindTexture(GLctx.TEXTURE_2D,sub.colorTexture);
-		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,false);
+		// FLIP_Y: canvas rows run top-down but the layer texture's origin is
+		// bottom-left, so an unflipped upload shows the dial upside-down in
+		// the headset.
+		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,true);
 		GLctx.pixelStorei(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
 		GLctx.texSubImage2D(GLctx.TEXTURE_2D,0,0,0,GLctx.RGBA,GLctx.UNSIGNED_BYTE,canvas);
 		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,prevFlipY);
