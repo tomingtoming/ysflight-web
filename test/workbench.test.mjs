@@ -282,6 +282,32 @@ test('paint shop: real stock f15.dnm — extract palette, repaint, lights protec
   assert.ok(!colors2.some((c) => c.key === '82,139,172'));
 });
 
+test('paint shop: packed 15-bit C <n> colors decode and repaint (amp.dnm form)', () => {
+  // C 24558 -> GGGGG RRRRR BBBBB: R=255 G=189 B=115 (Anpanman skin); C 960 -> R=246 G=0 B=0.
+  const dnm = [
+    'DYNAMODEL', 'DNMVER 1',
+    'PCK body.srf 12', // SURF + 3V + (F V C E) x2 = 12 lines
+    'SURF', 'V 0 0 0', 'V 1 0 0', 'V 0 1 0',
+    'F', 'V 0 1 2', 'C 24558', 'E',
+    'F', 'V 0 1 2', 'C 960', 'E',
+    'SRF "Body"', 'FIL body.srf', 'CLA 0',
+    'END', '',
+  ].join('\n');
+  const bytes = new TextEncoder().encode(dnm);
+  const colors = extractDnmColors(bytes);
+  const keys = colors.map((c) => c.key);
+  assert.ok(keys.includes('255,189,115'), 'packed skin decoded: ' + JSON.stringify(keys));
+  assert.ok(keys.includes('247,0,0'), 'packed red decoded: ' + JSON.stringify(keys)); // 30*255/31=246.8->247
+  // Repaint by decoded key; matched packed line becomes a triplet, line count kept.
+  const out = repaintDnm(bytes, { '255,189,115': [10, 20, 30] });
+  assert.equal(out.replaced, 1);
+  const text = new TextDecoder().decode(out.bytes);
+  assert.match(text, /^C 10 20 30$/m);
+  assert.match(text, /^C 960$/m); // untouched packed color stays packed
+  void colors;
+  assert.equal(text.split('\n').length, dnm.split('\n').length); // same line count
+});
+
 test('paint shop: CLA 30-34 light blocks are protected (synthetic DNM)', () => {
   const dnm = [
     'DYNAMODEL', 'DNMVER 1',
