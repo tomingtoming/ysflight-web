@@ -12,6 +12,7 @@
 import {
   classifyLoose, assembleAircraftZip,
   makeDatFromBase, assembleSceneryZip, SCENERY_START, RECIPE_FILE,
+  extractDnmColors, repaintDnm,
 } from './workbench.js';
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
@@ -44,6 +45,10 @@ const S = ({
     stagedAddTitle: '機体組み立てのファイルに加える',
     stagedEmpty: '（まだありません — 🧊 でモデルを作って保存すると届きます）',
     stagedAdded: (n) => '✓ ' + n + ' を組み立てに追加しました',
+    borrowLabel: '🎨 stockの見た目を借りる',
+    borrowBtn: '取り込む',
+    borrowTitle: 'stock機体の外観・当たり判定・コックピットをこの組み立てに取り込む（.datは下のウィザードで）',
+    borrowDone: (name, n) => '✓ ' + name + ' の見た目（' + n + 'ファイル）を取り込みました。あとは .dat＝下の「stockから作る」で完成',
     stagedDl: '⬇', stagedDlTitle: 'ダウンロード（手元に保存）',
     stagedSend: '＋ ファイルを送る',
     stagedSendTitle: '手持ちの .srf/.dnm/.dat をモデラと組み立ての共有領域に入れる',
@@ -78,6 +83,18 @@ const S = ({
     datBase: '元になる機体',
     datName: '新しい機体名（英数字）',
     knobs: { engine: 'エンジン出力', weight: '機体の重さ', speed: '最高速度', agility: '操縦の鋭さ' },
+    exStrength: '耐久力', exStealth: 'ステルス', exGun: '機銃の連射', exSmoke: 'スモーク色',
+    exKeep: 'そのまま',
+    exStrengthOpts: { 1: 'すぐ壊れる (1)', 8: 'ふつう (8)', 25: '頑丈 (25)', 99: 'ほぼ無敵 (99)' },
+    exStealthOpts: { 0.1: 'ステルス (0.1)', 0.05: '超ステルス (0.05)' },
+    exGunOpts: { 0.03: '速い', 0.075: 'ふつう', 0.15: 'ゆっくり' },
+    exSmokeOn: 'スモークを付ける',
+    paintBtn: '🎨 塗装',
+    paintTitle: 'この外観モデルの色を塗り替える（ナビライト等は自動保護）',
+    paintHint: '色ごとに新しい色を選んで「塗り替える」。数字はその色が使われている面の数',
+    paintApply: '塗り替える',
+    paintDone: (n) => '✓ ' + n + ' 面を塗り替えました',
+    paintNone: '（この見た目に塗れる色が見つかりません — .dnm を選んでください）',
     datUse: 'この .dat を使う',
     datGenerated: (n) => '（生成）' + n + '.dat',
     datSet: (n) => '✓ ' + n + ' を機体組み立ての .dat スロットに入れました',
@@ -122,6 +139,10 @@ const S = ({
     stagedAddTitle: 'Add to the aircraft assembly files',
     stagedEmpty: '(Nothing yet — make and save a model in 🧊 and it lands here)',
     stagedAdded: (n) => '✓ Added ' + n + ' to the assembly',
+    borrowLabel: '🎨 Borrow a stock airframe',
+    borrowBtn: 'Import',
+    borrowTitle: 'Pull a stock aircraft’s visual/collision/cockpit into this assembly (make the .dat below)',
+    borrowDone: (name, n) => '✓ Imported ' + name + '’s airframe (' + n + ' files). Now make a .dat below to complete it',
     stagedDl: '⬇', stagedDlTitle: 'Download a copy',
     stagedSend: '＋ Send a file',
     stagedSendTitle: 'Put your own .srf/.dnm/.dat into the shared modeler/assembly area',
@@ -155,6 +176,18 @@ const S = ({
     datBase: 'Base aircraft',
     datName: 'New aircraft name (ASCII)',
     knobs: { engine: 'Engine power', weight: 'Weight', speed: 'Top speed', agility: 'Handling sharpness' },
+    exStrength: 'Toughness', exStealth: 'Stealth', exGun: 'Gun fire rate', exSmoke: 'Smoke color',
+    exKeep: 'Keep',
+    exStrengthOpts: { 1: 'Fragile (1)', 8: 'Normal (8)', 25: 'Tough (25)', 99: 'Nearly unkillable (99)' },
+    exStealthOpts: { 0.1: 'Stealth (0.1)', 0.05: 'Super stealth (0.05)' },
+    exGunOpts: { 0.03: 'Fast', 0.075: 'Normal', 0.15: 'Slow' },
+    exSmokeOn: 'Enable smoke',
+    paintBtn: '🎨 Paint',
+    paintTitle: 'Recolor this visual model (nav lights are auto-protected)',
+    paintHint: 'Pick a new color per swatch, then Apply. The number is how many faces use it',
+    paintApply: 'Apply paint',
+    paintDone: (n) => '✓ Repainted ' + n + ' faces',
+    paintNone: '(No paintable colors found — select a .dnm visual)',
     datUse: 'Use this .dat',
     datGenerated: (n) => '(generated) ' + n + '.dat',
     datSet: (n) => '✓ Placed ' + n + ' into the assembly’s .dat slot',
@@ -452,6 +485,25 @@ function aircraftCard() {
     'color:#8fa3bb;font-size:12.5px;text-decoration:none';
   card.appendChild(modelerLink);
 
+  // ...or borrow a whole stock airframe (visual/collision/cockpit/coarse are
+  // staged statically at build) — with the .dat wizard below, that makes a
+  // complete aircraft from ZERO user files.
+  const borrowRow = el('div', 'row');
+  const borrowSel = document.createElement('select');
+  borrowSel.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+  const borrowBtn = el('button', 'accent', S.borrowBtn);
+  borrowBtn.title = S.borrowTitle;
+  borrowRow.appendChild(el('span', 'lab', S.borrowLabel));
+  borrowRow.appendChild(borrowSel);
+  borrowRow.appendChild(borrowBtn);
+  card.appendChild(borrowRow);
+  stockIndex().then((stock) => {
+    for (const a of stock) {
+      if (!a.visual) continue;
+      borrowSel.appendChild(Object.assign(el('option'), { value: a.identify, textContent: a.identify }));
+    }
+  });
+
   const drop = el('label', 'drop', S.acDrop);
   const input = document.createElement('input');
   input.type = 'file';
@@ -511,6 +563,58 @@ function aircraftCard() {
       coarse: mkSel(S.slotCoarse, candidates.dnm, pre('coarse') || guess.coarse, false),
     };
     if (!preset && generatedDat) sels.dat.value = '@generated';
+
+    // Paint shop: recolor the selected visual .dnm (exact line surgery on the
+    // color table; nav-light blocks are auto-protected by CLA class).
+    const paintRow = el('div', 'btnrow');
+    paintRow.style.justifyContent = 'flex-start';
+    const paintBtn = el('button', null, S.paintBtn);
+    paintBtn.title = S.paintTitle;
+    paintRow.appendChild(paintBtn);
+    slotsBox.appendChild(paintRow);
+    const paintPanel = el('div');
+    slotsBox.appendChild(paintPanel);
+    paintBtn.addEventListener('click', () => {
+      paintPanel.innerHTML = '';
+      const ent = byName.get(sels.visual.value);
+      const colors = ent && /\.dnm$/i.test(ent.name) ? extractDnmColors(ent.bytes).slice(0, 24) : [];
+      if (!colors.length) { paintPanel.appendChild(el('div', 'msg', S.paintNone)); return; }
+      paintPanel.appendChild(el('div', 'msg', S.paintHint));
+      const rgb2hex6 = (r, g, b) => '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+      const pickers = [];
+      const grid = el('div');
+      grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin:4px 0';
+      for (const c of colors) {
+        const cell = el('div');
+        cell.style.cssText = 'display:flex;align-items:center;gap:4px;border:1px solid #2a3647;border-radius:6px;padding:3px 6px';
+        const sw = el('span');
+        sw.style.cssText = 'width:16px;height:16px;border-radius:3px;display:inline-block;background:rgb(' + c.r + ',' + c.g + ',' + c.b + ')';
+        const cnt = el('span', null, String(c.count));
+        cnt.style.cssText = 'color:#7d93b0;font-size:10.5px';
+        const inp = Object.assign(document.createElement('input'), { type: 'color', value: rgb2hex6(c.r, c.g, c.b) });
+        inp.style.cssText = 'width:34px;height:24px;padding:0;border:0;background:none';
+        cell.appendChild(sw);
+        cell.appendChild(cnt);
+        cell.appendChild(inp);
+        grid.appendChild(cell);
+        pickers.push({ key: c.key, orig: rgb2hex6(c.r, c.g, c.b), inp });
+      }
+      paintPanel.appendChild(grid);
+      const applyBtn = el('button', 'accent', S.paintApply);
+      applyBtn.addEventListener('click', () => {
+        const mapping = {};
+        for (const p of pickers) {
+          if (p.inp.value.toLowerCase() === p.orig.toLowerCase()) continue;
+          mapping[p.key] = [1, 3, 5].map((i) => parseInt(p.inp.value.slice(i, i + 2), 16));
+        }
+        const out = repaintDnm(ent.bytes, mapping);
+        ent.bytes = out.bytes; // same entry object -> the assembly picks up the paint
+        msg.textContent = S.paintDone(out.replaced);
+        paintPanel.innerHTML = '';
+      });
+      paintPanel.appendChild(applyBtn);
+    });
+
     const nameIn = Object.assign(document.createElement('input'), { type: 'text', placeholder: (guess.dat || (generatedDat && generatedDat.identify) || '').replace(/\.dat$/i, '') });
     if (preset && preset.packName) nameIn.value = preset.packName;
     row(slotsBox, S.packName, nameIn);
@@ -651,6 +755,34 @@ function aircraftCard() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderStaged(); });
   window.addEventListener('focus', renderStaged);
 
+  borrowBtn.addEventListener('click', async () => {
+    borrowBtn.disabled = true;
+    msg.textContent = S.working;
+    try {
+      const stock = await stockIndex();
+      const a = stock.find((s) => s.identify === borrowSel.value);
+      if (!a) throw new Error('stock entry not found: ' + borrowSel.value);
+      const slots = {};
+      let n = 0;
+      for (const slot of ['visual', 'collision', 'cockpit', 'coarse']) {
+        if (!a[slot]) continue;
+        const r = await fetch('./stock/' + a[slot]);
+        if (!r.ok) throw new Error('stock fetch: HTTP ' + r.status + ' (' + a[slot] + ')');
+        const nm = a[slot].split('/').pop();
+        entries = entries.filter((e) => e.name !== nm);
+        entries.push({ name: nm, bytes: new Uint8Array(await r.arrayBuffer()) });
+        slots[slot] = nm;
+        n++;
+      }
+      rebuildSlots({ slots });
+      msg.textContent = S.borrowDone(a.identify, n);
+    } catch (e) {
+      msg.textContent = S.errorPrefix + ((e && e.message) || e);
+    } finally {
+      borrowBtn.disabled = false;
+    }
+  });
+
   acSetGeneratedDat = (dat, recipeInfo) => { generatedDat = dat; datRecipe = recipeInfo || null; rebuildSlots(); };
 
   // Re-open a creation: its loose files come back out of the pack payload, the
@@ -695,6 +827,33 @@ async function datCard() {
     knobs[k] = slider;
   }
 
+  // Second-tier SET knobs (default = leave the base value alone).
+  const exSel = (label, opts) => {
+    const sel = document.createElement('select');
+    sel.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+    sel.appendChild(Object.assign(el('option'), { value: '', textContent: S.exKeep }));
+    for (const [v, label2] of Object.entries(opts)) {
+      sel.appendChild(Object.assign(el('option'), { value: v, textContent: label2 }));
+    }
+    row(card, label, sel);
+    return sel;
+  };
+  const stSel = exSel(S.exStrength, S.exStrengthOpts);
+  const rcSel = exSel(S.exStealth, S.exStealthOpts);
+  const gunSel = exSel(S.exGun, S.exGunOpts);
+  const smokeWrap = el('div');
+  smokeWrap.style.cssText = 'flex:1;display:flex;align-items:center;gap:8px;min-width:0';
+  const smokeOn = Object.assign(document.createElement('input'), { type: 'checkbox' });
+  const smokeLab = el('span', null, S.exSmokeOn);
+  smokeLab.style.cssText = 'color:#8fa3bb;font-size:12px';
+  const smokeCol = Object.assign(document.createElement('input'), { type: 'color', value: '#ff5050' });
+  smokeCol.style.cssText = 'width:52px;height:28px;padding:1px;border:1px solid #2a3647;border-radius:6px;background:#0b1017';
+  smokeWrap.appendChild(smokeOn);
+  smokeWrap.appendChild(smokeLab);
+  smokeWrap.appendChild(smokeCol);
+  row(card, S.exSmoke, smokeWrap);
+  const hex2rgb3 = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+
   const msg = el('div', 'msg');
   card.appendChild(msg);
   const btnRow = el('div', 'btnrow');
@@ -709,6 +868,12 @@ async function datCard() {
       const dat = makeDatFromBase(new Uint8Array(await r.arrayBuffer()), {
         identify: name,
         knobs: Object.fromEntries(Object.entries(knobs).map(([k, s]) => [k, Number(s.value)])),
+        extras: {
+          strength: stSel.value ? Number(stSel.value) : undefined,
+          radarCross: rcSel.value ? Number(rcSel.value) : undefined,
+          gunInterval: gunSel.value ? Number(gunSel.value) : undefined,
+          smoke: smokeOn.checked ? hex2rgb3(smokeCol.value) : undefined,
+        },
       });
       const lines = [S.datSet(dat.identify)];
       if ((await knownIdentities()).has(dat.identify)) lines.push(S.datDup);
@@ -902,11 +1067,12 @@ async function main() {
       renderLibrary();
       return { id, removed: true };
     },
-    makeDat: async (file, identify, knobs) => {
+    makeDat: async (file, identify, knobs, extras) => {
       const r = await fetch('./stock/' + file);
       if (!r.ok) throw new Error('stock fetch: HTTP ' + r.status);
-      return makeDatFromBase(new Uint8Array(await r.arrayBuffer()), { identify, knobs });
+      return makeDatFromBase(new Uint8Array(await r.arrayBuffer()), { identify, knobs, extras });
     },
+    extractDnmColors, repaintDnm, // paint shop primitives (smoke/debug)
     assembleInstall: async (slots) => {
       const asm = assembleAircraftZip({
         ...slots,
