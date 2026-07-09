@@ -286,7 +286,7 @@ test('paint shop: packed 15-bit C <n> colors decode and repaint (amp.dnm form)',
   // C 24558 -> GGGGG RRRRR BBBBB: R=255 G=189 B=115 (Anpanman skin); C 960 -> R=246 G=0 B=0.
   const dnm = [
     'DYNAMODEL', 'DNMVER 1',
-    'PCK body.srf 10',
+    'PCK body.srf 12', // SURF + 3V + (F V C E) x2 = 12 lines
     'SURF', 'V 0 0 0', 'V 1 0 0', 'V 0 1 0',
     'F', 'V 0 1 2', 'C 24558', 'E',
     'F', 'V 0 1 2', 'C 960', 'E',
