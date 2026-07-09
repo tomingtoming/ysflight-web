@@ -121,38 +121,43 @@ function faceColor(face) {
   return [c[0] * s, c[1] * s, c[2] * s];
 }
 
-// Build a THREE.Group tree from a parsed DNM.  Each node becomes a Group holding
-// its mesh; movable groups are tagged with userData.claGroup for the sliders.
-// Returns { object3d, movableGroups: {gear:[Group],...}, meshesByLabel }.
+// Build a THREE.Object3D from a parsed DNM.  CRUCIAL: DNM geometry is in
+// ABSOLUTE aircraft coordinates (an elevator's vertices already sit at the tail),
+// so meshes go into the scene at IDENTITY — no POS translation, no parent nesting
+// (both would double-apply and float the part off the body: the "webflight
+// nightmare").  POS/CNT/STA are for ANIMATION only.  A movable node's mesh is
+// parented to a pivot Group placed at CNT so a slider rotates it about its hinge;
+// at rest (STA[0], all zero) the pivot is unrotated and the part sits exactly on
+// the body.  Returns { object3d, movableGroups:{gear:[pivot],...}, meshesByLabel }.
 export function buildObject(parsed) {
   const { nodes, srfByName } = parsed;
   const movableGroups = {};
   const meshesByLabel = new Map();
+  const root = new THREE.Group();
 
-  const buildNode = (label) => {
-    const n = nodes.get(label);
-    if (!n) return null;
-    const group = new THREE.Group();
-    // POS: translation + h/p/b rotation (32768 = pi).  Applied about the node origin.
-    group.position.set(n.pos[0], n.pos[1], n.pos[2]);
-    group.rotation.set(n.pos[4] * A2R, n.pos[3] * A2R, n.pos[5] * A2R, 'YXZ');
+  for (const [label, n] of nodes) {
+    if (!n.srf || !srfByName.has(n.srf)) continue;
+    const mesh = srfToMesh(srfByName.get(n.srf));
+    if (!mesh) continue;
+    meshesByLabel.set(label, { mesh, srf: srfByName.get(n.srf) });
 
-    if (n.srf && srfByName.has(n.srf)) {
-      const mesh = srfToMesh(srfByName.get(n.srf));
-      if (mesh) { group.add(mesh); meshesByLabel.set(label, { mesh, srf: srfByName.get(n.srf) }); }
-    }
     const g = CLA_GROUP[n.cla];
     if (g && staDiffers(n.sta)) {
-      group.userData.sta = n.sta;
-      group.userData.cnt = n.cnt;
-      (movableGroups[g] = movableGroups[g] || []).push(group);
+      // Pivot at CNT; absolute-coord mesh offset by -CNT so it lands back on the
+      // body when the pivot is at CNT and unrotated.  Rotating the pivot rotates
+      // the part about its hinge.
+      const pivot = new THREE.Group();
+      pivot.position.set(n.cnt[0], n.cnt[1], n.cnt[2]);
+      mesh.position.set(-n.cnt[0], -n.cnt[1], -n.cnt[2]);
+      pivot.add(mesh);
+      pivot.userData.sta = n.sta;
+      pivot.userData.cnt = n.cnt;
+      root.add(pivot);
+      (movableGroups[g] = movableGroups[g] || []).push(pivot);
+    } else {
+      root.add(mesh); // static: absolute geometry at identity
     }
-    for (const c of n.children) { const cg = buildNode(c); if (cg) group.add(cg); }
-    return group;
-  };
-
-  const root = new THREE.Group();
-  for (const r of parsed.roots) { const g = buildNode(r); if (g) root.add(g); }
+  }
   // YSFLIGHT model space (X east, Y up, Z south/front) -> face the camera nicely.
   root.rotation.y = Math.PI;
   return { object3d: root, movableGroups, meshesByLabel };
@@ -189,25 +194,18 @@ function srfToMesh(srf) {
 
 // --- animation ------------------------------------------------------------------
 
-// Drive a movable group to t in [0,1]: interpolate STA[0]->STA[last] rotation
-// about CNT.  (Translation states exist too but rotation covers gear/flap/wing.)
-export function setMovable(group, t) {
-  const sta = group.userData.sta, cnt = group.userData.cnt;
+// Drive a movable pivot to t in [0,1]: interpolate STA[0]->STA[last].  The pivot
+// sits at CNT; rotation (h,p,b) turns the part about its hinge, and the STA x,y,z
+// translation (small, e.g. an elevator sliding as it deflects) shifts the pivot.
+// At t matching STA[0] (all zero) the pivot is exactly at CNT, unrotated -> the
+// part rests on the body.
+export function setMovable(pivot, t) {
+  const sta = pivot.userData.sta, cnt = pivot.userData.cnt;
   if (!sta) return;
   const a = sta[0], b = sta[sta.length - 1];
   const lerp = (i) => (a[i] + (b[i] - a[i]) * t);
-  // Rotate about CNT: translate pivot to origin, rotate, translate back — folded
-  // into the group's matrix via a small pivot child would be cleaner, but for a
-  // preview we set rotation and nudge position to keep the pivot fixed.
-  const h = lerp(3) * A2R, p = lerp(4) * A2R, bnk = lerp(5) * A2R;
-  const e = new THREE.Euler(p, h, bnk, 'YXZ');
-  const q = new THREE.Quaternion().setFromEuler(e);
-  const pivot = new THREE.Vector3(cnt[0], cnt[1], cnt[2]);
-  const basePos = group.userData.basePos || (group.userData.basePos = group.position.clone());
-  // world = base + (pivot - R*pivot)
-  const rp = pivot.clone().applyQuaternion(q);
-  group.quaternion.copy(q);
-  group.position.copy(basePos).add(pivot).sub(rp);
+  pivot.rotation.set(lerp(4) * A2R, lerp(3) * A2R, lerp(5) * A2R, 'YXZ');
+  pivot.position.set(cnt[0] + lerp(0), cnt[1] + lerp(1), cnt[2] + lerp(2));
 }
 
 // --- live paint -----------------------------------------------------------------
