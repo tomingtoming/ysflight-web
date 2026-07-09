@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, SCENERY_START } from '../web/workbench.js';
+import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, SCENERY_START, extractDnmColors, repaintDnm } from '../web/workbench.js';
 import { analyzePack } from '../web/packs.js';
 import { unzipSync } from '../web/vendor/fflate.js';
 
@@ -193,6 +193,46 @@ test('assembleSceneryZip without islands stays the proven 8-line header', async 
   const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/plain.fld']);
   assert.doesNotMatch(fld, /PCK|PC2|PST/);
   assert.equal(fld.trim().split('\n').length, 8);
+});
+
+test('makeDatFromBase extras: SET knobs replace-or-append, smoke gets a generator', () => {
+  const base = new TextEncoder().encode(
+    'IDENTIFY "X"\nCATEGORY FIGHTER\nSTRENGTH 10\nGUNINTVL 0.075\n',
+  );
+  const dat = makeDatFromBase(base, {
+    identify: 'Y',
+    extras: { strength: 25, radarCross: 0.1, gunInterval: 0.03, smoke: [255, 80, 80] },
+  });
+  const text = new TextDecoder().decode(dat.bytes);
+  assert.match(text, /^STRENGTH 25$/m);          // existing line replaced
+  assert.match(text, /^RADARCRS 0\.1$/m);        // absent key appended (known keyword = safe)
+  assert.match(text, /^GUNINTVL 0\.03$/m);
+  assert.match(text, /^SMOKEGEN 0\.0m 0\.0m -6\.0m$/m); // base had none -> generator added
+  assert.match(text, /^SMOKECOL ALL 255 80 80$/m);
+  assert.equal((text.match(/^STRENGTH /gm) || []).length, 1); // no duplicates
+});
+
+test('paint shop: real stock f15.dnm — extract palette, repaint, lights protected', () => {
+  const f15 = readFileSync(join(here, '..', 'upstream', 'YSFLIGHT', 'runtime', 'aircraft', 'f15.dnm'));
+  const colors = extractDnmColors(f15);
+  assert.ok(colors.length >= 5 && colors.length <= 24, 'sane palette size: ' + colors.length);
+  const main = colors[0]; // most-used = the airframe color (82,139,172 on stock f15)
+  assert.equal(main.key, '82,139,172');
+  // Nav-light pure colors live in CLA 30-34 blocks and must not be offered.
+  assert.ok(!colors.some((c) => c.key === '255,0,0' || c.key === '0,255,0' || c.key === '0,0,255'),
+    'light colors excluded from the paintable palette');
+
+  const out = repaintDnm(f15, { '82,139,172': [255, 0, 255] });
+  assert.ok(out.replaced > 100, 'the airframe color covers many faces: ' + out.replaced);
+  const text = new TextDecoder().decode(out.bytes);
+  assert.doesNotMatch(text, /^C 82 139 172$/m);
+  assert.match(text, /^C 255 0 255$/m);
+  // Same number of lines — pure line surgery.
+  assert.equal(text.split('\n').length, new TextDecoder().decode(f15).split('\n').length);
+  // The repainted dnm still lists the SAME palette shape (new color replaces old).
+  const colors2 = extractDnmColors(out.bytes);
+  assert.ok(colors2.some((c) => c.key === '255,0,255'));
+  assert.ok(!colors2.some((c) => c.key === '82,139,172'));
 });
 
 test('recipe embedding: workbench.json rides the pack and survives the pipeline', async () => {
