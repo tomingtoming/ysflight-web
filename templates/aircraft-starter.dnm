@@ -694,7 +694,7 @@ F
 V 4 5 1 0
 C 96 104 118
 E
-PCK afterburner.srf 39
+PCK afterburner.srf 40
 SURF
 V -0.3 -0.35 -6.3
 V 0.3 -0.35 -6.3
@@ -734,6 +734,7 @@ B
 V 4 5 1 0
 C 255 120 30
 E
+ZA 0 180 1 180 2 180 3 180 4 180 5 180
 PCK beacon.srf 39
 SURF
 V -0.05 1.05 2.6
