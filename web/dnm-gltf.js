@@ -337,16 +337,93 @@ export function dnmToCollisionSrf(dnmBytes) {
 
 // ============================ GLB -> DNM ===========================================
 
+// glTF 1.0 -> 2.0-shaped JSON (just enough for the reader below).  Version 1
+// keys everything by NAME and colors live in KHR_materials_common — seen in
+// the wild in Flightradar24's model library, which is too useful a source of
+// GPL airliner geometry to turn away.
+function normalizeGltf1(g) {
+  const ix = (dict) => {
+    const names = Object.keys(dict || {});
+    return { names, of: new Map(names.map((n, i) => [n, i])) };
+  };
+  const bvs = ix(g.bufferViews), accs = ix(g.accessors), mats = ix(g.materials),
+    mshs = ix(g.meshes), nds = ix(g.nodes);
+  const bufferViews = [], accessors = [];
+  for (const name of accs.names) {
+    const a = g.accessors[name];
+    const bv = g.bufferViews[a.bufferView] || {};
+    // 1.0 puts byteStride on the ACCESSOR — give each accessor its own view.
+    bufferViews.push({
+      buffer: 0, byteOffset: (bv.byteOffset || 0) + (a.byteOffset || 0),
+      ...(a.byteStride ? { byteStride: a.byteStride } : {}),
+    });
+    accessors.push({
+      bufferView: bufferViews.length - 1, byteOffset: 0,
+      componentType: a.componentType, count: a.count, type: a.type,
+    });
+  }
+  const materials = mats.names.map((name) => {
+    const m = g.materials[name] || {};
+    const values = (m.extensions && m.extensions.KHR_materials_common && m.extensions.KHR_materials_common.values) || m.values || {};
+    const d = values.diffuse;
+    const color = Array.isArray(d) && d.length >= 3 ? d.slice(0, 4) : [0.8, 0.8, 0.8, 1];
+    return { name, pbrMetallicRoughness: { baseColorFactor: color.length === 4 ? color : [...color, 1] } };
+  });
+  const meshes = mshs.names.map((name) => ({
+    name,
+    primitives: ((g.meshes[name] || {}).primitives || []).map((p) => ({
+      attributes: Object.fromEntries(Object.entries(p.attributes || {}).map(([k, v]) => [k, accs.of.get(v)])),
+      ...(p.indices !== undefined ? { indices: accs.of.get(p.indices) } : {}),
+      ...(p.material !== undefined ? { material: mats.of.get(p.material) } : {}),
+      ...(p.mode !== undefined ? { mode: p.mode } : {}),
+    })),
+  }));
+  // A 1.0 node may carry SEVERAL meshes: merge their primitives into one.
+  const nodes = nds.names.map((name) => {
+    const n = g.nodes[name] || {};
+    const out = { name };
+    if (n.matrix) out.matrix = n.matrix;
+    if (n.translation) out.translation = n.translation;
+    if (n.rotation) out.rotation = n.rotation;
+    if (n.scale) out.scale = n.scale;
+    if (n.children && n.children.length) out.children = n.children.map((c) => nds.of.get(c)).filter((v) => v !== undefined);
+    const meshNames = n.meshes || (n.mesh !== undefined ? [n.mesh] : []);
+    if (meshNames.length === 1) out.mesh = mshs.of.get(meshNames[0]);
+    else if (meshNames.length > 1) {
+      meshes.push({ name: name + '_merged', primitives: meshNames.flatMap((m) => meshes[mshs.of.get(m)].primitives) });
+      out.mesh = meshes.length - 1;
+    }
+    return out;
+  });
+  const sceneName = g.scene || Object.keys(g.scenes || {})[0];
+  const sceneNodes = ((g.scenes || {})[sceneName] || {}).nodes || [];
+  return {
+    accessors, bufferViews, materials, meshes, nodes,
+    scene: 0,
+    scenes: [{ nodes: sceneNodes.map((n) => nds.of.get(n)).filter((v) => v !== undefined) }],
+  };
+}
+
 export function glbToDnm(glbBytes) {
   const u8 = glbBytes instanceof Uint8Array ? glbBytes : new Uint8Array(glbBytes);
   const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
   if (dv.getUint32(0, true) !== 0x46546c67) throw new Error('not a GLB (.glb) file');
-  let off = 12, json = null, binOff = 0, binLen = 0;
-  while (off < u8.length) {
-    const len = dv.getUint32(off, true), type = dv.getUint32(off + 4, true);
-    if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(u8.subarray(off + 8, off + 8 + len)));
-    else if (type === 0x004e4942) { binOff = off + 8; binLen = len; }
-    off += 8 + len;
+  const version = dv.getUint32(4, true);
+  let json = null, binOff = 0, binLen = 0;
+  if (version === 1) {
+    // glTF 1.0 binary: no chunks — one JSON block, then the body buffer.
+    const contentLength = dv.getUint32(12, true);
+    json = normalizeGltf1(JSON.parse(new TextDecoder().decode(u8.subarray(20, 20 + contentLength))));
+    binOff = 20 + contentLength;
+    binLen = u8.length - binOff;
+  } else {
+    let off = 12;
+    while (off < u8.length) {
+      const len = dv.getUint32(off, true), type = dv.getUint32(off + 4, true);
+      if (type === 0x4e4f534a) json = JSON.parse(new TextDecoder().decode(u8.subarray(off + 8, off + 8 + len)));
+      else if (type === 0x004e4942) { binOff = off + 8; binLen = len; }
+      off += 8 + len;
+    }
   }
   if (!json) throw new Error('GLB has no JSON chunk');
 
