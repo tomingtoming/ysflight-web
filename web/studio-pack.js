@@ -102,7 +102,15 @@ async function snapshotFromRecord(rec, memberSan) {
   for (const f of raw) {
     const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : '';
     const base = f.path.slice(dir.length);
-    rename.set(f.path, dir + memberSan + '_' + base);
+    if (/\.lst$/i.test(base)) {
+      // The pack analyzer requires list names to KEEP their air*/sce*/gro*
+      // prefix (chooseLayout in packs.js) — namespace after it, not before.
+      const m = base.match(/^(air|sce|gro)/i);
+      const lead = m ? m[1] : ({ 'aircraft/': 'air', 'scenery/': 'sce', 'ground/': 'gro' }[dir] || 'air');
+      rename.set(f.path, dir + lead + '_' + memberSan + '_' + base.slice(m ? m[1].length : 0).replace(/^_+/, ''));
+    } else {
+      rename.set(f.path, dir + memberSan + '_' + base);
+    }
   }
   const td = new TextDecoder(), te = new TextEncoder();
   return raw.map((f) => {
@@ -124,10 +132,11 @@ async function snapshotFromRecord(rec, memberSan) {
 // member's prefix.  Paths are already namespaced — take them verbatim.
 async function snapshotFromPack(packRec, memberSan) {
   const out = [];
+  const lstRe = new RegExp('^(air|sce|gro)_' + memberSan.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_', 'i');
   for (const f of packRec.files || []) {
     if (f.path === RECIPE_FILE) continue;
     const base = f.path.slice(f.path.lastIndexOf('/') + 1);
-    if (!base.startsWith(memberSan + '_')) continue;
+    if (!base.startsWith(memberSan + '_') && !lstRe.test(base)) continue;
     out.push({ path: f.path, bytes: await opfs.getBlob(f.sha256) });
   }
   return out;
