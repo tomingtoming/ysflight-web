@@ -446,26 +446,34 @@ export function glbToDnm(glbBytes) {
     return out;
   };
 
-  const nodeRT = (node) => {
+  // A node's LOCAL matrix (row-major 4x4), from matrix or full TRS (scale
+  // included — foreign models get their transforms BAKED into vertices, so
+  // scale costs nothing).
+  const localMatrix = (node) => {
     if (node.matrix) {
-      const m = node.matrix;
-      return { R: [m[0], m[4], m[8], m[1], m[5], m[9], m[2], m[6], m[10]], t: [m[12], m[13], m[14]] };
+      const m = node.matrix; // column-major
+      return [m[0], m[4], m[8], m[12], m[1], m[5], m[9], m[13], m[2], m[6], m[10], m[14], m[3], m[7], m[11], m[15]];
     }
     const t = node.translation || [0, 0, 0];
     const [x, y, z, w] = node.rotation || [0, 0, 0, 1];
+    const s = node.scale || [1, 1, 1];
     const R = [
       1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
       2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
       2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y),
     ];
-    return { R, t };
+    return [
+      R[0] * s[0], R[1] * s[1], R[2] * s[2], t[0],
+      R[3] * s[0], R[4] * s[1], R[5] * s[2], t[1],
+      R[6] * s[0], R[7] * s[1], R[8] * s[2], t[2],
+      0, 0, 0, 1,
+    ];
   };
-  const rotToHPB = (R) => {
-    const beta = Math.asin(Math.max(-1, Math.min(1, -R[5])));
-    const alpha = Math.atan2(R[2], R[8]);
-    const gamma = Math.atan2(R[3], R[4]);
-    return [Math.round(-alpha / A2R), Math.round(-beta / A2R), Math.round(gamma / A2R)];
-  };
+  const apply = (M, v) => [
+    M[0] * v[0] + M[1] * v[1] + M[2] * v[2] + M[3],
+    M[4] * v[0] + M[5] * v[1] + M[6] * v[2] + M[7],
+    M[8] * v[0] + M[9] * v[1] + M[10] * v[2] + M[11],
+  ];
   const ysExtras = (node) => {
     const e = node.extras && node.extras.ysflight;
     if (!e) return null;
@@ -475,12 +483,13 @@ export function glbToDnm(glbBytes) {
 
   const f6 = (v) => (Math.abs(v) < 5e-7 ? '0' : String(Math.round(v * 1e6) / 1e6));
 
-  const srfText = (mesh) => {
+  const srfText = (mesh, bake) => {
     const verts = [], vmap = new Map(), faces = [];
     for (const prim of mesh.primitives || []) {
       if (prim.mode !== undefined && prim.mode !== 4) continue;
       if (prim.attributes.POSITION === undefined) continue;
-      const pos = readAccessor(prim.attributes.POSITION);
+      let pos = readAccessor(prim.attributes.POSITION);
+      if (bake) pos = pos.map((v) => apply(bake, v));
       const idx = prim.indices !== undefined ? readAccessor(prim.indices) : pos.map((_, i) => i);
       const mat = prim.material !== undefined ? json.materials[prim.material] : null;
       const bc = (mat && mat.pbrMetallicRoughness && mat.pbrMetallicRoughness.baseColorFactor) || [0.8, 0.8, 0.8, 1];
@@ -525,13 +534,20 @@ export function glbToDnm(glbBytes) {
   const pcks = [], blocks = [];
   let nodeCount = 0, triCount = 0;
 
-  const walk = (nix) => {
+  const I16 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  // parentBake: accumulated transform of extras-less ancestors.  Nodes WITH
+  // extras.ysflight restore POS/CNT/STA verbatim (round-trip); fresh/foreign
+  // nodes get their transform BAKED into the vertices instead — no Euler
+  // decomposition (which hits gimbal lock on axis-permutation matrices, e.g.
+  // Flightradar24's COLLADA-era exports), and scale comes free.
+  const walk = (nix, parentBake) => {
     const node = json.nodes[nix];
     const label = uniq(usedLabels, (node.name || 'node').replace(/"/g, ''));
     const ys = ysExtras(node);
+    const bake = ys ? null : mul(parentBake || I16, localMatrix(node));
     let srfName;
     if (node.mesh !== undefined) {
-      const s = srfText(json.meshes[node.mesh]);
+      const s = srfText(json.meshes[node.mesh], bake);
       srfName = uniq(usedSrfNames, ((ys && ys.srf) || label.replace(/[^A-Za-z0-9_.-]+/g, '_').toLowerCase() + '.srf').replace(/\s+/g, '_'));
       pcks.push({ name: srfName, text: s.text, lineCount: s.lineCount });
       triCount += s.tris;
@@ -546,13 +562,14 @@ export function glbToDnm(glbBytes) {
       cnt = (ys.cnt && ys.cnt.length >= 3 ? ys.cnt.slice(0, 3) : [0, 0, 0]);
       sta = (ys.sta && ys.sta.length ? ys.sta : [[0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1]]);
     } else {
-      const { R, t } = nodeRT(node);
       cla = 0;
-      pos = [...t, ...rotToHPB(R)];
+      pos = [0, 0, 0, 0, 0, 0]; // transform lives in the baked vertices
       cnt = [0, 0, 0];
       sta = [[0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1]];
     }
-    const childLabels = (node.children || []).map(walk);
+    // Children of an extras node bake relative to it (the engine applies the
+    // parent's POS transform through the DNM hierarchy).
+    const childLabels = (node.children || []).map((c) => walk(c, ys ? I16 : bake));
     const b = [];
     b.push('SRF "' + label + '"');
     b.push('FIL ' + srfName);
@@ -572,7 +589,7 @@ export function glbToDnm(glbBytes) {
   };
 
   const scene = json.scenes[json.scene || 0];
-  for (const nix of scene.nodes || []) walk(nix);
+  for (const nix of scene.nodes || []) walk(nix, I16);
   if (!nodeCount) throw new Error('no nodes in the glTF scene');
 
   const out = ['DYNAMODEL', 'DNMVER 2'];
