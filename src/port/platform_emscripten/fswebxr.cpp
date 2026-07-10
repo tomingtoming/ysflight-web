@@ -79,23 +79,32 @@ that owns the session and fills that state every frame:
     ordinary 2D drawing is skipped -- e.g. the left dial's AP tap
     (Backspace) opened an invisible, un-closeable autopilot menu. setupGui/
     teardownGui allocate a second off-screen two-layer multiview framebuffer
-    (1024x640x2, see fsvr.h's FsVrGuiDataPointer) that the engine
-    (FsSimulation::SimDrawVrGui) renders whichever dialog is currently open
-    into every frame, composited onto a second, GUI-anchored quad (closer/
-    lower than the HUD glass) -- see guiDialogState/vr.readGuiData. Kill
-    switch: Module.ysfwVrOptions.gui===false (?vrgui=0). While the engine
-    reports a dialog open (guiDialogState().visible), processControllerPlain
-    reroutes the right dial's 4 sectors + right A/B to the dialog's own
-    hotkeys (Digit1..5/Digit0, see GUI_DIAL) when it is one of the autopilot
-    menus (guiDialogState().apMenu), or to a generic Escape/cancel tap
-    otherwise (GUI_ESCAPE_ACTION) -- also reachable from the left X/Y
-    buttons. The left dial is fully suppressed meanwhile. Grip-stick
-    (aileron/elevator/rudder) and the throttle grip are NEVER affected: the
-    plane keeps flying regardless of any open dialog. See the doc comment on
-    GUI_DIAL for why this stops at a 4-hotkey stick mapping rather than the
-    generic Tab-focus/Arrow-key/Enter scheme a first read of the engine
-    might suggest -- most in-flight dialogs (the autopilot family included)
-    do not actually route keyboard input through that generic path.
+    (640x360x2, see fsvr.h's FsVrGuiDataPointer -- shrunk from an earlier
+    1024x640 so the SAME absolute-pixel dialog layout covers a bigger
+    fraction of the texture, ~1.6x bigger on the composited quad) that the
+    engine (FsSimulation::SimDrawVrGui) renders whichever dialog is
+    currently open into every frame, composited onto a second, GUI-anchored
+    quad (closer/lower than the HUD glass) -- see guiDialogState/
+    vr.readGuiData. Kill switch: Module.ysfwVrOptions.gui===false (?vrgui=0).
+    While the engine reports a dialog open (guiDialogState().visible),
+    processControllerPlain reroutes the right dial's 4 sectors + right A/B
+    to the dialog's own hotkeys (Digit1..5/Digit0, see GUI_DIAL) when it is
+    one of the autopilot menus (guiDialogState().apMenu), or to a generic
+    Escape/cancel tap otherwise (GUI_ESCAPE_ACTION) -- also reachable from
+    the left X/Y buttons. Discoverability: the right dial's quad is FORCED
+    visible for as long as a dialog stays open (regardless of thumbstick
+    engagement) and switches to a dialog-guide face -- sectors numbered
+    1..4 (+A=5/B=0 in the centre) for the autopilot family, or a uniform
+    "ESC" face when every routed input is just Escape -- see
+    drawGuiDialGuide/rdial.guiMode; falls back to the normal dial the
+    instant the dialog closes. The left dial is fully hidden meanwhile (its
+    functions are already suppressed). Grip-stick (aileron/elevator/rudder)
+    and the throttle grip are NEVER affected: the plane keeps flying
+    regardless of any open dialog. See the doc comment on GUI_DIAL for why
+    this stops at a 4-hotkey stick mapping rather than the generic
+    Tab-focus/Arrow-key/Enter scheme a first read of the engine might
+    suggest -- most in-flight dialogs (the autopilot family included) do
+    not actually route keyboard input through that generic path.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -527,9 +536,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// GUI-anchored quad -- see SimDrawVrGui / FsVrDrawGuiQuad. Kill switch:
 	// Module.ysfwVrOptions.gui===false (?vrgui=0 in web/index.html) leaves
 	// the whole feature off (enable stays 0, no GL objects created).
-	// 1024x640: wide enough that the FsGuiDialog family's small,
+	// 640x360 (16:9): small enough that the FsGuiDialog family's small,
 	// window-size-independent absolute-pixel layouts (see SimDrawVrGui's doc
-	// comment) never clip against the top-left corner of the texture.
+	// comment) cover a much bigger FRACTION of the texture than the previous
+	// 1024x640 did, while still (checked against the autopilot menu, the
+	// widest in-flight dialog that matters for GUI_DIAL's hotkey guide --
+	// see scripts/smoke-vrgui.mjs) fitting inside it uncropped. Composited
+	// onto the SAME physical quad size (FsVrDrawGuiQuad, fssimulation.cpp),
+	// this makes the dialog appear roughly 1024/640 = 1.6x bigger to the
+	// pilot without touching the quad's world-space placement.
 	function setupGui()
 	{
 		var opts=Module.ysfwVrOptions||{};
@@ -546,7 +561,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			return;
 		}
-		var W=1024,H=640;
+		var W=640,H=360;
 
 		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
 		GLctx.activeTexture(GLctx.TEXTURE15);
@@ -1043,6 +1058,29 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// when a dialog is open, and this is also the exact stick
 			// geometry the GUI_DIAL mapping below reuses.
 			updateDialStick(rdial,entry.thumb,rawSrc);
+
+			// Dialog-guide takeover: while a modal in-flight dialog is open,
+			// this dial stops being the flight-control radial menu and
+			// becomes the dialog's own selection guide instead (drawn by
+			// drawGuiDialGuide, see updateDialLayers) -- forced VISIBLE
+			// regardless of thumbstick engagement, because the whole point
+			// is to tell the pilot how to get OUT of a dialog they may have
+			// opened by accident, without requiring them to already be
+			// flicking the stick. guiMode is read from the SAME guiState
+			// the routing immediately below reads, so the guide can never
+			// promise a mapping the router doesn't actually implement:
+			// 'ap' when GUI_DIAL's Digit1..4/A=5/B=0 hotkeys are live,
+			// 'generic' when only the Escape reroutes are. The instant
+			// dialogVisible clears, guiMode reverts to null and this stops
+			// touching rdial.visible -- updateDialStick's own fade timer,
+			// which ran unconditionally just above, takes back over on its
+			// own (see the doc comment on drawGuiDialGuide for more).
+			rdial.guiMode=(!guiState.visible ? null : (guiState.apMenu ? 'ap' : 'generic'));
+			if(guiState.visible)
+			{
+				rdial.visible=true;
+			}
+
 			var triggerPressed=entry.trigger>GRAB_THRESHOLD;
 			var triggerEdgeUp=triggerPressed && !vr.ctl.rightTrigger;
 			if(triggerEdgeUp)
@@ -1257,6 +1295,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// or dispatched from it.
 			var ldial=vr.ctl.dial.left;
 			updateDialStick(ldial,entry.thumb,rawSrc);
+			// Hidden outright while a dialog is open: this hand's dial
+			// function is already fully suppressed above, so a visible-but-
+			// inert quad would be actively misleading discoverability-wise
+			// (the right dial takes over as the dialog's own selection
+			// guide instead -- see rdial.guiMode above).
+			if(guiState.visible)
+			{
+				ldial.visible=false;
+			}
 			var ltriggerPressed=entry.trigger>GRAB_THRESHOLD;
 			var ltriggerEdgeUp=ltriggerPressed && !vr.ctl.leftTrigger;
 			if(ltriggerEdgeUp && !guiState.visible)
@@ -1517,10 +1564,124 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		return 'FLP '+fmtPct(state.flap);
 	}
-	function drawDial(ctx,hand,sel,state)
+	// ---- GUI-dialog guide (right dial only, drawn instead of the normal
+	// RIGHT_DIAL face whenever rdial.guiMode is set -- see
+	// processControllerPlain) -----------------------------------------------
+	// Every label here is read from, or hand-transcribed from, the SAME
+	// tables/branches the routing above actually dispatches from (GUI_DIAL,
+	// GUI_ESCAPE_ACTION, and the right-A/right-B/left-X/left-Y reroutes in
+	// processControllerPlain), so the guide can never show a mapping the
+	// router doesn't implement:
+	//   'ap'      -- open dialog is one of the autopilot menus
+	//                (FsGuiAutoPilotDialog and its VTOL/helicopter
+	//                siblings). The 4 stick sectors dispatch GUI_DIAL's
+	//                Digit1..4; the two options the 4-sector stick can't
+	//                reach (see GUI_DIAL's doc comment) are on right A
+	//                (Digit5) and right B (Digit0) -- shown in the centre.
+	//                The one input that closes ANY dialog including this
+	//                one via a real Escape/Cancel tap is the left hand's
+	//                X/Y buttons (their reroute in processControllerPlain
+	//                fires on guiState.visible alone, NOT gated on apMenu
+	//                like the right A/B reroutes are) -- shown as the
+	//                second centre line so the pilot always has an escape
+	//                hatch even if they don't want any of options 1/2/3/4/5/0.
+	//   'generic' -- any other in-flight dialog (radio-comm menus, replay/
+	//                continue dialogs, ...): ALL of the right stick's 4
+	//                sectors, right A, and right B dispatch the exact same
+	//                GUI_ESCAPE_ACTION tap (see rdial.engaged's ternary and
+	//                the right-A/right-B branches above) -- so every sector
+	//                is labelled identically instead of implying 4 distinct
+	//                functions that don't exist.
+	var GUI_GUIDE_SECTOR_NUM={up:'1',right:'2',down:'3',left:'4'};
+	// Short captions mirroring the AP dialog's own on-screen button text
+	// (FsGuiAutoPilotDialog::Make, upstream/YSFLIGHT/src/core/
+	// fsguiinfltdlg.cpp: "1...Circle", "2...Straight & Level",
+	// "3...Landing", "4...Takeoff") -- purely a legibility aid, not
+	// consulted by the routing (GUI_DIAL is).
+	var GUI_GUIDE_SECTOR_CAPTION={up:'周回',right:'水平',down:'着陸',left:'離陸'};
+	function drawGuiDialGuide(ctx,guiMode)
+	{
+		var w=256,h=256,cx=128,cy=128,rOuter=110;
+		ctx.fillStyle='rgba(10,14,20,0.55)';
+		ctx.beginPath();
+		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
+		ctx.fill();
+		var sectors=['up','right','down','left'];
+		for(var i=0; i<sectors.length; ++i)
+		{
+			var dir=sectors[i];
+			var centerRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
+			var a0=centerRad-Math.PI/4, a1=centerRad+Math.PI/4;
+			ctx.beginPath();
+			ctx.moveTo(cx,cy);
+			ctx.arc(cx,cy,rOuter,a0,a1);
+			ctx.closePath();
+			// Blue for the AP menu's live hotkeys, amber/red for the
+			// generic mode where every sector is just "cancel" -- a
+			// different hue makes the "this isn't the usual dial" state
+			// obvious at a glance, before reading any text.
+			ctx.fillStyle=('ap'===guiMode) ? 'rgba(77,163,255,0.55)' : 'rgba(214,96,64,0.55)';
+			ctx.fill();
+			ctx.strokeStyle='rgba(230,237,243,0.6)';
+			ctx.lineWidth=2;
+			ctx.stroke();
+			var labelR=rOuter*0.62;
+			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
+			ctx.textAlign='center';
+			ctx.fillStyle='#fff';
+			if('ap'===guiMode)
+			{
+				ctx.font='bold 28px sans-serif';
+				ctx.textBaseline='middle';
+				ctx.fillText(GUI_GUIDE_SECTOR_NUM[dir],lx,ly-10);
+				ctx.font='bold 13px sans-serif';
+				ctx.fillText(GUI_GUIDE_SECTOR_CAPTION[dir],lx,ly+12);
+			}
+			else
+			{
+				ctx.font='bold 20px sans-serif';
+				ctx.textBaseline='middle';
+				ctx.fillText('ESC',lx,ly);
+			}
+		}
+		ctx.beginPath();
+		ctx.arc(cx,cy,30,0,2*Math.PI);
+		ctx.fillStyle='rgba(20,26,34,0.9)';
+		ctx.fill();
+		ctx.strokeStyle='rgba(230,237,243,0.6)';
+		ctx.lineWidth=2;
+		ctx.stroke();
+		ctx.textAlign='center';
+		if('ap'===guiMode)
+		{
+			ctx.fillStyle='#fff';
+			ctx.font='bold 13px sans-serif';
+			ctx.textBaseline='middle';
+			ctx.fillText('A=5 B=0',cx,cy-8);
+			ctx.fillStyle='rgba(255,224,130,0.95)';
+			ctx.font='bold 11px sans-serif';
+			ctx.fillText('取消:左X/Y',cx,cy+9);
+		}
+		else
+		{
+			ctx.fillStyle='#fff';
+			ctx.font='bold 15px sans-serif';
+			ctx.textBaseline='middle';
+			ctx.fillText('ESC',cx,cy-7);
+			ctx.fillStyle='rgba(255,224,130,0.95)';
+			ctx.font='bold 10px sans-serif';
+			ctx.fillText('A/B/全方向',cx,cy+9);
+		}
+	}
+	function drawDial(ctx,hand,sel,state,guiMode)
 	{
 		var w=256,h=256,cx=128,cy=128,rOuter=110;
 		ctx.clearRect(0,0,w,h);
+		if('right'===hand && guiMode)
+		{
+			drawGuiDialGuide(ctx,guiMode);
+			return;
+		}
 		ctx.fillStyle='rgba(10,14,20,0.55)';
 		ctx.beginPath();
 		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
@@ -1760,23 +1921,30 @@ EM_JS(void,YsfwInstallWebXR,(),
 				res.inLayers=true;
 				res.drawnSel=null; // Force a redraw+upload on (re)appearance.
 				res.drawnStateSig=null;
+				res.drawnGuiMode=null;
 				layersChanged=true;
 			}
-			// Redraw when the sticky sector selection changes OR the live
+			// Right dial only: guiMode (see processControllerPlain) picks
+			// the dialog-guide face over the normal RIGHT_DIAL one; always
+			// null for the left dial (it has no guide face).
+			var guiMode=('right'===hand ? dial.guiMode : null)||null;
+			// Redraw when the sticky sector selection changes, the live
 			// aircraft state (gear/brake/flap/weapon) changes -- e.g. the
 			// gear finishing its travel must update the dial even though
-			// dial.sel hasn't moved.
-			if(res.drawnSel!==dial.sel || res.drawnStateSig!==stateSig)
+			// dial.sel hasn't moved -- OR the guiMode changes (a dialog
+			// just opened/closed/switched between apMenu and generic).
+			if(res.drawnSel!==dial.sel || res.drawnStateSig!==stateSig || res.drawnGuiMode!==guiMode)
 			{
 				try
 				{
-					drawDial(res.ctx,hand,dial.sel,state);
+					drawDial(res.ctx,hand,dial.sel,state,guiMode);
 					var sub=vr.mvBinding.getSubImage(res.quad,frame);
 					uploadCanvasToSubImage(res.canvas,sub);
 					res.drawnSel=dial.sel;
 					res.drawnStateSig=stateSig;
+					res.drawnGuiMode=guiMode;
 				}
-				catch(e){} // Leave res.drawnSel/drawnStateSig unset so the next frame retries.
+				catch(e){} // Leave res.drawn* unset so the next frame retries.
 			}
 		}
 		if(layersChanged)
@@ -2693,6 +2861,41 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
 		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
 		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.hud.tex,0,layer);
+		var px=new Uint8ClampedArray(w*h*4);
+		GLctx.readPixels(0,0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+
+		var flipped=new Uint8ClampedArray(w*h*4);
+		for(var y=0; y<h; ++y)
+		{
+			var srcRow=h-1-y;
+			flipped.set(px.subarray(srcRow*w*4,(srcRow+1)*w*4),y*w*4);
+		}
+
+		var canvas=document.createElement('canvas');
+		canvas.width=w;
+		canvas.height=h;
+		var ctx2d=canvas.getContext('2d');
+		var imgData=ctx2d.createImageData(w,h);
+		imgData.data.set(flipped);
+		ctx2d.putImageData(imgData,0,0);
+		return canvas.toDataURL('image/png');
+	};
+
+	// dumpGuiLayer: same as dumpHudLayer above, but for the in-flight-GUI
+	// composite texture (vr.gui) instead of the HUD one -- debug/headless-
+	// probe helper for checking what the engine actually drew into the GUI
+	// texture (e.g. whether the autopilot menu clips against its edges at
+	// the current texWidth/texHeight, see setupGui's sizing comment).
+	vr.dumpGuiLayer=function(layer)
+	{
+		if(!vr.gui) { return null; }
+		var w=vr.gui.w,h=vr.gui.h;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.gui.tex,0,layer);
 		var px=new Uint8ClampedArray(w*h*4);
 		GLctx.readPixels(0,0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
 		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);

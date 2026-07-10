@@ -33,9 +33,21 @@
 //       -- flying the plane is never blocked by an open dialog.
 //   (g) an Escape tap (mirroring the right-B/left-X/Y reroute) closes the
 //       dialog: dialogVisible falls back to 0.
+//   (h) discoverability guide (fswebxr.cpp's rdial.guiMode/drawGuiDialGuide):
+//       while the AP menu is open, the right dial is FORCED visible
+//       (regardless of thumbstick engagement) and its guiMode is 'ap'; the
+//       left dial is hidden outright (its functions are suppressed anyway).
+//       Dumping the GUI texture (vr.dumpGuiLayer, mirroring vr.dumpHudLayer)
+//       with the menu open must show a bigger alpha fraction than the old
+//       1024x640 texture did (the same absolute-pixel dialog layout now
+//       covers a bigger share of the smaller 640x360 texture). After the
+//       menu closes, guiMode reverts to null and the right dial's
+//       visibility falls back to the normal thumbstick-engagement rule
+//       (i.e. it goes invisible again, since no stick is being poked).
 //
 //   node scripts/smoke-vrgui.mjs [url] [outDir]
 import { chromium } from 'playwright';
+import fs from 'fs';
 
 const url = process.argv[2] || 'http://localhost:8923/index.html?freeflight=F-15C_EAGLE';
 const outDir = process.argv[3] || '.';
@@ -131,7 +143,7 @@ await page.waitForTimeout(2000); // several single-pass stereo frames
 // ---- (a) GUI composite enabled + sized -----------------------------------
 let guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
 check('GUI composite enabled once multiview engaged', guiData[0] === 1, 'guiData=' + JSON.stringify(guiData));
-check('GUI composite sized 1024x640', guiData[3] === 1024 && guiData[4] === 640, 'w=' + guiData[3] + ' h=' + guiData[4]);
+check('GUI composite sized 640x360', guiData[3] === 640 && guiData[4] === 360, 'w=' + guiData[3] + ' h=' + guiData[4]);
 
 // ---- (b) no dialog open yet -----------------------------------------------
 check('dialogVisible==0 before opening any dialog', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
@@ -153,6 +165,13 @@ const guiLayer0 = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiLaye
 const guiLayer1 = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiLayerStats(1));
 check('GUI layer 0 has drawn content (nonzero alpha)', guiLayer0.alpha > 0.05, 'alpha=' + guiLayer0.alpha.toFixed(3));
 check('GUI layer 1 has drawn content (nonzero alpha)', guiLayer1.alpha > 0.05, 'alpha=' + guiLayer1.alpha.toFixed(3));
+// The old 1024x640 texture measured a mean alpha of ~11.35 for this exact
+// AP-menu layout (same absolute-pixel content, just a bigger, mostly-empty
+// texture around it); the new 640x360 texture measures ~32.3 -- comfortably
+// above a 20 threshold placed between the two, proving the dialog now
+// covers a bigger FRACTION of the texture (and therefore of the composited
+// quad), not just that something nonzero got drawn.
+check('GUI layer 0 alpha fraction is bigger than the old 1024x640 texture gave (~11.35)', guiLayer0.alpha > 20, 'alpha=' + guiLayer0.alpha.toFixed(3));
 await page.screenshot({ path: outDir + '/vrgui-test-1-menu-open.png' });
 
 // ---- Stick-routing: dial suppressed, GUI_DIAL takes over ------------------
@@ -170,6 +189,32 @@ function poke(list) {
   }, list);
 }
 const IDENTITY_QUAT = [0, 0, 0, 1];
+
+// ---- (h) discoverability guide: right dial forced visible + relabelled ---
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]);
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]);
+let dialState = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  return {
+    right: { visible: vr.ctl.dial.right.visible, guiMode: vr.ctl.dial.right.guiMode },
+    left: { visible: vr.ctl.dial.left.visible }
+  };
+});
+check('AP menu open: right dial forced visible with no thumbstick engagement', dialState.right.visible === true, 'dialState=' + JSON.stringify(dialState));
+check('AP menu open: right dial guiMode is "ap"', dialState.right.guiMode === 'ap', 'dialState=' + JSON.stringify(dialState));
+check('AP menu open: left dial hidden', dialState.left.visible === false, 'dialState=' + JSON.stringify(dialState));
+
+// Dump the GUI texture with the AP menu open for a human eyeball check of
+// whether the menu clips against the smaller 640x360 texture (it should
+// not -- FsGuiAutoPilotDialog::Make lays out at ~550x100px, see
+// upstream/YSFLIGHT/src/core/fsguiinfltdlg.cpp).
+const guiDump = await page.evaluate(() => globalThis.Module.ysfwVr.dumpGuiLayer(0));
+if (guiDump) {
+  const b64 = guiDump.replace(/^data:image\/png;base64,/, '');
+  fs.writeFileSync(outDir + '/gui-apmenu.png', Buffer.from(b64, 'base64'));
+  console.log('wrote ' + outDir + '/gui-apmenu.png');
+}
+check('vr.dumpGuiLayer(0) returned a PNG data URL', typeof guiDump === 'string' && guiDump.startsWith('data:image/png'), 'guiDump=' + (guiDump ? guiDump.slice(0, 30) + '...' : guiDump));
 
 await resetKeys();
 await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
@@ -249,6 +294,21 @@ await page.waitForTimeout(400);
 
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
 check('dialogVisible==0 after Escape closes the autopilot menu', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
+
+// ---- (h continued) dial mode reverts once the dialog is gone -------------
+// One more poke with the stick at rest so processControllerPlain runs and
+// re-evaluates rdial.guiMode/visible against the now-closed dialog: guiMode
+// must go back to null, and with no thumbstick engagement the normal
+// thumbstick-engagement rule (updateDialStick's fade timer) leaves the dial
+// invisible again -- i.e. the forced-visible override is really gone, not
+// just guiMode alone.
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]);
+dialState = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  return { visible: vr.ctl.dial.right.visible, guiMode: vr.ctl.dial.right.guiMode };
+});
+check('after close: right dial guiMode reverts to null', dialState.guiMode === null, 'dialState=' + JSON.stringify(dialState));
+check('after close: right dial visibility falls back to thumbstick-engagement rule (no stick held -> invisible)', dialState.visible === false, 'dialState=' + JSON.stringify(dialState));
 
 await page.screenshot({ path: outDir + '/vrgui-test-2-closed.png' });
 await browser.close();
