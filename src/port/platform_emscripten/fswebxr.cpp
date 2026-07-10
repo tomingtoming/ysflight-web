@@ -271,14 +271,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			return;
 		}
-		// 768: the engine draws HUD lines/glyphs ~1 texel wide, so the TEXEL
-		// size sets BOTH the on-screen line thickness AND the symbology size.
-		// 1024 minified on the headset and thin lines alpha-collapsed into
-		// the sky; 512 fixed legibility but doubled the symbology size (and
-		// clipped long weapon labels at the glass edge).  768 is the middle:
-		// lines 1.33x thicker than 1024 (plus the quad shader's alpha gain),
-		// symbology only 1.33x larger.
-		var W=768,H=768;
+		// 768 wide: the engine draws HUD lines/glyphs ~1 texel wide, so the
+		// TEXEL size sets BOTH the on-screen line thickness AND the symbology
+		// size (1024 alpha-collapsed on the headset, 512 was oversized).
+		// 16:9, not square: the engine lays the HUD out for the aspect it is
+		// given, and side/bottom elements (bank indicator, compass rose)
+		// assume a wide screen -- a square texture clips them at the edges.
+		// The engine sizes the glass quad from these dimensions.
+		var W=768,H=432;
 
 		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
 		GLctx.activeTexture(GLctx.TEXTURE15);
