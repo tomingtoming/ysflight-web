@@ -481,6 +481,51 @@ export function glbToDnm(glbBytes) {
     return e;
   };
 
+  // Name-based auto-wiring for foreign models (FlightGear / fr24 heritage
+  // keeps parts as separate, recognizably-named nodes — elevator_left,
+  // FLG_MR_out, ... — just without any YSFLIGHT wiring).  When a name
+  // matches, derive the hinge from the part's baked bounding box and assign
+  // the stock-idiom CLA/POS=CNT/STA.  A heuristic: parts it gets wrong are
+  // still separate objects in Blender, easy to fix there.
+  const DEGU = (d) => Math.round(d * 32768 / 180);
+  const ZSTA = [0, 0, 0, 0, 0, 0, 1];
+  const rsta = (h, p, b, vis = 1) => [0, 0, 0, h, p, b, vis];
+  const autoWire = (label, bb) => {
+    const n = label.toLowerCase();
+    const mid = (k) => (bb.min[k] + bb.max[k]) / 2;
+    // Trailing control surfaces hinge on their leading (nose-side, +Z) edge.
+    const leading = () => [mid(0), mid(1), bb.max[2]];
+    if (/door/.test(n)) return null; // gear doors etc: hinge axis too ambiguous — leave static
+    if (/elevator/.test(n)) {
+      return { cla: 6, cnt: leading(), sta: [ZSTA, rsta(0, DEGU(-15), 0), rsta(0, DEGU(15), 0)] };
+    }
+    if (/rudder/.test(n)) {
+      return { cla: 8, cnt: leading(), sta: [ZSTA, rsta(DEGU(-15), 0, 0), rsta(DEGU(15), 0, 0)] };
+    }
+    if (/aileron/.test(n)) {
+      const s = mid(0) < 0 ? -1 : 1; // left/right deflect opposite ways
+      return { cla: 7, cnt: leading(), sta: [ZSTA, rsta(0, DEGU(-12 * s), 0), rsta(0, DEGU(12 * s), 0)] };
+    }
+    if (/spoiler|speed.?brake|air.?brake/.test(n)) {
+      return { cla: 4, cnt: leading(), sta: [ZSTA, rsta(0, DEGU(-45), 0)] };
+    }
+    if (/flaperon|flap(?!g)/.test(n)) {
+      return { cla: 5, cnt: leading(), sta: [ZSTA, rsta(0, DEGU(20), 0)] };
+    }
+    if (/propeller|^prop\b/.test(n)) {
+      return { cla: 18, cnt: [mid(0), mid(1), mid(2)], sta: [ZSTA, ZSTA] };
+    }
+    if (/rotor/.test(n)) {
+      return { cla: 3, cnt: [mid(0), mid(1), mid(2)], sta: [ZSTA, ZSTA] };
+    }
+    if (/gear|^flg|undercarriage|landing/.test(n)) {
+      // Hinge at the attachment (top edge); retracted = swung up + hidden,
+      // matching the stock STA0=retracted(vis 0) / STA1=deployed idiom.
+      return { cla: 0, cnt: [mid(0), bb.max[1], mid(2)], sta: [rsta(0, DEGU(-100), 0, 0), ZSTA] };
+    }
+    return null;
+  };
+
   const f6 = (v) => (Math.abs(v) < 5e-7 ? '0' : String(Math.round(v * 1e6) / 1e6));
 
   const srfText = (mesh, bake) => {
@@ -521,7 +566,9 @@ export function glbToDnm(glbBytes) {
       lines.push('C ' + f.color.join(' '));
       lines.push('E');
     }
-    return { text: lines.join('\n'), lineCount: lines.length, tris: faces.length };
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const v of verts) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], v[k]); max[k] = Math.max(max[k], v[k]); }
+    return { text: lines.join('\n'), lineCount: lines.length, tris: faces.length, bbox: { min, max } };
   };
 
   const usedLabels = new Set(), usedSrfNames = new Set();
@@ -531,7 +578,7 @@ export function glbToDnm(glbBytes) {
     set.add(name);
     return name;
   };
-  const pcks = [], blocks = [];
+  const pcks = [], blocks = [], wiredList = [];
   let nodeCount = 0, triCount = 0;
 
   const I16 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -545,12 +592,14 @@ export function glbToDnm(glbBytes) {
     const label = uniq(usedLabels, (node.name || 'node').replace(/"/g, ''));
     const ys = ysExtras(node);
     const bake = ys ? null : mul(parentBake || I16, localMatrix(node));
-    let srfName;
+    let srfName, bbox = null, hasGeom = false;
     if (node.mesh !== undefined) {
       const s = srfText(json.meshes[node.mesh], bake);
       srfName = uniq(usedSrfNames, ((ys && ys.srf) || label.replace(/[^A-Za-z0-9_.-]+/g, '_').toLowerCase() + '.srf').replace(/\s+/g, '_'));
       pcks.push({ name: srfName, text: s.text, lineCount: s.lineCount });
       triCount += s.tris;
+      bbox = s.bbox;
+      hasGeom = s.tris > 0;
     } else {
       srfName = uniq(usedSrfNames, label.replace(/[^A-Za-z0-9_.-]+/g, '_').toLowerCase() + '.srf');
       pcks.push({ name: srfName, text: 'SURF\n\n', lineCount: 3 });
@@ -562,10 +611,19 @@ export function glbToDnm(glbBytes) {
       cnt = (ys.cnt && ys.cnt.length >= 3 ? ys.cnt.slice(0, 3) : [0, 0, 0]);
       sta = (ys.sta && ys.sta.length ? ys.sta : [[0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1]]);
     } else {
-      cla = 0;
-      pos = [0, 0, 0, 0, 0, 0]; // transform lives in the baked vertices
-      cnt = [0, 0, 0];
-      sta = [[0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1]];
+      const wire = hasGeom ? autoWire(label, bbox) : null;
+      if (wire) {
+        cla = wire.cla;
+        pos = [...wire.cnt, 0, 0, 0]; // POS = CNT = hinge, the stock idiom
+        cnt = wire.cnt;
+        sta = wire.sta;
+        wiredList.push({ label, cla, name: CLA_NAME[wire.cla] || String(wire.cla) });
+      } else {
+        cla = 0;
+        pos = [0, 0, 0, 0, 0, 0]; // transform lives in the baked vertices
+        cnt = [0, 0, 0];
+        sta = [[0, 0, 0, 0, 0, 0, 1], [0, 0, 0, 0, 0, 0, 1]];
+      }
     }
     // Children of an extras node bake relative to it (the engine applies the
     // parent's POS transform through the DNM hierarchy).
@@ -602,5 +660,6 @@ export function glbToDnm(glbBytes) {
   return {
     dnm: new TextEncoder().encode(out.join('\n') + '\n'),
     nodes: nodeCount, srfs: pcks.length, triangles: triCount,
+    wired: wiredList,
   };
 }
