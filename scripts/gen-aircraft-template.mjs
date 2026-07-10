@@ -73,7 +73,8 @@ P('Fuselage', 0,
   ),
   null, null,
   ['NoseGear', 'MainGearL', 'MainGearR', 'FlapL', 'FlapR', 'AileronL', 'AileronR',
-    'Elevator', 'Rudder', 'AirBrake', 'Afterburner', 'Beacon']);
+    'Elevator', 'Rudder', 'AirBrake', 'Afterburner', 'Beacon',
+    'Propeller', 'ReverserL', 'ReverserR', 'VtolNozzleL', 'VtolNozzleR']);
 
 // Gear (CLA 0): STA0 retracted+hidden, STA1 deployed — the stock convention.
 const gearRetract = rot(0, DEG(-100), 0, 0);
@@ -114,6 +115,30 @@ P('Afterburner', 2, box([-0.3, 0.3], [-0.35, 0.35], [-6.3, -5.5], ORANGE), null,
 
 // Beacon (CLA 30, a nav-light class): the paint shop auto-protects these.
 P('Beacon', 30, box([-0.05, 0.05], [1.05, 1.15], [2.6, 2.8], REDC), null, [zero, zero]);
+
+// Propeller (CLA 18, slow-spin blades): the engine SPINS it about the nose
+// axis; the glb carries a 1s full-turn loop so Blender shows it turning.
+// (CLA 20 is the fast-RPM blur disc — same wiring, add one if you want it.)
+P('Propeller', 18, merge(
+  box([-0.08, 0.08], [-1.1, 1.1], [6.8, 6.9], DARK),   // vertical blade pair
+  box([-1.1, 1.1], [-0.08, 0.08], [6.8, 6.9], DARK),   // horizontal blade pair
+  box([-0.14, 0.14], [-0.14, 0.14], [6.8, 7.05], REDC), // spinner cap
+), [0, 0, 6.85], [zero, zero]);
+
+// Thrust reversers (CLA 11): clamshell buckets that swing over the nozzle.
+// STA0 = stowed, STA1 = deployed (the engine drives them with reverse thrust).
+P('ReverserL', 11, box([-0.75, -0.62], [-0.4, 0.5], [-6.2, -5.5], DARK), [-0.62, 0, -5.5],
+  [zero, rot(DEG(60), 0, 0)]);
+P('ReverserR', 11, box([0.62, 0.75], [-0.4, 0.5], [-6.2, -5.5], DARK), [0.62, 0, -5.5],
+  [zero, rot(DEG(-60), 0, 0)]);
+
+// VTOL nozzles (CLA 10, Harrier-style): STA0 = aft (level flight), STA1 =
+// rotated straight down (hover) — the engine sweeps them with the THRVECTR
+// control.  Hinge on the fuselage side, geometry is the nozzle can.
+P('VtolNozzleL', 10, box([-0.95, -0.6], [-0.5, -0.1], [-0.6, 0.4], ORANGE), [-0.6, -0.3, 0.4],
+  [zero, rot(0, DEG(-90), 0)]);
+P('VtolNozzleR', 10, box([0.6, 0.95], [-0.5, -0.1], [-0.6, 0.4], ORANGE), [0.6, -0.3, 0.4],
+  [zero, rot(0, DEG(-90), 0)]);
 
 // Wingtip marker so left/right is obvious at a glance in Blender.
 parts.find((p) => p.label === 'AileronL').geo =

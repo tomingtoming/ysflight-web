@@ -90,12 +90,22 @@ function matToTQ(M) {
 }
 const staDiffers = (sta) => sta && sta.length >= 2 &&
   sta[0].slice(0, 6).some((v, i) => Math.abs(v - sta[sta.length - 1][i]) > 1e-6);
-// Human-readable animation names per DNM CLA class (ysshelldnmident.h).
+// Human-readable animation names per DNM CLA class (the full aircraft table
+// in ysshelldnmident.h).
 const CLA_NAME = {
-  0: 'Gear', 1: 'VariableGeometryWing', 2: 'Afterburner', 4: 'AirBrake',
-  5: 'Flap', 6: 'Elevator', 7: 'Aileron', 8: 'Rudder', 16: 'Brake',
-  17: 'Spoiler', 21: 'Rotor', 22: 'TailRotor',
+  0: 'Gear', 1: 'VariableGeometryWing', 2: 'Afterburner', 3: 'Rotor',
+  4: 'AirBrake', 5: 'Flap', 6: 'Elevator', 7: 'Aileron', 8: 'Rudder',
+  9: 'BombBay', 10: 'VtolNozzle', 11: 'ThrustReverser', 12: 'ConcordeNose',
+  13: 'ConcordeVisor', 14: 'GearDoor', 15: 'GearRoomWall', 16: 'BrakeOrHook',
+  17: 'GearDoorFast', 18: 'PropellerSlow', 20: 'PropellerFast', 21: 'Turret',
+  22: 'Tire', 23: 'Steering', 24: 'RotorCustomAxis',
+  40: 'LeftDoor', 41: 'RightDoor',
 };
+// Continuous-rotation classes: the engine SPINS these (SetAngle/SetPitch/
+// SetRotation), it does not interpolate their STAs.  Which Euler slot spins:
+// rotor about heading (Y, vertical), propeller about bank (Z, the nose axis),
+// tire about pitch (X, the axle).
+const SPIN_SLOT = { 3: 3, 18: 5, 20: 5, 22: 4, 24: 3 }; // cla -> index into [x,y,z,h,p,b]
 
 // --- geometry: SRF -> primitives grouped by face color ---------------------------
 
@@ -212,24 +222,40 @@ function emitNode(label) {
   // ("Gear", "Flap", ...) with a keyframe per STA state, 1s apart — Blender
   // imports each as an action and the timeline plays the part through its
   // whole range (gear retracting, flaps dropping, ...).
-  if (staDiffers(n.sta)) {
+  // Spinner classes (rotor / propeller / tire) don't interpolate STAs — the
+  // engine spins them continuously — so synthesize a 1s full-turn loop about
+  // the class's spin axis instead (4 quaternion keys, or slerp shortcuts).
+  const emitAnim = (staList, times) => {
     const name = CLA_NAME[n.cla] || ('Class' + (n.cla || 0));
     let anim = animByName.get(name);
     if (!anim) { anim = { name, samplers: [], channels: [] }; animByName.set(name, anim); }
-    const times = [], ts = [], qs = [];
-    n.sta.forEach((sta, i) => {
+    const ts = [], qs = [];
+    for (const sta of staList) {
       const { t, q } = matToTQ(nodeMatrix(pos, sta, cnt));
-      times.push(i);
       ts.push(...t);
       qs.push(...q);
-    });
-    const input = pushAcc(times, 'SCALAR', { minmax: [[0], [times.length - 1]] });
+    }
+    const input = pushAcc(times, 'SCALAR', { minmax: [[times[0]], [times[times.length - 1]]] });
     const sT = anim.samplers.length;
     anim.samplers.push({ input, output: pushAcc(ts, 'VEC3'), interpolation: 'LINEAR' });
     anim.channels.push({ sampler: sT, target: { node: ix, path: 'translation' } });
     const sR = anim.samplers.length;
     anim.samplers.push({ input, output: pushAcc(qs, 'VEC4'), interpolation: 'LINEAR' });
     anim.channels.push({ sampler: sR, target: { node: ix, path: 'rotation' } });
+  };
+  if (SPIN_SLOT[n.cla] !== undefined) {
+    const slot = SPIN_SLOT[n.cla];
+    const steps = 8; // 45-degree keys: well under slerp's 180-degree ambiguity
+    const staList = [], times = [];
+    for (let i = 0; i <= steps; i++) {
+      const sta = [0, 0, 0, 0, 0, 0, 1];
+      sta[slot] = (65536 * i) / steps; // full turn in engine angle units
+      staList.push(sta);
+      times.push(i / steps);
+    }
+    emitAnim(staList, times);
+  } else if (staDiffers(n.sta)) {
+    emitAnim(n.sta, n.sta.map((_, i) => i));
   }
   return ix;
 }
