@@ -1433,6 +1433,43 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GLctx.deleteFramebuffer(rfb);
 		return { lum:lum/(px.length/4), alpha:alpha/(px.length/4) };
 	};
+
+	// dumpHudLayer: reads back a full HUD texture-array layer as RGBA and
+	// returns it as a data: URL PNG (base64) via an offscreen 2D canvas.
+	// Debug/headless-probe helper for diagnosing HUD layout bugs -- this is
+	// the ground truth of what the engine drew into the HUD texture, as
+	// opposed to reasoning about coordinate math.  GL readPixels is
+	// bottom-up (row 0 = bottom of the image); canvas ImageData is top-down,
+	// so the rows are flipped before putImageData.
+	vr.dumpHudLayer=function(layer)
+	{
+		if(!vr.hud) { return null; }
+		var w=vr.hud.w,h=vr.hud.h;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.hud.tex,0,layer);
+		var px=new Uint8ClampedArray(w*h*4);
+		GLctx.readPixels(0,0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+
+		var flipped=new Uint8ClampedArray(w*h*4);
+		for(var y=0; y<h; ++y)
+		{
+			var srcRow=h-1-y;
+			flipped.set(px.subarray(srcRow*w*4,(srcRow+1)*w*4),y*w*4);
+		}
+
+		var canvas=document.createElement('canvas');
+		canvas.width=w;
+		canvas.height=h;
+		var ctx2d=canvas.getContext('2d');
+		var imgData=ctx2d.createImageData(w,h);
+		imgData.data.set(flipped);
+		ctx2d.putImageData(imgData,0,0);
+		return canvas.toDataURL('image/png');
+	};
 });
 // clang-format on
 
