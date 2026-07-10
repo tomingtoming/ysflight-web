@@ -271,7 +271,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			return;
 		}
-		var W=1024,H=1024;
+		// 512, not 1024: the engine draws HUD lines/glyphs ~1 texel wide, so
+		// the on-screen line thickness is set by the TEXEL size.  At 1024 the
+		// glass (~0.9m at 1m) minifies on the headset and thin symbology
+		// alpha-collapses into the sky; 512 doubles the effective line width.
+		var W=512,H=512;
 
 		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
 		GLctx.activeTexture(GLctx.TEXTURE15);
@@ -1043,6 +1047,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// fill-rate too.  ?vrscale=1.0 opts back into full resolution.
 		var opts=Module.ysfwVrOptions||{};
 		var scale=(0<opts.scale ? opts.scale : 0.7);
+		// Single-pass stereo made the frame CPU-bound (GPU headroom), so the
+		// multiview projection layer defaults to native resolution -- the 0.7
+		// default predates multiview (two-pass fill-rate + tab-memory OOM).
+		// ?vrscale= still overrides both paths.
+		var mvScale=(0<opts.scale ? opts.scale : 1.0);
 		var foveation=(undefined!==opts.foveation ? opts.foveation : 1.0);
 		var frameRate=(0<opts.frameRate ? opts.frameRate : 72);
 		var antialias=(undefined!==opts.antialias ? !!opts.antialias : false);
@@ -1066,7 +1075,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 						if(mvExt)
 						{
 							var binding=new XRWebGLBinding(session,GLctx);
-							var mvLayer=binding.createProjectionLayer({textureType:'texture-array',scaleFactor:scale,depthFormat:GLctx.DEPTH24_STENCIL8});
+							var mvLayer=binding.createProjectionLayer({textureType:'texture-array',scaleFactor:mvScale,depthFormat:GLctx.DEPTH24_STENCIL8});
 							try
 							{
 								if('fixedFoveation' in mvLayer)
@@ -1078,7 +1087,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 							vr.mvExt=mvExt;
 							vr.mvBinding=binding;
 							vr.mvLayer=mvLayer;
-							console.log('[vr] multiview projection layer (single-pass stereo), scale='+scale+' foveation='+foveation);
+							console.log('[vr] multiview projection layer (single-pass stereo), scale='+mvScale+' foveation='+foveation);
 						}
 					}
 					catch(e)
