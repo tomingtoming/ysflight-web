@@ -74,6 +74,28 @@ that owns the session and fills that state every frame:
     a thumbstick click (xr-standard buttons[3]) on either hand toggles both
     placards at any time (see showHelp/toggleHelp/updateHelpAutoHide). Kill
     switch: Module.ysfwVrOptions.help===false (?vrhelp=0).
+  - GUI-in-VR: the engine's 2D dialog machinery (autopilot/radio-comm menus,
+    replay/continue dialogs) still opens and grabs input in VR even though
+    ordinary 2D drawing is skipped -- e.g. the left dial's AP tap
+    (Backspace) opened an invisible, un-closeable autopilot menu. setupGui/
+    teardownGui allocate a second off-screen two-layer multiview framebuffer
+    (1024x640x2, see fsvr.h's FsVrGuiDataPointer) that the engine
+    (FsSimulation::SimDrawVrGui) renders whichever dialog is currently open
+    into every frame, composited onto a second, GUI-anchored quad (closer/
+    lower than the HUD glass) -- see guiDialogState/vr.readGuiData. Kill
+    switch: Module.ysfwVrOptions.gui===false (?vrgui=0). While the engine
+    reports a dialog open (guiDialogState().visible), processControllerPlain
+    reroutes the right dial's 4 sectors + right A/B to the dialog's own
+    hotkeys (Digit1..5/Digit0, see GUI_DIAL) when it is one of the autopilot
+    menus (guiDialogState().apMenu), or to a generic Escape/cancel tap
+    otherwise (GUI_ESCAPE_ACTION) -- also reachable from the left X/Y
+    buttons. The left dial is fully suppressed meanwhile. Grip-stick
+    (aileron/elevator/rudder) and the throttle grip are NEVER affected: the
+    plane keeps flying regardless of any open dialog. See the doc comment on
+    GUI_DIAL for why this stops at a 4-hotkey stick mapping rather than the
+    generic Tab-focus/Arrow-key/Enter scheme a first read of the engine
+    might suggest -- most in-flight dialogs (the autopilot family included)
+    do not actually route keyboard input through that generic path.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -153,6 +175,21 @@ extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrHudDataPointer(void)
 extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrAircraftStateDataPointer(void)
 {
 	return FsVrAircraftStateDataPointer();
+}
+
+// Forwards to the engine's VR in-flight-GUI-dialog composite state block
+// (fsvr.h, 8 floats): the JS runtime writes [enable,fbo,texArray,texW,texH]
+// here when single-pass stereo engages (see setupGui below); the engine
+// (FsSimulation::SimDrawVrGui) writes [5] dialogVisible and [6] apMenu back
+// every frame -- see fsvr.h's doc comment on FsVrGuiDataPointer for the full
+// layout. This is what makes a modal in-flight dialog (autopilot menu,
+// radio-comm menus, replay/continue dialogs, ...) visible and operable in
+// VR: without it, SimDrawGuiDialog's whole call is skipped while
+// FsVrIsActive, so a dialog opened mid-flight (e.g. Backspace ->
+// FSBTF_OPENAUTOPILOTMENU) was invisible and left the pilot stuck.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrGuiDataPointer(void)
+{
+	return FsVrGuiDataPointer();
 }
 
 // clang-format off
@@ -315,6 +352,40 @@ EM_JS(void,YsfwInstallWebXR,(),
 		left: {label:'AP',     code:'Backspace',mode:'tap'}
 	};
 
+	// GUI-dialog stick mapping (see SimDrawVrGui's doc comment / fsvr.h's
+	// FsVrGuiDataPointer): while a modal in-flight dialog is open (guiData[5]
+	// dialogVisible), this REPLACES RIGHT_DIAL for the right thumbstick's 4
+	// sectors, so the right trigger's sector-tap dispatches the dialog's own
+	// direct hotkeys instead of Gun/WeaponSelect/Gear/Brake. Digit1..4 only:
+	// this table is only consulted when the engine also reports apMenu (the
+	// open dialog is one of the autopilot menus -- FsGuiAutoPilotDialog /
+	// FsGuiAutoPilotVTOLDialog / FsGuiAutoPilotHelicopterDialog), whose
+	// ProcessRawKeyInput (fsguiinfltdlg.cpp) is the one place in the engine
+	// confirmed to consume Digit1..Digit5/Digit0/Escape directly, independent
+	// of the generic FsGuiDialog Tab-focus/mouse-click machinery that most
+	// other in-flight dialogs rely on instead (see updateControllers' doc
+	// comment below for why this table stops at 4: Digit5/Digit0 are reached
+	// through the right A/B buttons instead, freeing the 4-sector stick for
+	// the 4 most common autopilot modes). Labels match the actual on-screen
+	// button text (FsGuiAutoPilotDialog::Make, upstream fsguiinfltdlg.cpp:
+	// "1...Circle", "2...Straight & Level", "3...Landing", "4...Takeoff").
+	var GUI_DIAL={
+		up:   {label:'1 Circle',   code:'Digit1', mode:'tap'},
+		right:{label:'2 Straight', code:'Digit2', mode:'tap'},
+		down: {label:'3 Landing',  code:'Digit3', mode:'tap'},
+		left: {label:'4 Takeoff',  code:'Digit4', mode:'tap'}
+	};
+	// Generic "close/cancel" action for any OTHER in-flight dialog
+	// (dialogVisible but not apMenu -- radio-comm menus, replay/continue
+	// dialogs, etc.): every in-flight dialog in the engine either consumes
+	// Escape directly (FsGuiInFlightDialog::ProcessRawKeyInput overrides in
+	// fsguiinfltdlg.cpp all treat it as "close this dialog") or has a
+	// Cancel-labelled button bound to FSKEY_ESC that the generic
+	// FsGuiDialog::KeyIn's fsKey match clicks -- so Escape is the one input
+	// confirmed safe to fire at ANY open dialog, unlike Tab/Arrow keys/Enter
+	// (see the investigation notes in fsvr.h's FsVrGuiDataPointer comment).
+	var GUI_ESCAPE_ACTION={label:'Cancel', code:'Escape', mode:'tap'};
+
 	if(!navigator.xr || !navigator.xr.isSessionSupported)
 	{
 		return;
@@ -445,6 +516,109 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GL.framebuffers[vr.hud.fbId]=null;
 		GL.textures[vr.hud.texId]=null;
 		vr.hud=null;
+	}
+
+	// ---- VR in-flight-GUI-dialog composite resources ---------------------
+	// Same shape as setupHud/teardownHud above, driven by
+	// _YsfwVrGuiDataPointer() (fsvr.h's FsVrGuiDataPointer) instead of the HUD
+	// block. The engine renders whatever modal in-flight dialog is currently
+	// open (autopilot menu, radio-comm menus, replay/continue dialogs, ...)
+	// into this off-screen framebuffer and composites it onto a second,
+	// GUI-anchored quad -- see SimDrawVrGui / FsVrDrawGuiQuad. Kill switch:
+	// Module.ysfwVrOptions.gui===false (?vrgui=0 in web/index.html) leaves
+	// the whole feature off (enable stays 0, no GL objects created).
+	// 1024x640: wide enough that the FsGuiDialog family's small,
+	// window-size-independent absolute-pixel layouts (see SimDrawVrGui's doc
+	// comment) never clip against the top-left corner of the texture.
+	function setupGui()
+	{
+		var opts=Module.ysfwVrOptions||{};
+		if(false===opts.gui)
+		{
+			return;
+		}
+		if(vr.gui)
+		{
+			return;
+		}
+		var ext=vr.mvExt||GLctx.getExtension('OCULUS_multiview')||GLctx.getExtension('OVR_multiview2');
+		if(!ext)
+		{
+			return;
+		}
+		var W=1024,H=640;
+
+		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
+		GLctx.activeTexture(GLctx.TEXTURE15);
+		var tex=GLctx.createTexture();
+		GLctx.bindTexture(GLctx.TEXTURE_2D_ARRAY,tex);
+		GLctx.texStorage3D(GLctx.TEXTURE_2D_ARRAY,1,GLctx.RGBA8,W,H,2);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_MIN_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_MAG_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_WRAP_S,GLctx.CLAMP_TO_EDGE);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_WRAP_T,GLctx.CLAMP_TO_EDGE);
+		GLctx.bindTexture(GLctx.TEXTURE_2D_ARRAY,null);
+		GLctx.activeTexture(prevActive);
+
+		var fb=GLctx.createFramebuffer();
+		var prevFb=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,fb);
+		ext.framebufferTextureMultiviewOVR(GLctx.FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,tex,0,0,2);
+		var st=GLctx.checkFramebufferStatus(GLctx.FRAMEBUFFER);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prevFb);
+		if(st!==GLctx.FRAMEBUFFER_COMPLETE)
+		{
+			console.warn('[vr] GUI framebuffer incomplete 0x'+st.toString(16)+' -- GUI disabled');
+			GLctx.deleteFramebuffer(fb);
+			GLctx.deleteTexture(tex);
+			return;
+		}
+
+		var fbId=GL.getNewId(GL.framebuffers);
+		GL.framebuffers[fbId]=fb;
+		fb.name=fbId;
+		var texId=GL.getNewId(GL.textures);
+		GL.textures[texId]=tex;
+		tex.name=texId;
+
+		var p=_YsfwVrGuiDataPointer()>>2;
+		HEAPF32[p+0]=1;     // enable
+		HEAPF32[p+1]=fbId;  // guiFbo
+		HEAPF32[p+2]=texId; // guiTexArray
+		HEAPF32[p+3]=W;
+		HEAPF32[p+4]=H;
+		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
+
+		vr.gui={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H};
+		console.log('[vr] GUI composite '+W+'x'+H+'x2 (fbId='+fbId+' texId='+texId+')');
+	}
+
+	function teardownGui()
+	{
+		var p=_YsfwVrGuiDataPointer()>>2;
+		for(var i=0; i<8; ++i)
+		{
+			HEAPF32[p+i]=0;
+		}
+		if(!vr.gui)
+		{
+			return;
+		}
+		try{ GLctx.deleteFramebuffer(vr.gui.fb); }catch(e){}
+		try{ GLctx.deleteTexture(vr.gui.tex); }catch(e){}
+		GL.framebuffers[vr.gui.fbId]=null;
+		GL.textures[vr.gui.texId]=null;
+		vr.gui=null;
+	}
+
+	// Reads back [dialogVisible,apMenu] from the GUI state block -- cheap,
+	// polled once per controller-update frame (see processControllerPlain)
+	// to decide whether hand-controller input should route to the dialog
+	// instead of its normal flight-control meaning.
+	function guiDialogState()
+	{
+		var p=_YsfwVrGuiDataPointer()>>2;
+		return {visible:0!==HEAPF32[p+5],apMenu:0!==HEAPF32[p+6]};
 	}
 
 	// ---- VR controller -> flight-control state block --------------------
@@ -819,6 +993,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var ptr=_YsfwVrControlDataPointer()>>2;
 		var physGrabbed=entry.squeeze>GRAB_THRESHOLD;
+		// While a modal in-flight dialog is open (see SimDrawVrGui / fsvr.h's
+		// FsVrGuiDataPointer), the dial/trigger/A/B inputs below are rerouted
+		// to operate that dialog instead of their normal flight-control
+		// meaning -- EXCEPT the grip stick (aileron/elevator/rudder) and the
+		// throttle grip, which keep flying the plane regardless (see the
+		// 'right'/'left' branches below: st.grabbed/th.grabbed handling is
+		// untouched by guiState).
+		var guiState=guiDialogState();
 
 		if('right'===entry.hand)
 		{
@@ -856,13 +1038,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 
 			var rdial=vr.ctl.dial.right;
+			// Sector-selection bookkeeping (haptic-on-change, visibility/fade
+			// timer) runs unconditionally -- it is harmless bystander state
+			// when a dialog is open, and this is also the exact stick
+			// geometry the GUI_DIAL mapping below reuses.
 			updateDialStick(rdial,entry.thumb,rawSrc);
 			var triggerPressed=entry.trigger>GRAB_THRESHOLD;
 			var triggerEdgeUp=triggerPressed && !vr.ctl.rightTrigger;
 			if(triggerEdgeUp)
 			{
 				vrHapticPulse(rawSrc);
-				rdial.engaged=RIGHT_DIAL[rdial.sel]; // snapshot: dial flicks mid-press don't retarget it.
+				// snapshot: dial flicks mid-press don't retarget it.
+				rdial.engaged=(!guiState.visible ? RIGHT_DIAL[rdial.sel] :
+				               (guiState.apMenu ? GUI_DIAL[rdial.sel] : GUI_ESCAPE_ACTION));
 			}
 			if(rdial.engaged)
 			{
@@ -885,7 +1073,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// same as before; holding it >=A_RECENTER_MS instead recenters
 			// the view (once per hold) and suppresses the gear tap on the
 			// eventual release. A hold released in between (neither quick
-			// nor long enough) intentionally does nothing.
+			// nor long enough) intentionally does nothing. While a dialog is
+			// open, the short tap's target key is rerouted: Digit5 (the AP
+			// menu's 5th option, "Fly Heading Bug", out of stick-sector reach
+			// -- see GUI_DIAL's doc comment) when apMenu, else Escape
+			// (generic close). Recenter is left enabled either way -- it is
+			// a view-only action, not a flight or dialog control.
 			var aPressed=!!(entry.buttons && entry.buttons.a);
 			var aBtn=vr.ctl.aBtn;
 			var aNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -901,12 +1094,37 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 			if(!aPressed && aBtn.pressed && !aBtn.recentered && (aNow-aBtn.pressAt)<A_TAP_MAX_MS)
 			{
-				vrKeyTap('KeyG'); // Default landing-gear key: a real tap, not a hold.
+				if(!guiState.visible)
+				{
+					vrKeyTap('KeyG'); // Default landing-gear key: a real tap, not a hold.
+				}
+				else
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap(guiState.apMenu ? 'Digit5' : 'Escape');
+				}
 			}
 			aBtn.pressed=aPressed;
 
+			// Right B: normally a held spoiler/air-brake key; while a dialog
+			// is open, rerouted to Digit0 (the AP menu's "Disengage" option)
+			// when apMenu, else Escape (generic close) -- dispatched as a
+			// tap on the press edge, not held, since neither target is a
+			// holdable key.
 			var bPressed=!!(entry.buttons && entry.buttons.b);
-			vrKeyEdge('KeyB',bPressed); // Default spoiler/air-brake key.
+			if(!guiState.visible)
+			{
+				vrKeyEdge('KeyB',bPressed); // Default spoiler/air-brake key.
+			}
+			else
+			{
+				vrKeyEdge('KeyB',false); // Release it if it was held from before the dialog opened.
+				if(bPressed && !vr.ctl.rightB)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap(guiState.apMenu ? 'Digit0' : 'Escape');
+				}
+			}
 			vr.ctl.rightB=bPressed;
 
 			// Thumbstick click (xr-standard buttons[3]): toggles the help
@@ -1001,22 +1219,47 @@ EM_JS(void,YsfwInstallWebXR,(),
 				}
 			}
 
+			// Left X/Y (buttons.a/.b): normally held flap-down/flap-up keys;
+			// while a dialog is open, BOTH are rerouted to a tap of Escape
+			// instead (this hand is otherwise idle content-wise once the
+			// dial is suppressed below, so it doubles as a second, always-
+			// available cancel -- redundant with right B, which is fine).
 			var xPressed=!!(entry.buttons && entry.buttons.a);
-			vrKeyEdge('KeyF',xPressed); // Default flaps-down key.
+			if(!guiState.visible)
+			{
+				vrKeyEdge('KeyF',xPressed); // Default flaps-down key.
+			}
+			else
+			{
+				vrKeyEdge('KeyF',false);
+				if(xPressed && !vr.ctl.leftX) { vrHapticPulse(rawSrc); vrKeyTap('Escape'); }
+			}
 			vr.ctl.leftX=xPressed;
 
 			var yPressed=!!(entry.buttons && entry.buttons.b);
-			vrKeyEdge('KeyR',yPressed); // Default flaps-up key.
+			if(!guiState.visible)
+			{
+				vrKeyEdge('KeyR',yPressed); // Default flaps-up key.
+			}
+			else
+			{
+				vrKeyEdge('KeyR',false);
+				if(yPressed && !vr.ctl.leftY) { vrHapticPulse(rawSrc); vrKeyTap('Escape'); }
+			}
 			vr.ctl.leftY=yPressed;
 
 			// Left trigger: dial-selected function (see LEFT_DIAL). New
 			// behaviour -- the left trigger was previously unused (the grip
 			// already owns the throttle lever), so this is purely additive.
+			// Fully suppressed while a dialog is open (the right hand owns
+			// GUI_DIAL/Digit5/Digit0/Escape instead) -- sector-selection
+			// bookkeeping still runs (harmless), but nothing is ever engaged
+			// or dispatched from it.
 			var ldial=vr.ctl.dial.left;
 			updateDialStick(ldial,entry.thumb,rawSrc);
 			var ltriggerPressed=entry.trigger>GRAB_THRESHOLD;
 			var ltriggerEdgeUp=ltriggerPressed && !vr.ctl.leftTrigger;
-			if(ltriggerEdgeUp)
+			if(ltriggerEdgeUp && !guiState.visible)
 			{
 				vrHapticPulse(rawSrc);
 				ldial.engaged=LEFT_DIAL[ldial.sel];
@@ -2125,6 +2368,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.help={visible:false,shownAt:0,stickPrev:{right:false,left:false}};
 
 					teardownHud();
+					teardownGui();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -2138,6 +2382,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				if(vr.mvLayer)
 				{
 					setupHud();
+					setupGui();
 				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
@@ -2283,6 +2528,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		installFbRedirect();
 		_YsfwVrSetMultiview(1);
 		setupHud();
+		setupGui();
 		_YsfwVrSetPresenting(1);
 		// Headless stand-in for a real session start (see vr.enter): also
 		// auto-shows the help placards, so scripts/smoke-vrctl.mjs can drive
@@ -2380,6 +2626,45 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
 		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
 		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.hud.tex,0,layer);
+		var px=new Uint8Array(w*h*4);
+		GLctx.readPixels(0,0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		var lum=0,alpha=0;
+		for(var i=0; i<px.length; i+=4)
+		{
+			lum+=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+			alpha+=px[i+3];
+		}
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		return { lum:lum/(px.length/4), alpha:alpha/(px.length/4) };
+	};
+
+	// Headless test hooks for the VR in-flight-GUI composite
+	// (scripts/smoke-vrgui.mjs). readGuiData exposes the 8-float GUI state
+	// block (see fsvr.h's FsVrGuiDataPointer); readGuiLayerStats mirrors
+	// readHudLayerStats above (mean luminance + mean alpha of a given layer
+	// of the GUI texture array).
+	vr.readGuiData=function()
+	{
+		var p=_YsfwVrGuiDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<8; ++i)
+		{
+			out.push(HEAPF32[p+i]);
+		}
+		return out;
+	};
+	vr.readGuiLayerStats=function(layer)
+	{
+		if(!vr.gui)
+		{
+			return { lum:0, alpha:0 };
+		}
+		var w=vr.gui.w,h=vr.gui.h;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.gui.tex,0,layer);
 		var px=new Uint8Array(w*h*4);
 		GLctx.readPixels(0,0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
 		var lum=0,alpha=0;
