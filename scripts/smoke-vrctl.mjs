@@ -40,7 +40,10 @@ function check(name, cond, detail) {
 const browser = await chromium.launch({
   executablePath: process.env.YSFW_CHROMIUM || undefined,
   headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required']
+  // Native-GL ANGLE: SwiftShader's default backend lacks OVR_multiview2, which
+  // Group 11 (help placards) needs via vr.forceMultiview -- same flag as
+  // scripts/smoke-mv.mjs/smoke-vrdial.mjs/smoke-vrhud.mjs.
+  args: ['--autoplay-policy=no-user-gesture-required', '--use-angle=gl']
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
@@ -404,6 +407,53 @@ check('yawOnlyQuatFromOrientation: pitch mixed into the input is stripped, yaw s
 // WAITING_FOR_RELEASE transition inside FsCenterJoystick -- not something
 // that can be checked cleanly without either a dedicated flag or fragile
 // timing/pixel assertions, so it is skipped rather than faked.
+
+// ---- Group 11: help placards -- visibility timer + thumbstick toggle ----
+// Feature: per-hand controller help placards (fswebxr.cpp showHelp/
+// toggleHelp/updateHelpAutoHide/updateHelpLayers). The quad-layer visuals
+// can't run headless (no real WebXR session here), but the visibility/
+// toggle state (vr.help) is kept plain and pokeable exactly for this
+// reason. vr.forceMultiview -- the same headless multiview-entry hook
+// scripts/smoke-mv.mjs, smoke-vrdial.mjs and smoke-vrhud.mjs already use --
+// doubles as a "session started" stand-in here and calls showHelp() the
+// same way vr.enter does when a real session begins (hence this group runs
+// last: forceMultiview recompiles the shared renderers for multiview, same
+// as those other scripts do as their own final/only state change).
+const helpAfterEnter = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const forced = vr.forceMultiview(512, 512);
+  return { forced, visible: vr.help.visible };
+});
+check('help: forceMultiview succeeded (native-GL ANGLE, OVR_multiview2 present)', 'ok' === helpAfterEnter.forced, 'forced=' + helpAfterEnter.forced);
+check('help: placards auto-show on session start', true === helpAfterEnter.visible, 'visible=' + helpAfterEnter.visible);
+
+// Thumbstick click (xr-standard buttons[3]) on either hand toggles both
+// placards on the press edge only -- extend the plain entry shape with
+// buttons.stick (existing pokes above never set it, so their implicit
+// "stick: undefined" reads as not-pressed and never trips this new edge --
+// see the falsy-default coercion in fswebxr.cpp's stick-toggle blocks).
+const helpToggle1 = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: false } }]); // clean 0-edge
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // press edge -> toggle off
+  return vr.help.visible;
+});
+check('help: thumbstick-click press edge toggles placards off', false === helpToggle1, 'visible=' + helpToggle1);
+
+const helpToggleHeld = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // still held, no new edge
+  return vr.help.visible;
+});
+check('help: holding the thumbstick click (no new edge) does not re-toggle', false === helpToggleHeld, 'visible=' + helpToggleHeld);
+
+const helpToggle2 = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: false } }]); // release right
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.1], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // press edge on the OTHER hand -> toggle back on
+  return vr.help.visible;
+});
+check('help: thumbstick click on the other hand also toggles (either hand, press edge -> on)', true === helpToggle2, 'visible=' + helpToggle2);
 
 await page.screenshot({ path: outDir + '-final.png' });
 await browser.close();

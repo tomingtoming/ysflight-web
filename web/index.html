@@ -1161,6 +1161,7 @@
       if (q.get('vrfps')) o.frameRate = parseFloat(q.get('vrfps'));
       if (q.get('vraa')) o.antialias = q.get('vraa') === '1';
       if (q.get('vrhud') === '0') o.hud = false; // kill switch for the VR HUD composite
+      if (q.get('vrhelp') === '0') o.help = false; // kill switch for the per-hand controller help placards
       // ?vryawdz=<deg> rudder-only deadzone (default 6, see fswebxr.cpp's
       // DEFAULT_YAW_DEADZONE_DEG); ?vrexpo=<n> exponent response curve on all
       // three stick axes (default 1.0 = off, see DEFAULT_STICK_EXPO).

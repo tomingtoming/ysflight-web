@@ -65,6 +65,15 @@ that owns the session and fills that state every frame:
         (>=~3cm of extra travel at a deliberate speed) taps the engine's
         default afterburner key (Tab, FSBTF_AFTERBURNER -- a toggle); pulling
         the lever back below ~0.95 taps it again to disengage.
+  - Each hand also gets a small help-placard XRQuadLayer (layers path only,
+    same best-effort try/catch discipline as the dial quads): a static
+    controller diagram with callout labels for what every input does,
+    positioned ~12cm above that hand's grip pose and re-billboarded toward
+    the headset (yaw only) every frame (see updateHelpLayers/
+    updateHelpTransform). Auto-shows on session start for 12s, then hides;
+    a thumbstick click (xr-standard buttons[3]) on either hand toggles both
+    placards at any time (see showHelp/toggleHelp/updateHelpAutoHide). Kill
+    switch: Module.ysfwVrOptions.help===false (?vrhelp=0).
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -194,6 +203,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// support), object = {canvas,ctx,quad,inLayers} once created.
 		viewerSpace:null,
 		dialRes:{right:undefined,left:undefined},
+		// Per-hand controller help placards: same lazy-resource shape as
+		// dialRes (undefined = not yet attempted, false = unavailable, object
+		// = {canvas,ctx,quad,inLayers,drawn} once created), but anchored to
+		// vr.refSpace (not viewerSpace) and repositioned every frame from the
+		// hand's own grip pose rather than being head-locked (see
+		// updateHelpLayers/updateHelpTransform below). help: the plain,
+		// headless-testable visibility/toggle state (see showHelp/toggleHelp/
+		// updateHelpAutoHide, scripts/smoke-vrctl.mjs Group 11).
+		helpRes:{right:undefined,left:undefined},
+		help:{visible:false,shownAt:0,stickPrev:{right:false,left:false}},
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -236,7 +255,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 			dial:{
 				right:{sel:'up',engaged:null,visible:false,hideAt:0},
 				left:{sel:'up',engaged:null,visible:false,hideAt:0}
-			}
+			},
+			// Last known grip pose per hand, plain-copied out of this frame's
+			// XRPose each frame in updateControllers (real XR path only --
+			// null whenever that hand had no pose this frame, e.g. out of
+			// tracking). Consumed by updateHelpLayers to reposition the help
+			// placard quads; a null entry means "skip this hand's transform
+			// update this frame" per the feature spec.
+			gripPose:{right:null,left:null}
 		}
 	};
 	Module.ysfwVr=vr;
@@ -741,6 +767,50 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 	}
 
+	// ---- Per-hand help placards: visibility/toggle state -----------------
+	// Kept as plain, headless-testable state (vr.help) independent of the
+	// quad-layer visuals -- scripts/smoke-vrctl.mjs pokes this directly (see
+	// Group 11) without needing a live XR session. Kill switch:
+	// Module.ysfwVrOptions.help===false (?vrhelp=0 in web/index.html) skips
+	// both the auto-show and the quad-layer creation (updateHelpLayers).
+	var HELP_AUTO_HIDE_MS=12000;   // auto-shown placards hide after this long.
+	function helpEnabled()
+	{
+		var opts=Module.ysfwVrOptions||{};
+		return false!==opts.help;
+	}
+	function showHelp()
+	{
+		vr.help.visible=true;
+		vr.help.shownAt=(typeof performance!=='undefined' ? performance.now() : Date.now());
+	}
+	// Thumbstick-click (xr-standard buttons[3]) press edge on EITHER hand
+	// toggles both placards. A manual show (toggling back on) disarms the
+	// auto-hide timer (shownAt=0) -- only the initial auto-show times out on
+	// its own; once the pilot has explicitly asked to see it again it stays
+	// up until toggled off.
+	function toggleHelp(rawSrc)
+	{
+		vr.help.visible=!vr.help.visible;
+		if(vr.help.visible)
+		{
+			vr.help.shownAt=0;
+		}
+		vrHapticPulse(rawSrc);
+	}
+	function updateHelpAutoHide()
+	{
+		if(!vr.help.visible || 0===vr.help.shownAt)
+		{
+			return;
+		}
+		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
+		if(now-vr.help.shownAt>=HELP_AUTO_HIDE_MS)
+		{
+			vr.help.visible=false;
+		}
+	}
+
 	// The shared per-controller update.  entry is the plain data shape;
 	// viewerQuat is the headset orientation this frame ({x,y,z,w}, used only
 	// by the left/throttle hand); rawSrc is the real XRInputSource if this
@@ -838,6 +908,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var bPressed=!!(entry.buttons && entry.buttons.b);
 			vrKeyEdge('KeyB',bPressed); // Default spoiler/air-brake key.
 			vr.ctl.rightB=bPressed;
+
+			// Thumbstick click (xr-standard buttons[3]): toggles the help
+			// placards on the press edge, either hand (see toggleHelp).
+			var rStickBtn=!!(entry.buttons && entry.buttons.stick);
+			if(rStickBtn && !vr.help.stickPrev.right)
+			{
+				toggleHelp(rawSrc);
+			}
+			vr.help.stickPrev.right=rStickBtn;
 		}
 		else if('left'===entry.hand)
 		{
@@ -958,6 +1037,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 				}
 			}
 			vr.ctl.leftTrigger=ltriggerPressed;
+
+			// Thumbstick click, same toggle as the right hand above.
+			var lStickBtn=!!(entry.buttons && entry.buttons.stick);
+			if(lStickBtn && !vr.help.stickPrev.left)
+			{
+				toggleHelp(rawSrc);
+			}
+			vr.help.stickPrev.left=lStickBtn;
 		}
 	}
 
@@ -967,6 +1054,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 	function updateControllers(frame,pose)
 	{
 		var viewerQuat=pose.transform.orientation;
+		// Reset both hands' grip pose before the loop: a hand with no source
+		// (or no pose) this frame leaves its entry null, telling
+		// updateHelpLayers to skip that hand's placard transform update
+		// rather than snapping it to a stale position.
+		vr.ctl.gripPose.right=null;
+		vr.ctl.gripPose.left=null;
 		var sources=frame.session.inputSources;
 		for(var i=0; i<sources.length; ++i)
 		{
@@ -993,16 +1086,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// are the touchpad, if present). Default to 0 if the gamepad
 			// exposes fewer axes than that (some controllers/emulators don't).
 			var thumb=[gp.axes[2]||0,gp.axes[3]||0];
+			var gpos=gpose.transform.position,gori=gpose.transform.orientation;
+			// Plain copy for the help-placard billboard transform
+			// (updateHelpLayers, called right after this loop each frame) --
+			// same "copy the read-only DOMPoint fields out" pattern as
+			// vr.lastViewerPose in onXRFrame.
+			vr.ctl.gripPose[hand]={pos:{x:gpos.x,y:gpos.y,z:gpos.z},quat:{x:gori.x,y:gori.y,z:gori.z,w:gori.w}};
 			processControllerPlain({
 				hand:hand,
-				pos:gpose.transform.position,
-				quat:gpose.transform.orientation,
+				pos:gpos,
+				quat:gori,
 				squeeze:squeeze,
 				trigger:trigger,
 				thumb:thumb,
 				buttons:{
 					a:!!(gp.buttons[4] && gp.buttons[4].pressed),
-					b:!!(gp.buttons[5] && gp.buttons[5].pressed)
+					b:!!(gp.buttons[5] && gp.buttons[5].pressed),
+					// xr-standard buttons[3] = thumbstick click (help toggle).
+					stick:!!(gp.buttons[3] && gp.buttons[3].pressed)
 				}
 			},viewerQuat,src);
 		}
@@ -1437,10 +1538,306 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		if(layersChanged)
 		{
-			var layers=[vr.mvLayer];
-			if(vr.dialRes.right && vr.dialRes.right.inLayers){ layers.push(vr.dialRes.right.quad); }
-			if(vr.dialRes.left && vr.dialRes.left.inLayers){ layers.push(vr.dialRes.left.quad); }
-			try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
+			syncRenderStateLayers();
+		}
+	}
+
+	// Rebuilds session.renderState.layers from scratch out of every quad
+	// currently marked inLayers (dial + help placards, both hands) plus the
+	// projection layer first/background.  Dial and help visuals are updated
+	// from separate functions (updateDialLayers/updateHelpLayers) that can
+	// each change independently, so neither may build the array from just
+	// its own state -- doing so would silently drop the other's quad the
+	// next time only one of them changes (the array is not additive across
+	// calls, WebXR replaces the whole list each updateRenderState).
+	function syncRenderStateLayers()
+	{
+		var layers=[vr.mvLayer];
+		if(vr.dialRes.right && vr.dialRes.right.inLayers){ layers.push(vr.dialRes.right.quad); }
+		if(vr.dialRes.left && vr.dialRes.left.inLayers){ layers.push(vr.dialRes.left.quad); }
+		if(vr.helpRes.right && vr.helpRes.right.inLayers){ layers.push(vr.helpRes.right.quad); }
+		if(vr.helpRes.left && vr.helpRes.left.inLayers){ layers.push(vr.helpRes.left.quad); }
+		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
+	}
+
+	// ---- Help placards: per-hand controller diagram, grip-following -------
+	// Layers-path only (vr.mvBinding), same best-effort try/catch discipline
+	// as the dial quads above: any failure here leaves the toggle/visibility
+	// state (vr.help, updated from processControllerPlain) fully working,
+	// just without the in-headset visual.
+	//
+	// Content is static per hand (drawn once into res.canvas and never
+	// redrawn -- there is no live game state to reflect, unlike the dial),
+	// so all the per-frame work is just repositioning the quad to follow
+	// that hand's grip pose.
+	var HELP_CANVAS_SIZE=384;
+	var HELP_QUAD_SIZE=0.14;      // metres, both width and height.
+	var HELP_UP_OFFSET=0.12;      // metres above the grip pose.
+	var HELP_ROWS={
+		right:[
+			{cx:80, cy:92,  label:'スティック',label2:'ダイヤル選択'},
+			{cx:64, cy:132, label:'A',        label2:'ギア(長押し:リセンター)'},
+			{cx:96, cy:132, label:'B',        label2:'ブレーキ'},
+			{cx:80, cy:206, label:'トリガー',  label2:'選択機能(既定:Gun)・GO'},
+			{cx:80, cy:252, label:'グリップ',  label2:'操縦桿(手首で操舵)'}
+		],
+		left:[
+			{cx:80, cy:92,  label:'スティック',label2:'ダイヤル選択'},
+			{cx:64, cy:132, label:'X',        label2:'フラップ下げ'},
+			{cx:96, cy:132, label:'Y',        label2:'フラップ上げ'},
+			{cx:80, cy:206, label:'トリガー',  label2:'左ダイヤル機能'},
+			{cx:80, cy:252, label:'グリップ',  label2:'スロットル(押込み過ぎでAB)'}
+		]
+	};
+	var HELP_FOOTER='グリップ2度握り = 保持(離しても効いたまま)';
+	function roundRectPath(ctx,x,y,w,h,r)
+	{
+		ctx.beginPath();
+		if(ctx.roundRect)
+		{
+			ctx.roundRect(x,y,w,h,r);
+		}
+		else
+		{
+			// Fallback for a 2D context without roundRect (older browsers) --
+			// not expected on a Quest browser, but cheap to cover.
+			ctx.moveTo(x+r,y);
+			ctx.arcTo(x+w,y,x+w,y+h,r);
+			ctx.arcTo(x+w,y+h,x,y+h,r);
+			ctx.arcTo(x,y+h,x,y,r);
+			ctx.arcTo(x,y,x+w,y,r);
+			ctx.closePath();
+		}
+	}
+	// Stylized Touch-controller silhouette (ring + body + thumbstick + two
+	// face buttons + trigger + grip wedges) -- deliberately not mirrored
+	// between hands (both callout sets, HELP_ROWS above, point at the same
+	// simple shapes; only the labels differ).
+	function drawControllerGlyph(ctx)
+	{
+		ctx.lineWidth=3;
+		ctx.strokeStyle='rgba(230,237,243,0.85)';
+		// Tracking ring (top).
+		ctx.beginPath();
+		ctx.ellipse(80,58,46,20,0,0,2*Math.PI);
+		ctx.stroke();
+		// Body/handle.
+		ctx.fillStyle='rgba(60,72,90,0.55)';
+		ctx.beginPath();
+		ctx.ellipse(80,165,40,85,0,0,2*Math.PI);
+		ctx.fill();
+		ctx.stroke();
+		// Thumbstick.
+		ctx.fillStyle='rgba(77,163,255,0.85)';
+		ctx.beginPath();
+		ctx.arc(80,92,15,0,2*Math.PI);
+		ctx.fill();
+		ctx.stroke();
+		// Face buttons.
+		ctx.fillStyle='rgba(143,163,187,0.55)';
+		ctx.beginPath(); ctx.arc(64,132,11,0,2*Math.PI); ctx.fill(); ctx.stroke();
+		ctx.beginPath(); ctx.arc(96,132,11,0,2*Math.PI); ctx.fill(); ctx.stroke();
+		// Trigger (front, index finger).
+		ctx.fillStyle='rgba(255,224,130,0.85)';
+		ctx.beginPath();
+		ctx.moveTo(58,190); ctx.lineTo(102,190); ctx.lineTo(92,214); ctx.lineTo(68,214);
+		ctx.closePath();
+		ctx.fill(); ctx.stroke();
+		// Grip (side, squeeze).
+		ctx.fillStyle='rgba(255,224,130,0.55)';
+		ctx.beginPath();
+		ctx.moveTo(48,228); ctx.lineTo(112,228); ctx.lineTo(104,268); ctx.lineTo(56,268);
+		ctx.closePath();
+		ctx.fill(); ctx.stroke();
+	}
+	// Drawn once per hand at resource-creation time (see ensureHelpResources)
+	// -- the content is static, matching the dial's dark-translucent-panel /
+	// white-and-blue-accent visual language (drawDial above) but laid out as
+	// a controller diagram with leader-line callouts instead of a radial menu.
+	function drawHelpCanvas(ctx,hand)
+	{
+		var w=HELP_CANVAS_SIZE,h=HELP_CANVAS_SIZE;
+		ctx.clearRect(0,0,w,h);
+		ctx.fillStyle='rgba(10,14,20,0.6)';
+		roundRectPath(ctx,4,4,w-8,h-8,16);
+		ctx.fill();
+		ctx.strokeStyle='rgba(230,237,243,0.35)';
+		ctx.lineWidth=2;
+		ctx.stroke();
+
+		ctx.textAlign='center';
+		ctx.textBaseline='middle';
+		ctx.fillStyle='rgba(77,163,255,0.95)';
+		ctx.font='bold 22px sans-serif';
+		ctx.fillText('right'===hand ? 'R' : 'L',w/2,26);
+
+		drawControllerGlyph(ctx);
+
+		var rows=HELP_ROWS[hand];
+		var textX=150,rowH=58,rowY0=78;
+		ctx.textAlign='left';
+		for(var i=0; i<rows.length; ++i)
+		{
+			var row=rows[i];
+			var rowY=rowY0+i*rowH;
+			ctx.strokeStyle='rgba(230,237,243,0.5)';
+			ctx.lineWidth=2;
+			ctx.beginPath();
+			ctx.moveTo(row.cx,row.cy);
+			ctx.lineTo(textX-10,rowY);
+			ctx.stroke();
+			ctx.beginPath();
+			ctx.arc(row.cx,row.cy,3,0,2*Math.PI);
+			ctx.fillStyle='rgba(230,237,243,0.9)';
+			ctx.fill();
+
+			ctx.fillStyle='#fff';
+			ctx.font='bold 19px sans-serif';
+			ctx.fillText(row.label,textX,rowY-9);
+			ctx.fillStyle='rgba(210,220,230,0.9)';
+			ctx.font='14px sans-serif';
+			ctx.fillText(row.label2,textX,rowY+11);
+		}
+
+		ctx.textAlign='center';
+		ctx.fillStyle='rgba(255,224,130,0.9)';
+		ctx.font='bold 13px sans-serif';
+		ctx.fillText(HELP_FOOTER,w/2,h-16);
+	}
+	function ensureHelpResources(hand)
+	{
+		if(undefined!==vr.helpRes[hand])
+		{
+			return vr.helpRes[hand]; // cached: an object, or false (unavailable).
+		}
+		var res=false;
+		try
+		{
+			if(vr.mvBinding && vr.refSpace)
+			{
+				var canvas=document.createElement('canvas');
+				canvas.width=HELP_CANVAS_SIZE;
+				canvas.height=HELP_CANVAS_SIZE;
+				var quad=vr.mvBinding.createQuadLayer({
+					// vr.refSpace, NOT viewerSpace: the placard follows the
+					// controller's grip pose every frame (see
+					// updateHelpTransform), so it must live in the same space
+					// that pose is expressed in.
+					space:vr.refSpace,
+					viewPixelWidth:HELP_CANVAS_SIZE,
+					viewPixelHeight:HELP_CANVAS_SIZE,
+					layout:'mono',
+					width:HELP_QUAD_SIZE,
+					height:HELP_QUAD_SIZE,
+					// Placeholder transform; overwritten every frame once a
+					// grip pose exists (updateHelpTransform). Origin is a
+					// harmless default for the one frame before that.
+					transform:new XRRigidTransform({x:0,y:0,z:0})
+				});
+				try
+				{
+					if('blendTextureSourceAlpha' in quad)
+					{
+						quad.blendTextureSourceAlpha=true;
+					}
+				}catch(e){}
+				res={canvas:canvas,ctx:canvas.getContext('2d'),quad:quad,inLayers:false,drawn:false};
+			}
+		}
+		catch(e)
+		{
+			console.warn('[vr] help quad layer unavailable ('+hand+'): '+(e&&e.message?e.message:e));
+			res=false;
+		}
+		vr.helpRes[hand]=res;
+		return res;
+	}
+	// Billboards the placard to face the viewer, yaw-only (stays upright):
+	// rotates the quad's local +Z axis (its front face, per the same
+	// identity-orientation convention the head-locked dial quads rely on --
+	// see ensureDialResources's transform) to point from the placard's
+	// position toward the viewer's, in the horizontal plane only. Reuses the
+	// yawOnlyQuatFromOrientation derivation (see its doc comment): a pure
+	// yaw-about-world-Y quaternion is (0,sin(theta/2),0,cos(theta/2)); here
+	// theta is derived directly from the horizontal direction-to-viewer
+	// vector instead of from an orientation quaternion's forward vector.
+	function updateHelpTransform(res,gripPose,viewerPos)
+	{
+		var px=gripPose.pos.x,py=gripPose.pos.y+HELP_UP_OFFSET,pz=gripPose.pos.z;
+		var dx=viewerPos.x-px,dz=viewerPos.z-pz;
+		var len=Math.sqrt(dx*dx+dz*dz);
+		var yawQ={x:0,y:0,z:0,w:1};
+		if(1e-4<len)
+		{
+			var theta=Math.atan2(dx/len,dz/len);
+			var half=theta/2;
+			yawQ={x:0,y:Math.sin(half),z:0,w:Math.cos(half)};
+		}
+		try
+		{
+			res.quad.transform=new XRRigidTransform({x:px,y:py,z:pz},yawQ);
+		}
+		catch(e){}
+	}
+	// Per-frame help-placard maintenance, the help counterpart of
+	// updateDialLayers above: create resources lazily, draw once (content is
+	// static), keep inLayers/session.renderState.layers in sync with
+	// vr.help.visible, and reposition each visible hand's quad from its grip
+	// pose every frame (skipping a hand with no pose this frame, see
+	// vr.ctl.gripPose's doc comment in the initial vr.ctl object literal).
+	function updateHelpLayers(frame)
+	{
+		if(!vr.mvBinding || !helpEnabled())
+		{
+			return; // No layers support, or the ?vrhelp=0 kill switch.
+		}
+		var hands=['right','left'],layersChanged=false;
+		for(var i=0; i<hands.length; ++i)
+		{
+			var hand=hands[i];
+			var res=vr.helpRes[hand];
+			if(!vr.help.visible)
+			{
+				if(res && res.inLayers)
+				{
+					res.inLayers=false;
+					layersChanged=true;
+				}
+				continue;
+			}
+			res=ensureHelpResources(hand);
+			if(!res)
+			{
+				continue; // No quad-layer support: toggle state still works, just no visual.
+			}
+			if(!res.inLayers)
+			{
+				res.inLayers=true;
+				layersChanged=true;
+			}
+			if(!res.drawn)
+			{
+				try
+				{
+					drawHelpCanvas(res.ctx,hand);
+					var sub=vr.mvBinding.getSubImage(res.quad,frame);
+					uploadCanvasToSubImage(res.canvas,sub);
+					res.drawn=true;
+				}
+				catch(e){} // Leave res.drawn false so the next frame retries.
+			}
+			var gp=vr.ctl.gripPose[hand];
+			if(gp && vr.lastViewerPose)
+			{
+				updateHelpTransform(res,gp,vr.lastViewerPose.position);
+			}
+			// else: no pose for this hand this frame -- leave the quad's
+			// transform exactly where it last was rather than snapping it
+			// somewhere wrong.
+		}
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
 		}
 	}
 
@@ -1481,6 +1878,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 			return;
 		}
 
+		// Help-placard auto-hide: wall-clock timer, independent of pose/
+		// layers support, so it still runs every real XR frame regardless of
+		// which path below is taken.
+		updateHelpAutoHide();
+
 		var pose=frame.getViewerPose(vr.refSpace);
 		if(pose)
 		{
@@ -1502,6 +1904,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				writeEyeDataMv(pose);
 				updateControllers(frame,pose);
 				updateDialLayers(frame);
+				updateHelpLayers(frame);
 			}
 		}
 		else
@@ -1715,8 +2118,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.leftTrigger=false;
 					vr.ctl.dial.right={sel:'up',engaged:null,visible:false,hideAt:0};
 					vr.ctl.dial.left={sel:'up',engaged:null,visible:false,hideAt:0};
+					vr.ctl.gripPose={right:null,left:null};
 					vr.viewerSpace=null;
 					vr.dialRes={right:undefined,left:undefined};
+					vr.helpRes={right:undefined,left:undefined};
+					vr.help={visible:false,shownAt:0,stickPrev:{right:false,left:false}};
 
 					teardownHud();
 					_YsfwVrSetPresenting(0);
@@ -1736,6 +2142,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
 				vr.simSilentFrames=0;
+				// Auto-show both help placards at session start (see
+				// showHelp/updateHelpAutoHide); ?vrhelp=0 kill switch skips it.
+				if(helpEnabled())
+				{
+					showHelp();
+				}
 				session.requestAnimationFrame(onXRFrame);
 				if(Module.onVrStart)
 				{
@@ -1779,7 +2191,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// first so FsVrIsActive is true and the engine trusts the block).
 	//   list: array of {hand:'left'|'right', pos:[x,y,z], quat:[x,y,z,w],
 	//         squeeze:0..1, trigger:0..1, thumb:[x,y] (optional, dial stick),
-	//         buttons:{a:bool,b:bool}}
+	//         buttons:{a:bool,b:bool,stick:bool (optional, thumbstick click --
+	//         help-placard toggle, see toggleHelp)}}
 	//   viewerQuat: optional [x,y,z,w] headset orientation (default identity,
 	//         forward -Z).
 	// Goes through the exact same processControllerPlain as the real XR path
@@ -1871,6 +2284,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		_YsfwVrSetMultiview(1);
 		setupHud();
 		_YsfwVrSetPresenting(1);
+		// Headless stand-in for a real session start (see vr.enter): also
+		// auto-shows the help placards, so scripts/smoke-vrctl.mjs can drive
+		// and assert the toggle state (vr.help) without a live XR session --
+		// see Group 11.
+		if(helpEnabled())
+		{
+			showHelp();
+		}
 		return 'ok';
 	};
 	vr.readMultiviewStats=function(layer)
