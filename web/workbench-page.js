@@ -37,7 +37,7 @@ const S = ({
       },
       {
         page: 'studio-pack.html', glyph: '📦', title: 'パックスタジオ',
-        desc: '入っているパック全部の管理と、作品のzip書き出し・合成・配布用パック作り。zipの取り込みもここ。',
+        desc: '自分の機体とマップを選んでまとめた「パック」を作る。パックも1つの作品として棚に並び、配布用zipに書き出せる。',
       },
     ],
     open: '開く',
@@ -67,7 +67,7 @@ const S = ({
       },
       {
         page: 'studio-pack.html', glyph: '📦', title: 'Pack Studio',
-        desc: 'Manage every installed pack, export creations as zips, merge them into distributable packs, and import zips.',
+        desc: 'Curate your own aircraft and maps into a pack — itself a work on your shelf, exportable as a distributable zip.',
       },
     ],
     open: 'Open',
@@ -180,11 +180,15 @@ function creationsCard() {
         });
       }
       // ✏️ opens the matching studio with ?edit=<record id> — the studio pulls
-      // the recipe + payload back out of OPFS itself.
+      // the recipe + payload back out of OPFS itself.  Routing needs the recipe
+      // TYPE (a pack of aircraft looks 'aircraft' by category), so peek at it.
       if (it.recipeSha) {
         const ed = btn(S.libEdit, S.libEditTitle, false);
-        ed.addEventListener('click', () => {
-          const page = it.kind === 'scenery' ? 'studio-scenery.html' : 'studio-aircraft.html';
+        ed.addEventListener('click', async () => {
+          let type = it.kind === 'scenery' ? 'scenery' : 'aircraft';
+          try { type = (await loadRecipe(it.recipeSha)).type || type; } catch (e) {}
+          const page = type === 'pack' ? 'studio-pack.html'
+            : type === 'scenery' ? 'studio-scenery.html' : 'studio-aircraft.html';
           location.href = pageUrl(page, { edit: it.id });
         });
       }

@@ -225,12 +225,28 @@ console.log('library: delete works (back to 3 creations)');
   const scCounts = await page.evaluate(() => window.ysfwStudio.counts());
   if (!scCounts || !(scCounts.islands >= 1)) die('scenery studio did not restore islands from ?edit: ' + JSON.stringify(scCounts));
 
+  // Pack studio: curate every creation into a pack-as-a-work, then re-open it.
   if ((await bootStudio('studio-pack.html')) !== 'pack') die('pack studio wrong page id');
-  const packCount = await page.evaluate(() => window.ysfwStudio.count());
-  if (!(packCount >= 3)) die('pack studio inventory did not list the installed records: ' + packCount);
+  const packRes = await page.evaluate(() => window.ysfwStudio.composeAll('WB_PACKWORK'));
+  if (!packRes || !(packRes.members >= 2)) die('pack compose failed: ' + JSON.stringify(packRes));
+  const packLib = await page.evaluate(async () => {
+    const lib = await window.ysfwWorkbench.listCreations();
+    const p = lib.find((c) => c.name === 'WB_PACKWORK');
+    if (!p) return null;
+    const recipe = await window.ysfwWorkbench.loadRecipe(p.recipeSha);
+    return { id: p.id, type: recipe.type, members: (recipe.members || []).length };
+  });
+  if (!packLib || packLib.type !== 'pack') die('pack work missing from the library: ' + JSON.stringify(packLib));
+  if ((await bootStudio('studio-pack.html', { edit: packLib.id })) !== 'pack') die('pack studio edit reload failed');
+  const packCounts = await page.evaluate(() => window.ysfwStudio.counts());
+  if (!(packCounts.members === packLib.members && packCounts.members >= 2)) {
+    die('pack edit did not restore members: ' + JSON.stringify({ packCounts, packLib }));
+  }
+  await page.evaluate((id) => window.ysfwWorkbench.deleteCreation(id), packLib.id);
 
-  console.log('studios: aircraft/scenery/pack booted; ?edit restored ' +
-    acEntries.length + ' aircraft entries + ' + scCounts.islands + ' island(s); inventory=' + packCount);
+  console.log('studios: aircraft/scenery booted with ?edit restore (' +
+    acEntries.length + ' entries + ' + scCounts.islands + ' island(s)); pack work saved+reopened (' +
+    packCounts.members + ' members)');
 }
 
 // ---- game page: fly what the workbench made (the OPFS bridge) -------------------

@@ -674,8 +674,8 @@ async function main() {
     try {
       const c = await loadCreation(editId);
       if (c && c.recipe) {
-        if (c.recipe.type === 'scenery') {
-          location.replace(pageUrl('studio-scenery.html', { edit: editId }));
+        if (c.recipe.type === 'scenery' || c.recipe.type === 'pack') {
+          location.replace(pageUrl(c.recipe.type === 'pack' ? 'studio-pack.html' : 'studio-scenery.html', { edit: editId }));
           return;
         }
         entries = await packPayload(editId, 'aircraft/');

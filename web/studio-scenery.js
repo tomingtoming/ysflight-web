@@ -436,9 +436,10 @@ async function main() {
   if (editId) {
     const c = await loadCreation(editId);
     if (c && c.recipe) {
-      if (c.recipe.type === 'aircraft') {
-        // Wrong studio — redirect without history entry.
-        location.replace(pageUrl('studio-aircraft.html', { edit: editId }));
+      if (c.recipe.type !== 'scenery') {
+        // Wrong studio — redirect without history entry.  Aircraft recipes
+        // carry no type field; pack recipes say 'pack'.
+        location.replace(pageUrl(c.recipe.type === 'pack' ? 'studio-pack.html' : 'studio-aircraft.html', { edit: editId }));
         return;
       }
       if (c.recipe.type === 'scenery') {
