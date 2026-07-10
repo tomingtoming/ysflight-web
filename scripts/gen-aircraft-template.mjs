@@ -54,8 +54,8 @@ const GRAY = [176, 184, 196], DARK = [96, 104, 118], BLUE = [40, 80, 220], REDC 
 // {label, cla, geo, hinge (POS=CNT), sta: [[x,y,z,h,p,b,vis],...], children}
 
 const parts = [];
-const P = (label, cla, geo, hinge, sta, children) =>
-  parts.push({ label, cla, geo, hinge: hinge || [0, 0, 0], sta: sta || null, children: children || [] });
+const P = (label, cla, geo, hinge, sta, children, opts) =>
+  parts.push({ label, cla, geo, hinge: hinge || [0, 0, 0], sta: sta || null, children: children || [], bright: !!(opts && opts.bright) });
 
 const zero = [0, 0, 0, 0, 0, 0, 1];
 const rot = (h, p, b, vis = 1) => [0, 0, 0, h, p, b, vis];
@@ -111,10 +111,10 @@ P('Rudder', 8, box([-0.07, 0.07], [0.7, 2.3], [-6.3, -5.4], GRAY), [0, 0, -5.4],
 P('AirBrake', 4, box([-0.4, 0.4], [0.6, 0.68], [-1.2, 0.0], DARK), [0, 0.6, 0.0], [zero, rot(0, DEG(-45), 0)]);
 
 // Afterburner flame (CLA 2): the engine toggles it with the throttle.
-P('Afterburner', 2, box([-0.3, 0.3], [-0.35, 0.35], [-6.3, -5.5], ORANGE), null, [zero, zero]);
+P('Afterburner', 2, box([-0.3, 0.3], [-0.35, 0.35], [-6.3, -5.5], ORANGE), null, [zero, zero], null, { bright: true });
 
 // Beacon (CLA 30, a nav-light class): the paint shop auto-protects these.
-P('Beacon', 30, box([-0.05, 0.05], [1.05, 1.15], [2.6, 2.8], REDC), null, [zero, zero]);
+P('Beacon', 30, box([-0.05, 0.05], [1.05, 1.15], [2.6, 2.8], REDC), null, [zero, zero], null, { bright: true });
 
 // Propeller (CLA 18, slow-spin blades): the engine SPINS it about the nose
 // axis; the glb carries a 1s full-turn loop so Blender shows it turning.
@@ -153,6 +153,7 @@ for (const p of parts) {
   for (const v of p.geo.v) lines.push('V ' + v.map(f6).join(' '));
   for (const f of p.geo.faces) {
     lines.push('F');
+    if (p.bright) lines.push('B'); // glowing part (AB flame, lights)
     lines.push('V ' + f.idx.join(' '));
     lines.push('C ' + f.color.join(' '));
     lines.push('E');
