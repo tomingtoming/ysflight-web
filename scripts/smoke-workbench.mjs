@@ -229,6 +229,14 @@ console.log('library: delete works (back to 3 creations)');
   if ((await bootStudio('studio-pack.html')) !== 'pack') die('pack studio wrong page id');
   const packRes = await page.evaluate(() => window.ysfwStudio.composeAll('WB_PACKWORK'));
   if (!packRes || !(packRes.members >= 2)) die('pack compose failed: ' + JSON.stringify(packRes));
+  // The library/recipe API lives on the hub page — hop back there to inspect.
+  const backToHub = async () => {
+    await page.goto(wbUrl.toString());
+    await page
+      .waitForFunction(() => window.ysfwWorkbench && window.ysfwWorkbench.ready === true, { timeout: 30000 })
+      .catch(() => die('hub page never became ready after the pack compose'));
+  };
+  await backToHub();
   const packLib = await page.evaluate(async () => {
     const lib = await window.ysfwWorkbench.listCreations();
     const p = lib.find((c) => c.name === 'WB_PACKWORK');
@@ -242,6 +250,9 @@ console.log('library: delete works (back to 3 creations)');
   if (!(packCounts.members === packLib.members && packCounts.members >= 2)) {
     die('pack edit did not restore members: ' + JSON.stringify({ packCounts, packLib }));
   }
+  // Delete the pack work (its duplicate identities must not shadow the flight
+  // checks below) — back on the hub, whose API owns deletion.
+  await backToHub();
   await page.evaluate((id) => window.ysfwWorkbench.deleteCreation(id), packLib.id);
 
   console.log('studios: aircraft/scenery booted with ?edit restore (' +
