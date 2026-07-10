@@ -102,16 +102,22 @@ export function dnmToGlb(dnmBytes) {
 
   const materials = [];
   const materialIx = new Map();
-  const materialFor = (color) => {
-    const key = color.join(',');
+  // Bright (SRF 'B') faces — afterburner flames, glowing bits — become
+  // EMISSIVE glTF materials, so Blender shows them glowing and the way back
+  // can restore the B flag.  Losing B shades the flame by scene light, which
+  // is exactly the broken-looking afterburner bug.
+  const materialFor = (color, unlit) => {
+    const key = color.join(',') + (unlit ? '|B' : '');
     if (materialIx.has(key)) return materialIx.get(key);
     const ix = materials.length;
+    const c = [color[0] / 255, color[1] / 255, color[2] / 255];
     materials.push({
-      name: 'C_' + key.replace(/,/g, '_'),
+      name: 'C_' + color.join('_') + (unlit ? '_B' : ''),
       pbrMetallicRoughness: {
-        baseColorFactor: [color[0] / 255, color[1] / 255, color[2] / 255, 1],
+        baseColorFactor: unlit ? [0, 0, 0, 1] : [...c, 1],
         metallicFactor: 0, roughnessFactor: 0.9,
       },
+      ...(unlit ? { emissiveFactor: c, extras: { ysflight: { bright: true } } } : {}),
       doubleSided: true,
     });
     materialIx.set(key, ix);
@@ -144,9 +150,9 @@ export function dnmToGlb(dnmBytes) {
     const byColor = new Map();
     for (const f of srf.faces) {
       if (f.idx.length < 3) continue;
-      const key = (f.color || [128, 128, 128]).join(',');
+      const key = (f.color || [128, 128, 128]).join(',') + (f.unlit ? '|B' : '');
       let bucket = byColor.get(key);
-      if (!bucket) { bucket = { color: f.color || [128, 128, 128], pos: [] }; byColor.set(key, bucket); }
+      if (!bucket) { bucket = { color: f.color || [128, 128, 128], unlit: !!f.unlit, pos: [] }; byColor.set(key, bucket); }
       for (let i = 1; i + 1 < f.idx.length; i++) {
         for (const vi of [f.idx[0], f.idx[i], f.idx[i + 1]]) {
           const v = srf.vertices[vi];
@@ -155,7 +161,7 @@ export function dnmToGlb(dnmBytes) {
       }
     }
     const primitives = [];
-    for (const { color, pos } of byColor.values()) {
+    for (const { color, unlit, pos } of byColor.values()) {
       if (!pos.length) continue;
       const nrm = new Array(pos.length);
       for (let t = 0; t < pos.length; t += 9) {
@@ -175,7 +181,7 @@ export function dnmToGlb(dnmBytes) {
           POSITION: pushAcc(pos, 'VEC3', { vertex: true, minmax: [min, max] }),
           NORMAL: pushAcc(nrm, 'VEC3', { vertex: true }),
         },
-        material: materialFor(color),
+        material: materialFor(color, unlit),
       });
     }
     return primitives.length ? { name, primitives } : null;
@@ -367,7 +373,12 @@ function normalizeGltf1(g) {
     const values = (m.extensions && m.extensions.KHR_materials_common && m.extensions.KHR_materials_common.values) || m.values || {};
     const d = values.diffuse;
     const color = Array.isArray(d) && d.length >= 3 ? d.slice(0, 4) : [0.8, 0.8, 0.8, 1];
-    return { name, pbrMetallicRoughness: { baseColorFactor: color.length === 4 ? color : [...color, 1] } };
+    const em = values.emission;
+    return {
+      name,
+      pbrMetallicRoughness: { baseColorFactor: color.length === 4 ? color : [...color, 1] },
+      ...(Array.isArray(em) && Math.max(...em.slice(0, 3)) > 0 ? { emissiveFactor: em.slice(0, 3) } : {}),
+    };
   });
   const meshes = mshs.names.map((name) => ({
     name,
@@ -493,7 +504,15 @@ export function glbToDnm(glbBytes) {
       const idx = prim.indices !== undefined ? readAccessor(prim.indices) : pos.map((_, i) => i);
       const mat = prim.material !== undefined ? json.materials[prim.material] : null;
       const bc = (mat && mat.pbrMetallicRoughness && mat.pbrMetallicRoughness.baseColorFactor) || [0.8, 0.8, 0.8, 1];
-      const color = bc.slice(0, 3).map((v) => Math.max(0, Math.min(255, Math.round(v * 255))));
+      // Bright (SRF 'B') faces round-trip as emissive materials — restore the
+      // flag, and take the color from the emissive factor when the base color
+      // was blacked out (our own convention) or the emissive clearly dominates.
+      const em = (mat && mat.emissiveFactor) || [0, 0, 0];
+      const matYs = mat && mat.extras && mat.extras.ysflight;
+      const unlit = !!(matYs && (typeof matYs === 'string' ? /"bright":\s*true/.test(matYs) : matYs.bright)) ||
+        Math.max(...em) > Math.max(...bc.slice(0, 3));
+      const src = unlit && Math.max(...em) > 0 ? em : bc;
+      const color = src.slice(0, 3).map((v) => Math.max(0, Math.min(255, Math.round(v * 255))));
       const vix = (p) => {
         const key = p.map((v) => Math.round(v * 1e6) / 1e6).join(',');
         let ix = vmap.get(key);
@@ -503,7 +522,7 @@ export function glbToDnm(glbBytes) {
       for (let t = 0; t + 2 < idx.length; t += 3) {
         const tri = [pos[idx[t]], pos[idx[t + 1]], pos[idx[t + 2]]];
         if (tri.some((p) => !p)) continue;
-        faces.push({ idx: tri.map(vix), color, tri });
+        faces.push({ idx: tri.map(vix), color, unlit, tri });
       }
     }
     const lines = ['SURF'];
@@ -516,6 +535,7 @@ export function glbToDnm(glbBytes) {
       let nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
       const l = Math.hypot(nx, ny, nz) || 1;
       lines.push('F');
+      if (f.unlit) lines.push('B');
       lines.push('V ' + f.idx.join(' '));
       lines.push('N ' + [cx, cy, cz, nx / l, ny / l, nz / l].map(f6).join(' '));
       lines.push('C ' + f.color.join(' '));

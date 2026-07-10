@@ -31,6 +31,16 @@ test('dnm -> glb -> dnm round trip preserves the f22 (nodes, tris, movables)', {
   assert.equal(b.nodes.size, a.nodes.size, 'node count');
   assert.equal(tris(b), tris(a), 'triangle count');
   assert.deepEqual(movables(b), movables(a), 'movable node set');
+  // Bright (SRF 'B') faces — the afterburner flames — must survive as B, in
+  // their original colors, on BOTH afterburner nodes.  (Losing B shades the
+  // flame by scene light: the broken-looking afterburner bug.)
+  for (const label of ['Afterburner-1', 'AfterBurner-2']) {
+    const srf = b.srfByName.get(b.nodes.get(label).srf);
+    assert.ok(srf.faces.length > 0, label + ' has faces');
+    assert.ok(srf.faces.every((f) => f.unlit), label + ': every flame face is bright');
+    const colors = new Set(srf.faces.map((f) => f.color.join(',')));
+    assert.ok(colors.has('255,0,0') && colors.has('255,255,255'), label + ' keeps red+white: ' + [...colors]);
+  }
 });
 
 test('template glb converts and keeps its movable wiring', { skip: !glbToDnm }, () => {
