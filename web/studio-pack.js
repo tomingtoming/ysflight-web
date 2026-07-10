@@ -81,7 +81,7 @@ const S = ({
     delConfirm: (n) => 'Delete "' + n + '"?',
     delDone: (n) => '✓ Deleted "' + n + '"',
     composeTitle: '🧩 Compose Pack',
-    composeSub: 'Merge selected packs' files into one zip.',
+    composeSub: 'Merge the selected packs\' files into one zip.',
     composeSizeHint: (s) => 'Total ' + s,
     composeName: 'Merged pack name',
     composeBtn: 'Merge selected into one zip',
