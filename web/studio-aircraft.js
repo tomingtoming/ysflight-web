@@ -29,7 +29,6 @@ const S = ({
     acIntro: 'モデラーで作った .dnm / .srf と、飛行特性 .dat を1機に組み立てます。.dat が無ければ下の「stockから作る」で。',
     acDrop: '機体のファイル (.dat / .dnm / .srf / .glb) をドロップ / クリックして選択',
     glbImported: (n, k, t) => '✓ ' + n + ' をDNMに変換して取り込みました（' + k + 'ノード・' + t + '三角形）',
-    glbWired: (w) => '＋ 可動部を名前から自動配線: ' + w.map((x) => x.label).join('・') + '（プレビューのスライダーで確認を）',
     glbAutoColl: '＋ 当たり判定を外観から自動生成しました',
     glbAutoDat: (b) => '＋ 飛行特性 (.dat) を ' + b + ' ベースで自動生成しました（下のウィザードで調整可）',
     glbReady: '→ このまま「組み立てて保存」で機体になります',
@@ -113,7 +112,6 @@ const S = ({
     acIntro: 'Combine your modeler-made .dnm / .srf with a flight-model .dat. No .dat? Make one below from a stock base.',
     acDrop: 'Drop aircraft files (.dat / .dnm / .srf / .glb) / click to choose',
     glbImported: (n, k, t) => '✓ Converted ' + n + ' to DNM (' + k + ' nodes, ' + t + ' triangles)',
-    glbWired: (w) => '+ Auto-wired movable parts by name: ' + w.map((x) => x.label).join(', ') + ' (check the preview sliders)',
     glbAutoColl: '+ Generated a collision shell from the visual',
     glbAutoDat: (b) => '+ Generated a flight model (.dat) from ' + b + ' (tune it in the wizard below)',
     glbReady: '→ “Assemble & save” makes it an aircraft as-is',
@@ -400,7 +398,6 @@ function buildAssembleSection(rail) {
           entries.push({ name, bytes: res.dnm });
           glbBase = base;
           const auto = [];
-          if (res.wired && res.wired.length) auto.push(S.glbWired(res.wired));
           if (!entries.some((e) => /\.srf$/i.test(e.name))) {
             const coll = dnmToCollisionSrf(res.dnm);
             entries.push({ name: base + '_coll.srf', bytes: coll });

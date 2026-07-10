@@ -15,7 +15,4 @@ if (!inPath || !outPath) {
 }
 const res = glbToDnm(readFileSync(inPath));
 writeFileSync(outPath, res.dnm);
-console.log(JSON.stringify({
-  out: outPath, nodes: res.nodes, srfs: res.srfs, triangles: res.triangles,
-  wired: (res.wired || []).map((w) => w.label + ':' + w.name),
-}));
+console.log(JSON.stringify({ out: outPath, nodes: res.nodes, srfs: res.srfs, triangles: res.triangles }));
