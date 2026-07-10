@@ -160,6 +160,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// support), object = {canvas,ctx,quad,inLayers} once created.
 		viewerSpace:null,
 		dialRes:{right:undefined,left:undefined},
+		lastRawSrc:{right:null,left:null},
+		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
 		// See fsvr.h / FsVrControlDataPointer for the 16-float block this
 		// feeds, and updateControllers/processControllerPlain below.
@@ -704,6 +706,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				continue; // No pose this frame for this source: skip it.
 			}
+			vr.lastRawSrc[hand]=src; // For state-change haptics (updateStateHaptics).
 			var gp=src.gamepad;
 			var squeeze=(gp.buttons[1] ? gp.buttons[1].value : 0);
 			var trigger=(gp.buttons[0] ? gp.buttons[0].value : 0);
@@ -1062,13 +1065,52 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		return [Math.round(s.gear*100),(s.brake>=0.5?1:0),Math.round(s.flap*100),Math.round(s.wpnType),Math.round(s.wpnCount)].join(',');
 	}
-	function updateDialLayers(frame)
+	// A short haptic click on the hand whose dial owns a state the moment
+	// that state actually changes (gear/brake/weapon = right, flap = left):
+	// tap a dial function, feel the aircraft respond.  States are bucketed so
+	// a gear in transit clicks at departure and arrival, not continuously,
+	// and flap clicks once per 10% notch.  The first valid frame only
+	// initializes (no pulse); invalid state (no player plane) resets.
+	function stateHapticBuckets(s)
 	{
-		if(!vr.mvBinding)
+		return {
+			gear:(s.gear<=0.01 ? 0 : (s.gear>=0.99 ? 2 : 1)),
+			brake:(s.brake>=0.5 ? 1 : 0),
+			flap:Math.round(s.flap*10),
+			wpn:Math.round(s.wpnType)
+		};
+	}
+	function updateStateHaptics(state)
+	{
+		if(!state || !state.valid)
 		{
+			vr.hapticPrev=null;
 			return;
 		}
+		var cur=stateHapticBuckets(state);
+		var prev=vr.hapticPrev;
+		vr.hapticPrev=cur;
+		if(!prev)
+		{
+			return; // First valid frame: initialize silently.
+		}
+		if(prev.gear!==cur.gear || prev.brake!==cur.brake || prev.wpn!==cur.wpn)
+		{
+			vrHapticPulse(vr.lastRawSrc.right);
+		}
+		if(prev.flap!==cur.flap)
+		{
+			vrHapticPulse(vr.lastRawSrc.left);
+		}
+	}
+	function updateDialLayers(frame)
+	{
 		var state=readAircraftStateSnapshot();
+		updateStateHaptics(state);
+		if(!vr.mvBinding)
+		{
+			return; // No layers support: dial visuals unavailable, haptics above still ran.
+		}
 		var stateSig=aircraftStateSig(state);
 		var hands=['right','left'],layersChanged=false;
 		for(var i=0; i<hands.length; ++i)
@@ -1342,6 +1384,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.mvExt=null;
 					vr.mvBinding=null;
 					vr.mvLayer=null;
+					vr.lastRawSrc={right:null,left:null};
+					vr.hapticPrev=null;
 					vr.mvFb=null;
 					if(vr.mvDepth)
 					{
