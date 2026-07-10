@@ -13,8 +13,12 @@
 //     per distinct face color (so Blender shows the paint immediately)
 //   - every YSFLIGHT-specific bit (CLA class, POS, all STA states, CNT) into
 //     each node's `extras.ysflight` — Blender imports extras as custom
-//     properties and round-trips them, which is the seed of the future
-//     glTF -> DNM importer.
+//     properties and round-trips them, which is what scripts/gltf2dnm.mjs
+//     (the way back) reads.
+//   - movable parts (STA states that differ) become glTF ANIMATIONS, one per
+//     CLA class ("Gear", "Flap", "Elevator", ...), keyframed through every
+//     STA state — Blender's timeline plays the gear retracting.  This is why
+//     nodes carry TRS instead of a matrix: animation channels target TRS.
 //
 // Coordinates are exported as-is (DNM is Y-up like glTF; +Z is the tail).
 
@@ -61,14 +65,37 @@ function nodeMatrix(pos, sta, cnt) {
   M = mul(M, T(-(cnt[0] || 0), -(cnt[1] || 0), -(cnt[2] || 0)));
   return M;
 }
-// glTF wants column-major.
-const toColumnMajor = (M) => [
-  M[0], M[4], M[8], M[12],
-  M[1], M[5], M[9], M[13],
-  M[2], M[6], M[10], M[14],
-  M[3], M[7], M[11], M[15],
-];
-const isIdentity = (M) => M.every((v, i) => Math.abs(v - I4()[i]) < 1e-9);
+// Node matrices here are rigid (rotation+translation only), so every one
+// decomposes exactly into glTF translation+rotation — which is REQUIRED for
+// animation: glTF animation channels target TRS, never a raw matrix.
+function matToTQ(M) {
+  const t = [M[3], M[7], M[11]];
+  const m00 = M[0], m01 = M[1], m02 = M[2], m10 = M[4], m11 = M[5], m12 = M[6], m20 = M[8], m21 = M[9], m22 = M[10];
+  const tr = m00 + m11 + m22;
+  let x, y, z, w;
+  if (tr > 0) {
+    const s = Math.sqrt(tr + 1) * 2;
+    w = s / 4; x = (m21 - m12) / s; y = (m02 - m20) / s; z = (m10 - m01) / s;
+  } else if (m00 > m11 && m00 > m22) {
+    const s = Math.sqrt(1 + m00 - m11 - m22) * 2;
+    w = (m21 - m12) / s; x = s / 4; y = (m01 + m10) / s; z = (m02 + m20) / s;
+  } else if (m11 > m22) {
+    const s = Math.sqrt(1 + m11 - m00 - m22) * 2;
+    w = (m02 - m20) / s; x = (m01 + m10) / s; y = s / 4; z = (m12 + m21) / s;
+  } else {
+    const s = Math.sqrt(1 + m22 - m00 - m11) * 2;
+    w = (m10 - m01) / s; x = (m02 + m20) / s; y = (m12 + m21) / s; z = s / 4;
+  }
+  return { t, q: [x, y, z, w] };
+}
+const staDiffers = (sta) => sta && sta.length >= 2 &&
+  sta[0].slice(0, 6).some((v, i) => Math.abs(v - sta[sta.length - 1][i]) > 1e-6);
+// Human-readable animation names per DNM CLA class (ysshelldnmident.h).
+const CLA_NAME = {
+  0: 'Gear', 1: 'VariableGeometryWing', 2: 'Afterburner', 4: 'AirBrake',
+  5: 'Flap', 6: 'Elevator', 7: 'Aileron', 8: 'Rudder', 16: 'Brake',
+  17: 'Spoiler', 21: 'Rotor', 22: 'TailRotor',
+};
 
 // --- geometry: SRF -> primitives grouped by face color ---------------------------
 
@@ -95,19 +122,24 @@ const binParts = [];
 let binLen = 0;
 const bufferViews = [];
 const accessors = [];
-function pushFloats(arr, min, max) {
+const NCOMP = { SCALAR: 1, VEC3: 3, VEC4: 4 };
+function pushAcc(arr, type, opts) {
   const bytes = Buffer.from(new Float32Array(arr).buffer);
   const bv = bufferViews.length;
-  bufferViews.push({ buffer: 0, byteOffset: binLen, byteLength: bytes.length, target: 34962 });
+  bufferViews.push({
+    buffer: 0, byteOffset: binLen, byteLength: bytes.length,
+    ...(opts && opts.vertex ? { target: 34962 } : {}),
+  });
   binParts.push(bytes);
-  binLen += bytes.length; // Float32 triples stay 4-byte aligned
+  binLen += bytes.length; // Float32 stays 4-byte aligned
   const acc = accessors.length;
   accessors.push({
-    bufferView: bv, componentType: 5126, count: arr.length / 3, type: 'VEC3',
-    ...(min && max ? { min, max } : {}),
+    bufferView: bv, componentType: 5126, count: arr.length / NCOMP[type], type,
+    ...(opts && opts.minmax ? { min: opts.minmax[0], max: opts.minmax[1] } : {}),
   });
   return acc;
 }
+const pushFloats = (arr, min, max) => pushAcc(arr, 'VEC3', { vertex: true, ...(min && max ? { minmax: [min, max] } : {}) });
 
 function meshFromSrf(srf, name) {
   // color key -> flat position array (non-indexed, flat-shaded triangles)
@@ -155,23 +187,50 @@ function meshFromSrf(srf, name) {
 const dnm = parseDnm(readFileSync(inPath));
 const gnodes = [];
 const meshes = [];
+const animByName = new Map(); // 'Gear' -> {name, samplers, channels}
 
 function emitNode(label) {
   const n = dnm.nodes.get(label);
   if (!n) return null;
   const node = { name: label };
-  const M = nodeMatrix(n.pos || [0, 0, 0, 0, 0, 0], (n.sta && n.sta[0]) || null, n.cnt || [0, 0, 0]);
-  if (!isIdentity(M)) node.matrix = toColumnMajor(M);
+  const pos = n.pos || [0, 0, 0, 0, 0, 0], cnt = n.cnt || [0, 0, 0];
+  const rest = matToTQ(nodeMatrix(pos, (n.sta && n.sta[0]) || null, cnt));
+  if (rest.t.some((v) => Math.abs(v) > 1e-9)) node.translation = rest.t;
+  if (Math.abs(rest.q[3] - 1) > 1e-9) node.rotation = rest.q;
   const srf = n.srf && dnm.srfByName.get(n.srf);
   if (srf) {
     const mesh = meshFromSrf(srf, n.srf);
     if (mesh) { node.mesh = meshes.length; meshes.push(mesh); }
   }
-  node.extras = { ysflight: { cla: n.cla || 0, pos: n.pos || [], cnt: n.cnt || [], sta: n.sta || [], srf: n.srf || null } };
+  node.extras = { ysflight: { cla: n.cla || 0, pos, cnt, sta: n.sta || [], srf: n.srf || null } };
   const children = (n.children || []).map(emitNode).filter((ix) => ix !== null);
   if (children.length) node.children = children;
   const ix = gnodes.length;
   gnodes.push(node);
+
+  // Movable part (its STA states differ): one glTF animation per CLA class
+  // ("Gear", "Flap", ...) with a keyframe per STA state, 1s apart — Blender
+  // imports each as an action and the timeline plays the part through its
+  // whole range (gear retracting, flaps dropping, ...).
+  if (staDiffers(n.sta)) {
+    const name = CLA_NAME[n.cla] || ('Class' + (n.cla || 0));
+    let anim = animByName.get(name);
+    if (!anim) { anim = { name, samplers: [], channels: [] }; animByName.set(name, anim); }
+    const times = [], ts = [], qs = [];
+    n.sta.forEach((sta, i) => {
+      const { t, q } = matToTQ(nodeMatrix(pos, sta, cnt));
+      times.push(i);
+      ts.push(...t);
+      qs.push(...q);
+    });
+    const input = pushAcc(times, 'SCALAR', { minmax: [[0], [times.length - 1]] });
+    const sT = anim.samplers.length;
+    anim.samplers.push({ input, output: pushAcc(ts, 'VEC3'), interpolation: 'LINEAR' });
+    anim.channels.push({ sampler: sT, target: { node: ix, path: 'translation' } });
+    const sR = anim.samplers.length;
+    anim.samplers.push({ input, output: pushAcc(qs, 'VEC4'), interpolation: 'LINEAR' });
+    anim.channels.push({ sampler: sR, target: { node: ix, path: 'rotation' } });
+  }
   return ix;
 }
 
@@ -191,6 +250,7 @@ const gltf = {
   accessors,
   buffers: [{ byteLength: binLen }],
 };
+if (animByName.size) gltf.animations = [...animByName.values()];
 
 const jsonBytes0 = Buffer.from(JSON.stringify(gltf), 'utf8');
 const jsonPad = (4 - (jsonBytes0.length % 4)) % 4;
@@ -215,5 +275,7 @@ const tris = accessors.filter((a, i) => meshes.some((m) => m.primitives.some((p)
   .reduce((n, a) => n + a.count / 3, 0);
 console.log(JSON.stringify({
   out: outPath, nodes: gnodes.length, meshes: meshes.length,
-  materials: materials.length, triangles: tris, bytes: 12 + 16 + jsonBytes.length + binBytes.length,
+  materials: materials.length, triangles: tris,
+  animations: (gltf.animations || []).map((a) => a.name + ':' + a.channels.length / 2),
+  bytes: 12 + 16 + jsonBytes.length + binBytes.length,
 }));
