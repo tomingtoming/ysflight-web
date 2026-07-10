@@ -55,7 +55,10 @@ const GRAY = [176, 184, 196], DARK = [96, 104, 118], BLUE = [40, 80, 220], REDC 
 
 const parts = [];
 const P = (label, cla, geo, hinge, sta, children, opts) =>
-  parts.push({ label, cla, geo, hinge: hinge || [0, 0, 0], sta: sta || null, children: children || [], bright: !!(opts && opts.bright) });
+  parts.push({
+    label, cla, geo, hinge: hinge || [0, 0, 0], sta: sta || null, children: children || [],
+    bright: !!(opts && opts.bright), za: (opts && opts.za) || 0, // ZA value: 0 = opaque, 255 = invisible
+  });
 
 const zero = [0, 0, 0, 0, 0, 0, 1];
 const rot = (h, p, b, vis = 1) => [0, 0, 0, h, p, b, vis];
@@ -111,7 +114,7 @@ P('Rudder', 8, box([-0.07, 0.07], [0.7, 2.3], [-6.3, -5.4], GRAY), [0, 0, -5.4],
 P('AirBrake', 4, box([-0.4, 0.4], [0.6, 0.68], [-1.2, 0.0], DARK), [0, 0.6, 0.0], [zero, rot(0, DEG(-45), 0)]);
 
 // Afterburner flame (CLA 2): the engine toggles it with the throttle.
-P('Afterburner', 2, box([-0.3, 0.3], [-0.35, 0.35], [-6.3, -5.5], ORANGE), null, [zero, zero], null, { bright: true });
+P('Afterburner', 2, box([-0.3, 0.3], [-0.35, 0.35], [-6.3, -5.5], ORANGE), null, [zero, zero], null, { bright: true, za: 180 });
 
 // Beacon (CLA 30, a nav-light class): the paint shop auto-protects these.
 P('Beacon', 30, box([-0.05, 0.05], [1.05, 1.15], [2.6, 2.8], REDC), null, [zero, zero], null, { bright: true });
@@ -157,6 +160,10 @@ for (const p of parts) {
     lines.push('V ' + f.idx.join(' '));
     lines.push('C ' + f.color.join(' '));
     lines.push('E');
+  }
+  if (p.za > 0) {
+    // Translucency: ZA '<polygon index> <value>' pairs (stock flame idiom).
+    lines.push('ZA ' + p.geo.faces.map((_, i) => i + ' ' + p.za).join(' '));
   }
   out.push('PCK ' + p.label.toLowerCase() + '.srf ' + lines.length);
   out.push(lines.join('\n'));

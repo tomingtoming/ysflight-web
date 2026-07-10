@@ -40,6 +40,13 @@ test('dnm -> glb -> dnm round trip preserves the f22 (nodes, tris, movables)', {
     assert.ok(srf.faces.every((f) => f.unlit), label + ': every flame face is bright');
     const colors = new Set(srf.faces.map((f) => f.color.join(',')));
     assert.ok(colors.has('255,0,0') && colors.has('255,255,255'), label + ' keeps red+white: ' + [...colors]);
+    // ZA translucency survives: stock flame = white core ZA 120 (alpha .53),
+    // red cone ZA 200 (alpha .22).  Losing this renders opaque cones.
+    for (const f of srf.faces) {
+      const expect = f.color[1] === 0 ? (255 - 200) / 255 : (255 - 120) / 255;
+      assert.ok(Math.abs(f.alpha - expect) < 0.01,
+        label + ' ' + f.color.join(',') + ' alpha ' + f.alpha + ' ≈ ' + expect);
+    }
   }
 });
 

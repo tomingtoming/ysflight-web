@@ -106,18 +106,22 @@ export function dnmToGlb(dnmBytes) {
   // EMISSIVE glTF materials, so Blender shows them glowing and the way back
   // can restore the B flag.  Losing B shades the flame by scene light, which
   // is exactly the broken-looking afterburner bug.
-  const materialFor = (color, unlit) => {
-    const key = color.join(',') + (unlit ? '|B' : '');
+  // Translucent faces (SRF 'ZA') carry their alpha in baseColorFactor[3] with
+  // alphaMode BLEND — losing ZA turns the stock flames into opaque cones.
+  const materialFor = (color, unlit, alpha) => {
+    const a = Math.round((alpha === undefined ? 1 : alpha) * 255) / 255;
+    const key = color.join(',') + (unlit ? '|B' : '') + (a < 1 ? '|A' + a : '');
     if (materialIx.has(key)) return materialIx.get(key);
     const ix = materials.length;
     const c = [color[0] / 255, color[1] / 255, color[2] / 255];
     materials.push({
-      name: 'C_' + color.join('_') + (unlit ? '_B' : ''),
+      name: 'C_' + color.join('_') + (unlit ? '_B' : '') + (a < 1 ? '_A' + Math.round(a * 255) : ''),
       pbrMetallicRoughness: {
-        baseColorFactor: unlit ? [0, 0, 0, 1] : [...c, 1],
+        baseColorFactor: unlit ? [0, 0, 0, a] : [...c, a],
         metallicFactor: 0, roughnessFactor: 0.9,
       },
       ...(unlit ? { emissiveFactor: c, extras: { ysflight: { bright: true } } } : {}),
+      ...(a < 1 ? { alphaMode: 'BLEND' } : {}),
       doubleSided: true,
     });
     materialIx.set(key, ix);
@@ -150,9 +154,10 @@ export function dnmToGlb(dnmBytes) {
     const byColor = new Map();
     for (const f of srf.faces) {
       if (f.idx.length < 3) continue;
-      const key = (f.color || [128, 128, 128]).join(',') + (f.unlit ? '|B' : '');
+      const alpha = f.alpha === undefined ? 1 : f.alpha;
+      const key = (f.color || [128, 128, 128]).join(',') + (f.unlit ? '|B' : '') + (alpha < 1 ? '|A' + alpha : '');
       let bucket = byColor.get(key);
-      if (!bucket) { bucket = { color: f.color || [128, 128, 128], unlit: !!f.unlit, pos: [] }; byColor.set(key, bucket); }
+      if (!bucket) { bucket = { color: f.color || [128, 128, 128], unlit: !!f.unlit, alpha, pos: [] }; byColor.set(key, bucket); }
       for (let i = 1; i + 1 < f.idx.length; i++) {
         for (const vi of [f.idx[0], f.idx[i], f.idx[i + 1]]) {
           const v = srf.vertices[vi];
@@ -161,7 +166,7 @@ export function dnmToGlb(dnmBytes) {
       }
     }
     const primitives = [];
-    for (const { color, unlit, pos } of byColor.values()) {
+    for (const { color, unlit, alpha, pos } of byColor.values()) {
       if (!pos.length) continue;
       const nrm = new Array(pos.length);
       for (let t = 0; t < pos.length; t += 9) {
@@ -181,7 +186,7 @@ export function dnmToGlb(dnmBytes) {
           POSITION: pushAcc(pos, 'VEC3', { vertex: true, minmax: [min, max] }),
           NORMAL: pushAcc(nrm, 'VEC3', { vertex: true }),
         },
-        material: materialFor(color, unlit),
+        material: materialFor(color, unlit, alpha),
       });
     }
     return primitives.length ? { name, primitives } : null;
@@ -513,6 +518,8 @@ export function glbToDnm(glbBytes) {
         Math.max(...em) > Math.max(...bc.slice(0, 3));
       const src = unlit && Math.max(...em) > 0 ? em : bc;
       const color = src.slice(0, 3).map((v) => Math.max(0, Math.min(255, Math.round(v * 255))));
+      // Translucency (SRF ZA) comes back from the material's base alpha.
+      const alpha = (mat && mat.alphaMode === 'BLEND' && bc.length >= 4) ? bc[3] : 1;
       const vix = (p) => {
         const key = p.map((v) => Math.round(v * 1e6) / 1e6).join(',');
         let ix = vmap.get(key);
@@ -522,7 +529,7 @@ export function glbToDnm(glbBytes) {
       for (let t = 0; t + 2 < idx.length; t += 3) {
         const tri = [pos[idx[t]], pos[idx[t + 1]], pos[idx[t + 2]]];
         if (tri.some((p) => !p)) continue;
-        faces.push({ idx: tri.map(vix), color, unlit, tri });
+        faces.push({ idx: tri.map(vix), color, unlit, alpha, tri });
       }
     }
     const lines = ['SURF'];
@@ -540,6 +547,15 @@ export function glbToDnm(glbBytes) {
       lines.push('N ' + [cx, cy, cz, nx / l, ny / l, nz / l].map(f6).join(' '));
       lines.push('C ' + f.color.join(' '));
       lines.push('E');
+    }
+    // Translucent faces -> ZA '<polygon index> <value>' pairs (value = 255 -
+    // alpha*255, the engine's convention), chunked like stock files.
+    const za = [];
+    faces.forEach((f, i) => {
+      if (f.alpha !== undefined && f.alpha < 254 / 255) za.push(i, Math.max(0, Math.min(255, Math.round(255 - f.alpha * 255))));
+    });
+    for (let k = 0; k < za.length; k += 30) {
+      lines.push('ZA ' + za.slice(k, k + 30).join(' '));
     }
     return { text: lines.join('\n'), lineCount: lines.length, tris: faces.length };
   };

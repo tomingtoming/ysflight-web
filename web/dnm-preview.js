@@ -48,12 +48,14 @@ export function decodeSrfColor(tok) {
 function parseSrf(lines) {
   const vertices = [];
   const faces = [];
+  let rawFace = 0;
+  const byRaw = new Map(); // raw polygon index (what ZA refers to) -> faces[] index
   let i = 0;
   for (; i < lines.length; i++) {
     const t = lines[i].trim().split(/\s+/);
     if (t[0] === 'V') vertices.push([parseFloat(t[1]), parseFloat(t[2]), parseFloat(t[3])]);
     else if (t[0] === 'F') {
-      const face = { idx: [], color: [200, 200, 200], unlit: false };
+      const face = { idx: [], color: [200, 200, 200], unlit: false, alpha: 1 };
       for (i++; i < lines.length; i++) {
         const f = lines[i].trim().split(/\s+/);
         if (f[0] === 'E') break;
@@ -61,7 +63,17 @@ function parseSrf(lines) {
         else if (f[0] === 'C') face.color = decodeSrfColor(f.slice(1));
         else if (f[0] === 'B') face.unlit = true;
       }
-      if (face.idx.length >= 3) faces.push(face);
+      if (face.idx.length >= 3) { byRaw.set(rawFace, faces.length); faces.push(face); }
+      rawFace++;
+    } else if (t[0] === 'ZA') {
+      // Per-polygon transparency: '<polygon index> <value>' pairs, and the
+      // engine maps alpha = (255-value)/255 (ysshellextio.cpp).  This is what
+      // makes stock afterburner flames translucent — losing it renders them
+      // as opaque cones.
+      for (let k = 1; k + 1 < t.length; k += 2) {
+        const fi = byRaw.get(Number(t[k]));
+        if (fi !== undefined) faces[fi].alpha = (255 - (Number(t[k + 1]) || 0)) / 255;
+      }
     }
   }
   return { vertices, faces };
