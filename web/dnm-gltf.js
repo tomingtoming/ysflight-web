@@ -518,7 +518,10 @@ export function glbToDnm(glbBytes) {
     if (/rotor/.test(n)) {
       return { cla: 3, cnt: [mid(0), mid(1), mid(2)], sta: [ZSTA, ZSTA] };
     }
-    if (/gear|^flg|undercarriage|landing/.test(n)) {
+    // NOTE: no bare 'FLG' match — in FlightGear naming that's flap-track
+    // fairings, not landing gear; a wrong gear match HIDES the part in
+    // flight (retracted = vis 0), the worst kind of misfire.
+    if (/gear|undercarriage|landing/.test(n)) {
       // Hinge at the attachment (top edge); retracted = swung up + hidden,
       // matching the stock STA0=retracted(vis 0) / STA1=deployed idiom.
       return { cla: 0, cnt: [mid(0), bb.max[1], mid(2)], sta: [rsta(0, DEGU(-100), 0, 0), ZSTA] };
