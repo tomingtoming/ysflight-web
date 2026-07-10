@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-let dnmToGlb, glbToDnm, parseDnm;
+let dnmToGlb, glbToDnm, dnmToCollisionSrf, parseDnm;
 try {
-  ({ dnmToGlb, glbToDnm } = await import('../web/dnm-gltf.js'));
+  ({ dnmToGlb, glbToDnm, dnmToCollisionSrf } = await import('../web/dnm-gltf.js'));
   ({ parseDnm } = await import('../web/dnm-preview.js'));
 } catch (e) {
   console.error('dnm-gltf import skipped under Node: ' + e.message);
@@ -44,4 +44,15 @@ test('template glb converts and keeps its movable wiring', { skip: !glbToDnm }, 
   }
   // Propeller spins (identical STAs, class-driven) — present as a node, CLA 18.
   assert.equal(p.nodes.get('Propeller').cla, 18);
+});
+
+test('collision shell bakes visible rest geometry, skips retracted gear', { skip: !dnmToCollisionSrf }, () => {
+  const dnm = readFileSync(join(here, '..', 'templates', 'aircraft-starter.dnm'));
+  const total = (new TextDecoder().decode(dnm).match(/^F$/gm) || []).length;
+  const coll = new TextDecoder().decode(dnmToCollisionSrf(dnm));
+  assert.match(coll, /^SURF\n/, 'starts with SURF');
+  const collFaces = (coll.match(/^F$/gm) || []).length;
+  assert.ok(collFaces > 0, 'has faces');
+  // The three gear nodes are hidden at rest (STA0 vis=0) and must be excluded.
+  assert.ok(collFaces < total, 'fewer faces than the full model: ' + collFaces + ' < ' + total);
 });

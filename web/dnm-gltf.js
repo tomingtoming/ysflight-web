@@ -283,6 +283,58 @@ export function dnmToGlb(dnmBytes) {
   };
 }
 
+// ==================== DNM -> collision SRF (for seamless glb import) ==============
+
+// Bake every rest-visible node's geometry through its hierarchical rest
+// transform into ONE aircraft-coordinate SRF — a serviceable collision shell
+// for a model that arrived as a bare .glb.  Rest-hidden nodes (retracted gear,
+// STA0 vis=0) are skipped, matching what you'd collide with in flight.
+export function dnmToCollisionSrf(dnmBytes) {
+  const dnm = parseDnm(dnmBytes);
+  const f6 = (v) => (Math.abs(v) < 5e-7 ? '0' : String(Math.round(v * 1e6) / 1e6));
+  const verts = [], vmap = new Map(), faces = [];
+  const addNode = (label, parentM) => {
+    const n = dnm.nodes.get(label);
+    if (!n) return;
+    const sta0 = (n.sta && n.sta[0]) || null;
+    const M = mul(parentM, nodeMatrix(n.pos || [0, 0, 0, 0, 0, 0], sta0, n.cnt || [0, 0, 0]));
+    const visible = !sta0 || sta0[6] === undefined || sta0[6] !== 0;
+    const srf = visible && n.srf && dnm.srfByName.get(n.srf);
+    if (srf) {
+      const world = srf.vertices.map((v) => [
+        M[0] * v[0] + M[1] * v[1] + M[2] * v[2] + M[3],
+        M[4] * v[0] + M[5] * v[1] + M[6] * v[2] + M[7],
+        M[8] * v[0] + M[9] * v[1] + M[10] * v[2] + M[11],
+      ]);
+      const vix = (p) => {
+        const key = p.map((v) => Math.round(v * 1e5) / 1e5).join(',');
+        let ix = vmap.get(key);
+        if (ix === undefined) { ix = verts.length; verts.push(p); vmap.set(key, ix); }
+        return ix;
+      };
+      for (const f of srf.faces) {
+        if (f.idx.length < 3) continue;
+        const idx = f.idx.map((i) => world[i]).filter(Boolean).map(vix);
+        if (idx.length >= 3) faces.push(idx);
+      }
+    }
+    for (const c of n.children || []) addNode(c, M);
+  };
+  const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  for (const r of dnm.roots) addNode(r, I);
+  if (!faces.length) throw new Error('no visible geometry for a collision shell');
+  const lines = ['SURF'];
+  for (const v of verts) lines.push('V ' + v.map(f6).join(' '));
+  for (const idx of faces) {
+    lines.push('F');
+    lines.push('V ' + idx.join(' '));
+    lines.push('C 128 128 128');
+    lines.push('E');
+  }
+  lines.push('E');
+  return new TextEncoder().encode(lines.join('\n') + '\n');
+}
+
 // ============================ GLB -> DNM ===========================================
 
 export function glbToDnm(glbBytes) {

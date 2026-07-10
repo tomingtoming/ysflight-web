@@ -272,6 +272,27 @@ console.log('library: delete works (back to 3 creations)');
   await backToHub();
   await page.evaluate((id) => window.ysfwWorkbench.deleteCreation(id), packLib.id);
 
+  // Seamless glb aircraft: a bare .glb becomes a COMPLETE aircraft — visual
+  // converted, collision shell baked from the visible rest geometry, flight
+  // model generated — and it must actually fly (checked in the game section).
+  const glbAir = await page.evaluate(async () => {
+    const { glbToDnm, dnmToCollisionSrf } = await import('./dnm-gltf.js');
+    const glb = new Uint8Array(await (await fetch('./aircraft-starter.glb')).arrayBuffer());
+    const conv = glbToDnm(glb);
+    const coll = dnmToCollisionSrf(conv.dnm);
+    const stock = await window.ysfwWorkbench.listStock();
+    const f15 = stock.find((a) => a.identify === 'F-15C_EAGLE') || stock[0];
+    const dat = await window.ysfwWorkbench.makeDat(f15.file, 'WB_GLB1', {}, {});
+    return await window.ysfwWorkbench.assembleInstall({
+      name: 'wbglb',
+      dat: { name: 'wb_glb1.dat', bytes: dat.bytes },
+      visual: { name: 'starter.dnm', bytes: conv.dnm },
+      collision: { name: 'starter_coll.srf', bytes: coll },
+    });
+  }).catch((e) => die('seamless glb aircraft flow threw: ' + e.message));
+  if (glbAir.identify !== 'WB_GLB1') die('glb aircraft: expected WB_GLB1, got ' + JSON.stringify(glbAir));
+  console.log('seamless glb->aircraft installed: ' + JSON.stringify({ id: glbAir.id, identify: glbAir.identify }));
+
   console.log('studios: aircraft/scenery booted with ?edit restore (' +
     acEntries.length + ' entries + ' + scCounts.islands + ' island(s)); pack work saved+reopened (' +
     packCounts.members + ' members)');
@@ -334,7 +355,35 @@ await page
   if (!airLoaded) die('field loaded but the wizard-made aircraft "WB_CUSTOM1" did not fly');
 }
 if (fatal.length) die('fatal engine output while flying the wizard-made aircraft on the drawn map');
+console.log('workbench->game: wizard-made aircraft flew on the DRAWN island map (real engine)');
+
+// 6. The seamless-glb aircraft (visual+collision+dat all derived from one
+//    .glb) flies: the Blender loop's final proof.
+logs.length = 0;
+fatal.length = 0;
+const ff3 = new URL(url);
+ff3.searchParams.set('freeflight', 'WB_GLB1');
+await page.goto(ff3.toString());
+await page
+  .waitForFunction(
+    () => {
+      const ov = document.getElementById('overlay');
+      return ov && ov.classList.contains('hidden');
+    },
+    { timeout: bootMs },
+  )
+  .catch(() => die('engine did not boot on the glb-aircraft freeflight reload'));
+{
+  const t0 = Date.now();
+  let loaded = false;
+  while (Date.now() - t0 < 30000) {
+    if (logs.some((l) => /Airplane:\s*WB_GLB1/.test(l))) { loaded = true; break; }
+    await page.waitForTimeout(250);
+  }
+  if (!loaded) die('engine never flew the seamless glb-derived aircraft "WB_GLB1"');
+}
+if (fatal.length) die('fatal engine output while flying the glb-derived aircraft');
 
 await browser.close();
-console.log('workbench->game: wizard-made aircraft flew on the DRAWN island map (real engine)');
+console.log('workbench->game: the .glb-born aircraft flew (real engine)');
 console.log('SMOKE-WORKBENCH PASSED');

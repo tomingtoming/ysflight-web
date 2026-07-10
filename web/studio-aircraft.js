@@ -17,7 +17,7 @@ import {
   extractDnmColors, repaintDnm,
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
-import { dnmToGlb, glbToDnm } from './dnm-gltf.js';
+import { dnmToGlb, glbToDnm, dnmToCollisionSrf } from './dnm-gltf.js';
 import { listStaged, getStaged, putStaged, removeStaged } from './staging.js';
 
 const S = ({
@@ -29,6 +29,9 @@ const S = ({
     acIntro: 'モデラーで作った .dnm / .srf と、飛行特性 .dat を1機に組み立てます。.dat が無ければ下の「stockから作る」で。',
     acDrop: '機体のファイル (.dat / .dnm / .srf / .glb) をドロップ / クリックして選択',
     glbImported: (n, k, t) => '✓ ' + n + ' をDNMに変換して取り込みました（' + k + 'ノード・' + t + '三角形）',
+    glbAutoColl: '＋ 当たり判定を外観から自動生成しました',
+    glbAutoDat: (b) => '＋ 飛行特性 (.dat) を ' + b + ' ベースで自動生成しました（下のウィザードで調整可）',
+    glbReady: '→ このまま「組み立てて保存」で機体になります',
     blTitle: '🟠 Blenderで作る',
     blIntro: 'Blenderが主役のモデリング経路。テンプレから始めて、書き出した .glb を上のドロップ欄に入れるだけ。',
     blTemplate: '📥 機体テンプレをダウンロード (.glb)',
@@ -109,6 +112,9 @@ const S = ({
     acIntro: 'Combine your modeler-made .dnm / .srf with a flight-model .dat. No .dat? Make one below from a stock base.',
     acDrop: 'Drop aircraft files (.dat / .dnm / .srf / .glb) / click to choose',
     glbImported: (n, k, t) => '✓ Converted ' + n + ' to DNM (' + k + ' nodes, ' + t + ' triangles)',
+    glbAutoColl: '+ Generated a collision shell from the visual',
+    glbAutoDat: (b) => '+ Generated a flight model (.dat) from ' + b + ' (tune it in the wizard below)',
+    glbReady: '→ “Assemble & save” makes it an aircraft as-is',
     blTitle: '🟠 Build in Blender',
     blIntro: 'The Blender-first modeling path: start from the template, drop the exported .glb into the file drop above.',
     blTemplate: '📥 Download the aircraft template (.glb)',
@@ -377,16 +383,42 @@ function buildAssembleSection(rail) {
   rail.appendChild(btnRow);
 
   const addFiles = async (fileList) => {
+    let glbBase = null;
     for (const f of Array.from(fileList)) {
-      // .glb (Blender export) converts to .dnm on the way in — after that it
-      // is a perfectly ordinary visual model.
+      // .glb (Blender export) is a first-class aircraft: the visual converts
+      // to .dnm, and whatever else a complete aircraft needs is auto-filled —
+      // a collision shell baked from the visible rest geometry, and (when no
+      // .dat is around) a generated flight model.  One drop -> assemble -> fly.
       if (/\.(glb|gltf)$/i.test(f.name)) {
         try {
           const res = glbToDnm(new Uint8Array(await f.arrayBuffer()));
-          const name = f.name.replace(/\.(glb|gltf)$/i, '.dnm');
+          const base = f.name.replace(/\.(glb|gltf)$/i, '');
+          const name = base + '.dnm';
           entries = entries.filter((e) => e.name !== name);
           entries.push({ name, bytes: res.dnm });
-          acMsg.textContent = S.glbImported(f.name, res.nodes, res.triangles);
+          glbBase = base;
+          const auto = [];
+          if (!entries.some((e) => /\.srf$/i.test(e.name))) {
+            const coll = dnmToCollisionSrf(res.dnm);
+            entries.push({ name: base + '_coll.srf', bytes: coll });
+            auto.push(S.glbAutoColl);
+          }
+          if (!generatedDat && !entries.some((e) => /\.dat$/i.test(e.name))) {
+            const stock = await stockIndex();
+            const datBase = stock.find((a) => a.identify === 'F-15C_EAGLE') || stock[0];
+            if (datBase) {
+              const r = await fetch('./stock/' + datBase.file);
+              if (r.ok) {
+                const identify = base.toUpperCase().replace(/[^A-Z0-9_-]+/g, '_').slice(0, 24) || 'MY_AIRCRAFT';
+                const dat = makeDatFromBase(new Uint8Array(await r.arrayBuffer()), { identify, knobs: {} });
+                generatedDat = { name: dat.identify.toLowerCase() + '.dat', bytes: dat.bytes, identify: dat.identify };
+                datRecipe = { baseFile: datBase.file, identify, knobs: {} };
+                auto.push(S.glbAutoDat(datBase.identify));
+              }
+            }
+          }
+          acMsg.textContent = S.glbImported(f.name, res.nodes, res.triangles) +
+            (auto.length ? '\n' + auto.join('\n') + '\n' + S.glbReady : '');
         } catch (e) {
           acMsg.textContent = S.errorPrefix + ((e && e.message) || e);
         }
@@ -396,7 +428,7 @@ function buildAssembleSection(rail) {
       entries = entries.filter((e) => e.name !== f.name);
       entries.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
     }
-    rebuildSlots();
+    rebuildSlots(glbBase ? { packName: glbBase } : undefined);
   };
   input.addEventListener('change', () => addFiles(input.files));
   drop.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files); });

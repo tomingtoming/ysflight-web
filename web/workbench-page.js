@@ -16,8 +16,9 @@ import {
 } from './workbench.js';
 import {
   LANG, el, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT,
-  installZip, saveOrReplace, listCreations, loadRecipe, stockIndex,
+  installZip, saveOrReplace, listCreations, loadRecipe, stockIndex, packPayload,
 } from './studio-shared.js';
+import { dnmToGlb } from './dnm-gltf.js';
 import * as opfs from './opfs-store.js';
 import { listStaged, getStaged, putStaged, removeStaged } from './staging.js';
 
@@ -47,6 +48,7 @@ const S = ({
     libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
     libOn: '有効', libOff: '無効',
     libFly: '🛫', libFlyTitle: 'テスト飛行（ゲームページに移動します）',
+    libGlb: '🟠', libGlbTitle: 'Blender用に書き出す (.glb)',
     libEdit: '✏️', libEditTitle: 'スタジオで続きから編集',
     libDel: '🗑', libDelTitle: '削除',
     libDelConfirm: (n) => '「' + n + '」を削除しますか？',
@@ -77,6 +79,7 @@ const S = ({
     libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
     libOn: 'On', libOff: 'Off',
     libFly: '🛫', libFlyTitle: 'Test-fly (moves to the game page)',
+    libGlb: '🟠', libGlbTitle: 'Export for Blender (.glb)',
     libEdit: '✏️', libEditTitle: 'Continue editing in its studio',
     libDel: '🗑', libDelTitle: 'Delete',
     libDelConfirm: (n) => 'Delete “' + n + '”?',
@@ -177,6 +180,30 @@ function creationsCard() {
         fly.addEventListener('click', () => {
           if (it.identities.length > 0) location.href = flyUrl(it.identities[0]);
           else location.href = flyUrl(lastAircraftIdentify || DEFAULT_FLY_AIRCRAFT, it.sceneryIdent, SCENERY_START);
+        });
+      }
+      // 🟠 an aircraft creation is downloadable as .glb — the seamless half of
+      // the Blender loop (the other half: dropping a .glb into the aircraft
+      // studio auto-completes into a full aircraft).
+      if (it.kind === 'aircraft' && it.recipeSha) {
+        const glb = btn(S.libGlb, S.libGlbTitle, false);
+        glb.addEventListener('click', async () => {
+          try {
+            let visualName = null;
+            try { visualName = ((await loadRecipe(it.recipeSha)).slots || {}).visual || null; } catch (e) {}
+            const payload = await packPayload(it.id, 'aircraft/');
+            const ent = (visualName && payload.find((f) => f.name === visualName)) ||
+              payload.find((f) => /\.dnm$/i.test(f.name));
+            if (!ent) throw new Error('no visual .dnm in this pack');
+            const res = dnmToGlb(ent.bytes);
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([res.glb], { type: 'model/gltf-binary' }));
+            a.download = (it.identities[0] || it.name || 'aircraft') + '.glb';
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+          } catch (e) {
+            console.warn('[workbench] glb export failed', e);
+          }
         });
       }
       // ✏️ opens the matching studio with ?edit=<record id> — the studio pulls
