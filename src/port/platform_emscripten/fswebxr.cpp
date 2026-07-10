@@ -37,6 +37,14 @@ that owns the session and fills that state every frame:
     hand also gets a small head-locked XRQuadLayer showing the dial so the
     selection is visible in-headset; without layers the dial still works,
     it is just invisible.
+  - The dial quads also show LIVE aircraft state (fsvr.h /
+    FsVrAircraftStateDataPointer), not just static labels: the right dial's
+    Gear/Brake sectors show the current UP/DOWN (or transitional %) and
+    ON/OFF, its centre shows the selected weapon short-name + remaining
+    count; the left dial's Flap+/Flap- sectors and centre show the current
+    flap %. The canvas is only redrawn when the sticky sector selection OR
+    this state changes (see updateDialLayers/aircraftStateSig below), not
+    every frame.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -106,6 +114,16 @@ extern "C" int EMSCRIPTEN_KEEPALIVE YsfwVrConsumeSimDrawnFrames(void)
 extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrHudDataPointer(void)
 {
 	return FsVrHudDataPointer();
+}
+
+// Forwards to the engine's VR aircraft-state block (fsvr.h, 8 floats): the
+// engine writes gear/brake/flap/selected-weapon state here once per sim frame
+// while VR is active; the dial-rendering code below (drawDial /
+// updateDialLayers) reads it to show live state on the radial function-dial
+// quads before the pilot presses anything.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrAircraftStateDataPointer(void)
+{
+	return FsVrAircraftStateDataPointer();
 }
 
 // clang-format off
@@ -801,7 +819,79 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// CanvasRenderingContext2D.arc's convention) for each sector's wedge
 	// centre -- "up" is drawn at the top of the texture (-90deg).
 	var DIAL_SECTOR_CANVAS_DEG={up:-90,right:0,down:90,left:180};
-	function drawDial(ctx,hand,sel)
+
+	// Weapon short-name map for the right dial's centre readout (fsdef.h's
+	// FSWEAPON_* enum -- see FsVrAircraftStateDataPointer's doc comment in
+	// fsvr.h for the full mapping this mirrors). Anything not in this table
+	// (including FSWEAPON_NULL=127, no weapon selected) reads as 'WPN'.
+	var WEAPON_LABELS={
+		0:'GUN',    // FSWEAPON_GUN
+		1:'AAM-S',  // FSWEAPON_AIM9    (short-range AAM)
+		2:'AGM',    // FSWEAPON_AGM65
+		3:'BOMB',   // FSWEAPON_BOMB
+		4:'RKT',    // FSWEAPON_ROCKET
+		5:'FLR',    // FSWEAPON_FLARE
+		6:'AAM-M',  // FSWEAPON_AIM120  (medium-range AAM)
+		7:'BOMB',   // FSWEAPON_BOMB250
+		8:'SMK',    // FSWEAPON_SMOKE
+		9:'BOMB',   // FSWEAPON_BOMB500HD
+		10:'AAM-S', // FSWEAPON_AIM9X
+		11:'FLR',   // FSWEAPON_FLAREPOD
+		12:'FUEL'   // FSWEAPON_FUELTANK
+	};
+	function weaponLabel(wpnType)
+	{
+		var t=Math.round(wpnType);
+		return WEAPON_LABELS.hasOwnProperty(t) ? WEAPON_LABELS[t] : 'WPN';
+	}
+	function fmtPct(v){ return Math.round(clamp(v,0,1)*100)+'%'; }
+
+	// Per-sector live-state line drawn under a sector's label (null = none).
+	// Right dial: Gear (down) shows UP/DOWN or a transitional %; Brake (left)
+	// shows ON/OFF (KeyB toggles ctlBrake+ctlSpoiler together, see fsvr.h).
+	// Left dial: Flap+/Flap- (up/down) both show the current flap %, so
+	// either sector tells the pilot where the flaps already are.
+	function dialSectorStateLine(hand,dir,state)
+	{
+		if(!state || !state.valid)
+		{
+			return null;
+		}
+		if('right'===hand)
+		{
+			if('down'===dir)
+			{
+				if(state.gear<=0.02){ return 'UP'; }
+				if(state.gear>=0.98){ return 'DOWN'; }
+				return fmtPct(state.gear);
+			}
+			if('left'===dir)
+			{
+				return state.brake>=0.5 ? 'ON' : 'OFF';
+			}
+		}
+		else if('up'===dir || 'down'===dir)
+		{
+			return fmtPct(state.flap);
+		}
+		return null;
+	}
+	// Centre readout: right dial shows the selected weapon + remaining count
+	// (replaces the plain dot); left dial shows the flap % (replaces it too).
+	// Returns null (draw the plain dot) when there is no valid player state.
+	function dialCenterText(hand,state)
+	{
+		if(!state || !state.valid)
+		{
+			return null;
+		}
+		if('right'===hand)
+		{
+			return weaponLabel(state.wpnType)+' '+Math.max(0,Math.round(state.wpnCount));
+		}
+		return 'FLP '+fmtPct(state.flap);
+	}
+	function drawDial(ctx,hand,sel,state)
 	{
 		var w=256,h=256,cx=128,cy=128,rOuter=110;
 		ctx.clearRect(0,0,w,h);
@@ -826,16 +916,51 @@ EM_JS(void,YsfwInstallWebXR,(),
 			ctx.stroke();
 			var labelR=rOuter*0.62;
 			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
+			ctx.textAlign='center';
+			var stateLine=dialSectorStateLine(hand,dir,state);
+			if(stateLine)
+			{
+				// Smaller label + a highlighted state line beneath it -- both
+				// still fit inside the wedge at 256px.
+				ctx.fillStyle='#fff';
+				ctx.font='bold 17px sans-serif';
+				ctx.textBaseline='middle';
+				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly-9);
+				ctx.fillStyle='rgba(255,224,130,0.95)';
+				ctx.font='bold 15px sans-serif';
+				ctx.fillText(stateLine,lx,ly+10);
+			}
+			else
+			{
+				ctx.fillStyle='#fff';
+				ctx.font='bold 22px sans-serif';
+				ctx.textBaseline='middle';
+				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly);
+			}
+		}
+		var centerText=dialCenterText(hand,state);
+		if(centerText)
+		{
+			ctx.beginPath();
+			ctx.arc(cx,cy,22,0,2*Math.PI);
+			ctx.fillStyle='rgba(20,26,34,0.88)';
+			ctx.fill();
+			ctx.strokeStyle='rgba(230,237,243,0.6)';
+			ctx.lineWidth=2;
+			ctx.stroke();
 			ctx.fillStyle='#fff';
-			ctx.font='bold 22px sans-serif';
+			ctx.font='bold 13px sans-serif';
 			ctx.textAlign='center';
 			ctx.textBaseline='middle';
-			ctx.fillText(DIAL_LABELS[hand][dir],lx,ly);
+			ctx.fillText(centerText,cx,cy);
 		}
-		ctx.beginPath();
-		ctx.arc(cx,cy,14,0,2*Math.PI);
-		ctx.fillStyle='rgba(230,237,243,0.85)';
-		ctx.fill();
+		else
+		{
+			ctx.beginPath();
+			ctx.arc(cx,cy,14,0,2*Math.PI);
+			ctx.fillStyle='rgba(230,237,243,0.85)';
+			ctx.fill();
+		}
 	}
 	function ensureDialResources(hand)
 	{
@@ -904,12 +1029,47 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// canvas only when the visible selection changed, upload only when the
 	// canvas changed, and keep session.renderState.layers in sync with which
 	// quads are currently visible (projection layer always first/background).
+	// Reads the 8-float aircraft-state block (fsvr.h) once per call. Cheap:
+	// called at most once per XR frame, from updateDialLayers below.
+	function readAircraftStateSnapshot()
+	{
+		try
+		{
+			var p=_YsfwVrAircraftStateDataPointer()>>2;
+			return {
+				valid:HEAPF32[p+0]>=0.5,
+				gear:HEAPF32[p+1],
+				brake:HEAPF32[p+2],
+				flap:HEAPF32[p+3],
+				wpnType:HEAPF32[p+4],
+				wpnCount:HEAPF32[p+5]
+			};
+		}
+		catch(e)
+		{
+			return {valid:false,gear:0,brake:0,flap:0,wpnType:-1,wpnCount:0};
+		}
+	}
+	// Quantized signature used to decide whether a hand's canvas needs a
+	// redraw: gear/flap rounded to whole percent so float jitter well under
+	// one displayed digit doesn't force a redraw every frame, while genuine
+	// movement (gear transit, flap steps) still updates promptly.
+	function aircraftStateSig(s)
+	{
+		if(!s || !s.valid)
+		{
+			return 'invalid';
+		}
+		return [Math.round(s.gear*100),(s.brake>=0.5?1:0),Math.round(s.flap*100),Math.round(s.wpnType),Math.round(s.wpnCount)].join(',');
+	}
 	function updateDialLayers(frame)
 	{
 		if(!vr.mvBinding)
 		{
 			return;
 		}
+		var state=readAircraftStateSnapshot();
+		var stateSig=aircraftStateSig(state);
 		var hands=['right','left'],layersChanged=false;
 		for(var i=0; i<hands.length; ++i)
 		{
@@ -934,18 +1094,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				res.inLayers=true;
 				res.drawnSel=null; // Force a redraw+upload on (re)appearance.
+				res.drawnStateSig=null;
 				layersChanged=true;
 			}
-			if(res.drawnSel!==dial.sel)
+			// Redraw when the sticky sector selection changes OR the live
+			// aircraft state (gear/brake/flap/weapon) changes -- e.g. the
+			// gear finishing its travel must update the dial even though
+			// dial.sel hasn't moved.
+			if(res.drawnSel!==dial.sel || res.drawnStateSig!==stateSig)
 			{
 				try
 				{
-					drawDial(res.ctx,hand,dial.sel);
+					drawDial(res.ctx,hand,dial.sel,state);
 					var sub=vr.mvBinding.getSubImage(res.quad,frame);
 					uploadCanvasToSubImage(res.canvas,sub);
 					res.drawnSel=dial.sel;
+					res.drawnStateSig=stateSig;
 				}
-				catch(e){} // Leave res.drawnSel unset so the next frame retries.
+				catch(e){} // Leave res.drawnSel/drawnStateSig unset so the next frame retries.
 			}
 		}
 		if(layersChanged)
@@ -1403,6 +1569,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 	vr.readHudData=function()
 	{
 		var p=_YsfwVrHudDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<8; ++i)
+		{
+			out.push(HEAPF32[p+i]);
+		}
+		return out;
+	};
+
+	// Headless test hook for the dial's aircraft-state readouts
+	// (scripts/smoke-vrdial.mjs): the 8-float block from fsvr.h
+	// (FsVrAircraftStateDataPointer) as a plain array -- same pattern as
+	// readHudData/readControlBlock above (the hosting page has no HEAPF32
+	// access; this is the read-side counterpart from inside the module).
+	vr.readAircraftState=function()
+	{
+		var p=_YsfwVrAircraftStateDataPointer()>>2;
 		var out=[];
 		for(var i=0; i<8; ++i)
 		{
