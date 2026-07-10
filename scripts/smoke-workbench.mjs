@@ -196,6 +196,70 @@ const delCheck = await page.evaluate(async () => {
 if (!delCheck.gone || delCheck.count !== 3) die('delete failed: ' + JSON.stringify(delCheck));
 console.log('library: delete works (back to 3 creations)');
 
+// ---- studio pages: boot + ?edit= restore ----------------------------------------
+
+// Each dedicated studio page must boot engine-less and expose its hook; the
+// aircraft and scenery studios must restore a creation from ?edit=<record id>.
+{
+  const creations = await page.evaluate(() => window.ysfwWorkbench.listCreations());
+  const air = creations.find((c) => c.kind === 'aircraft');
+  const isl = creations.find((c) => c.kind === 'scenery');
+  if (!air || !isl) die('expected an aircraft and a scenery creation before the studio checks');
+
+  const bootStudio = async (pageName, params) => {
+    const u = new URL(url);
+    u.pathname = u.pathname.replace(/index\.html$/, pageName);
+    for (const [k, v] of Object.entries(params || {})) u.searchParams.set(k, v);
+    await page.goto(u.toString());
+    await page
+      .waitForFunction(() => window.ysfwStudio && window.ysfwStudio.ready === true, { timeout: 30000 })
+      .catch(() => die(pageName + ' never became ready (window.ysfwStudio)'));
+    return page.evaluate(() => window.ysfwStudio.page);
+  };
+
+  if ((await bootStudio('studio-aircraft.html', { edit: air.id })) !== 'aircraft') die('aircraft studio wrong page id');
+  const acEntries = await page.evaluate(() => window.ysfwStudio.getEntries());
+  if (!Array.isArray(acEntries) || acEntries.length < 2) die('aircraft studio did not restore entries from ?edit: ' + JSON.stringify(acEntries));
+
+  if ((await bootStudio('studio-scenery.html', { edit: isl.id })) !== 'scenery') die('scenery studio wrong page id');
+  const scCounts = await page.evaluate(() => window.ysfwStudio.counts());
+  if (!scCounts || !(scCounts.islands >= 1)) die('scenery studio did not restore islands from ?edit: ' + JSON.stringify(scCounts));
+
+  // Pack studio: curate every creation into a pack-as-a-work, then re-open it.
+  if ((await bootStudio('studio-pack.html')) !== 'pack') die('pack studio wrong page id');
+  const packRes = await page.evaluate(() => window.ysfwStudio.composeAll('WB_PACKWORK'));
+  if (!packRes || !(packRes.members >= 2)) die('pack compose failed: ' + JSON.stringify(packRes));
+  // The library/recipe API lives on the hub page — hop back there to inspect.
+  const backToHub = async () => {
+    await page.goto(wbUrl.toString());
+    await page
+      .waitForFunction(() => window.ysfwWorkbench && window.ysfwWorkbench.ready === true, { timeout: 30000 })
+      .catch(() => die('hub page never became ready after the pack compose'));
+  };
+  await backToHub();
+  const packLib = await page.evaluate(async () => {
+    const lib = await window.ysfwWorkbench.listCreations();
+    const p = lib.find((c) => c.name === 'WB_PACKWORK');
+    if (!p) return null;
+    const recipe = await window.ysfwWorkbench.loadRecipe(p.recipeSha);
+    return { id: p.id, type: recipe.type, members: (recipe.members || []).length };
+  });
+  if (!packLib || packLib.type !== 'pack') die('pack work missing from the library: ' + JSON.stringify(packLib));
+  if ((await bootStudio('studio-pack.html', { edit: packLib.id })) !== 'pack') die('pack studio edit reload failed');
+  const packCounts = await page.evaluate(() => window.ysfwStudio.counts());
+  if (!(packCounts.members === packLib.members && packCounts.members >= 2)) {
+    die('pack edit did not restore members: ' + JSON.stringify({ packCounts, packLib }));
+  }
+  // Delete the pack work (its duplicate identities must not shadow the flight
+  // checks below) — back on the hub, whose API owns deletion.
+  await backToHub();
+  await page.evaluate((id) => window.ysfwWorkbench.deleteCreation(id), packLib.id);
+
+  console.log('studios: aircraft/scenery booted with ?edit restore (' +
+    acEntries.length + ' entries + ' + scCounts.islands + ' island(s)); pack work saved+reopened (' +
+    packCounts.members + ' members)');
+}
+
 // ---- game page: fly what the workbench made (the OPFS bridge) -------------------
 
 // 4. The loose-assembled aircraft flies.

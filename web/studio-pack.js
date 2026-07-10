@@ -1,0 +1,406 @@
+// Pack Studio (studio-pack.html): the editor for a PACK-AS-A-WORK — a curated
+// collection of your own creations (aircraft / maps), saved as a creation
+// itself.  This is NOT an inventory manager: imported zips live in the game
+// page's add-on panel, not here (toming's ruling, 2026-07-10).
+//
+// Member semantics (toming's ruling): a pack holds each member AS OF the
+// moment it was added (snapshot — cheap, because blobs are content-addressed
+// and dedupe), and the recipe remembers the source creation id so a member
+// can be refreshed to its latest version with one button.  Nothing updates
+// behind your back.
+//
+// Compose layout: every member's payload files are renamed to a per-member
+// prefix (aircraft/<member>_f15.dnm …) and path references inside that
+// member's .lst text are rewritten to match — so two works that both borrow
+// f15.dnm (with different paint) never collide.
+
+import { studioChrome, LANG, el, row, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, saveOrReplace, listCreations, loadCreation } from './studio-shared.js';
+import { RECIPE_FILE, SCENERY_START } from './workbench.js';
+import * as opfs from './opfs-store.js';
+import { zipSync } from './vendor/fflate.js';
+
+const S = ({
+  ja: {
+    title: '📦 パックスタジオ',
+    availTitle: '📚 マイ作品',
+    availIntro: '機体スタジオ・マップスタジオで作った作品。「＋」でこのパックに収録します',
+    availEmpty: '（収録できる作品がまだありません — ✈️/🏝 スタジオで作りましょう）',
+    membersTitle: '📦 このパックの収録内容',
+    membersEmpty: '（まだ空です — 左の作品を「＋」で収録）',
+    add: '＋', addTitle: 'このパックに収録する',
+    remove: '−', removeTitle: '収録から外す',
+    refresh: '↺', refreshTitle: '元の作品の最新版に更新する（収録は追加時点で固定です）',
+    refreshed: (n) => '✓ ' + n + ' を最新版に更新しました',
+    snapshotNote: '追加時点の内容で固定（↺で最新版に更新できます）',
+    orphanNote: '元の作品は削除済み — このパック内のスナップショットだけが残っています',
+    kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
+    packTitle: '🧩 パック',
+    packIntro: '作品をまとめた「パック」も1つの作品です。保存するとマイ作品に並び、✏️ で収録を編集し直せます。',
+    packName: 'パック名',
+    save: '作品として保存',
+    saved: (n, k) => '✓ パック「' + n + '」（' + k + ' 作品収録）を保存しました',
+    needMembers: '収録する作品を選んでください',
+    needName: 'パック名を入れてください',
+    exportTitle: '⬇ 配布用に書き出す',
+    exportIntro: '保存済みのパックをzipファイルとして手元にダウンロードします（YSFLIGHT本体でも使える形式）',
+    exportBtn: '⬇ zipをダウンロード',
+    exportNeedSave: '（先に保存してください）',
+    exported: (n) => '✓ ' + n + '.zip を書き出しました',
+    editingBadge: (n) => '✏️ 編集中: ' + n,
+    working: '作業中…',
+    errorPrefix: 'エラー: ',
+    fly: '🛫', flyTitle: 'テスト飛行（ゲームページに移動します）',
+  },
+  en: {
+    title: '📦 Pack Studio',
+    availTitle: '📚 My creations',
+    availIntro: 'Works made in the aircraft/scenery studios. “＋” adds one to this pack',
+    availEmpty: '(Nothing to include yet — make something in the ✈️/🏝 studios)',
+    membersTitle: '📦 In this pack',
+    membersEmpty: '(Empty — add works from the left with “＋”)',
+    add: '＋', addTitle: 'Include in this pack',
+    remove: '−', removeTitle: 'Remove from the pack',
+    refresh: '↺', refreshTitle: 'Refresh to the source work’s latest version (members are frozen at add time)',
+    refreshed: (n) => '✓ Refreshed ' + n + ' to its latest version',
+    snapshotNote: 'Frozen as of when it was added (↺ refreshes to latest)',
+    orphanNote: 'The source work was deleted — only this pack’s snapshot remains',
+    kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
+    packTitle: '🧩 Pack',
+    packIntro: 'A pack of works is a work itself: saving puts it on your shelf, and ✏️ re-opens it to re-curate.',
+    packName: 'Pack name',
+    save: 'Save as a work',
+    saved: (n, k) => '✓ Saved pack “' + n + '” (' + k + ' work' + (k === 1 ? '' : 's') + ')',
+    needMembers: 'Add at least one work',
+    needName: 'Enter a pack name',
+    exportTitle: '⬇ Export for sharing',
+    exportIntro: 'Download the saved pack as a zip (also usable in desktop YSFLIGHT)',
+    exportBtn: '⬇ Download zip',
+    exportNeedSave: '(Save first)',
+    exported: (n) => '✓ Exported ' + n + '.zip',
+    editingBadge: (n) => '✏️ Editing: ' + n,
+    working: 'Working…',
+    errorPrefix: 'Error: ',
+    fly: '🛫', flyTitle: 'Test-fly (moves to the game page)',
+  },
+})[LANG];
+
+// --- member snapshots -------------------------------------------------------------
+
+// A member = a snapshot of one creation's payload, namespaced per member so
+// nothing collides: every file becomes <dir>/<memberSan>_<base>, and path
+// references inside the member's own .lst text are rewritten to match.
+// files: [{path, bytes}] (final, namespaced paths).
+const sanitize = (s) => (String(s || 'work').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'work').slice(0, 24);
+
+async function snapshotFromRecord(rec, memberSan) {
+  const raw = [];
+  for (const f of rec.files || []) {
+    if (f.path === RECIPE_FILE) continue; // the pack gets its OWN recipe
+    raw.push({ path: f.path, bytes: await opfs.getBlob(f.sha256) });
+  }
+  const rename = new Map(); // old path -> new path
+  for (const f of raw) {
+    const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : '';
+    const base = f.path.slice(dir.length);
+    if (/\.lst$/i.test(base)) {
+      // The pack analyzer requires list names to KEEP their air*/sce*/gro*
+      // prefix (chooseLayout in packs.js) — namespace after it, not before.
+      const m = base.match(/^(air|sce|gro)/i);
+      const lead = m ? m[1] : ({ 'aircraft/': 'air', 'scenery/': 'sce', 'ground/': 'gro' }[dir] || 'air');
+      rename.set(f.path, dir + lead + '_' + memberSan + '_' + base.slice(m ? m[1].length : 0).replace(/^_+/, ''));
+    } else {
+      rename.set(f.path, dir + memberSan + '_' + base);
+    }
+  }
+  const td = new TextDecoder(), te = new TextEncoder();
+  return raw.map((f) => {
+    let bytes = f.bytes;
+    if (/\.lst$/i.test(f.path)) {
+      let text = td.decode(bytes);
+      for (const [oldP, newP] of rename) {
+        if (oldP === f.path) continue;
+        text = text.split(oldP).join(newP);
+      }
+      bytes = te.encode(text);
+    }
+    return { path: rename.get(f.path), bytes };
+  });
+}
+
+// Rebuild a member snapshot out of an already-saved PACK record (for re-editing
+// a pack whose source creation is gone): its files are the ones carrying this
+// member's prefix.  Paths are already namespaced — take them verbatim.
+async function snapshotFromPack(packRec, memberSan) {
+  const out = [];
+  const lstRe = new RegExp('^(air|sce|gro)_' + memberSan.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '_', 'i');
+  for (const f of packRec.files || []) {
+    if (f.path === RECIPE_FILE) continue;
+    const base = f.path.slice(f.path.lastIndexOf('/') + 1);
+    if (!base.startsWith(memberSan + '_') && !lstRe.test(base)) continue;
+    out.push({ path: f.path, bytes: await opfs.getBlob(f.sha256) });
+  }
+  return out;
+}
+
+// --- page state -------------------------------------------------------------------
+
+let members = [];   // [{sourceId, san, name, kind, files:[{path,bytes}], orphan}]
+let editingId = null;
+let savedName = null; // last saved pack name (enables export)
+let savedZip = null;  // last composed zip bytes (export without recompose)
+
+const uniqueSan = (name) => {
+  let base = sanitize(name), san = base, n = 2;
+  while (members.some((m) => m.san === san)) san = base + '_' + (n++);
+  return san;
+};
+
+function composeZip(packName) {
+  const entries = {};
+  for (const m of members) for (const f of m.files) entries[f.path] = f.bytes;
+  entries[RECIPE_FILE] = new TextEncoder().encode(JSON.stringify({
+    type: 'pack',
+    packName,
+    members: members.map((m) => ({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind })),
+  }));
+  return zipSync(entries);
+}
+
+// --- page -------------------------------------------------------------------------
+
+const { rail, main } = studioChrome(S.title);
+
+// main: two columns — my creations (left) | this pack's members (right).
+main.style.cssText += ';flex-direction:row;overflow:hidden';
+const availCol = el('div');
+availCol.style.cssText = 'flex:1;min-width:0;overflow-y:auto;padding:12px 14px;border-right:1px solid #2a3647';
+const memberCol = el('div');
+memberCol.style.cssText = 'flex:1;min-width:0;overflow-y:auto;padding:12px 14px';
+main.appendChild(availCol);
+main.appendChild(memberCol);
+
+const msg = el('div', 'msg');
+
+const itemRow = (glyph, name, note) => {
+  const r = el('div');
+  r.style.cssText =
+    'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #2a3647;' +
+    'border-radius:7px;margin-bottom:6px;background:#0b1017';
+  r.appendChild(Object.assign(el('span'), { textContent: glyph, style: 'flex:none' }));
+  const nm = el('span', null, name);
+  nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6edf3;font-size:13.5px';
+  r.appendChild(nm);
+  if (note) {
+    const nt = el('span', null, note);
+    nt.style.cssText = 'flex:none;color:#7d93b0;font-size:10.5px;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    r.appendChild(nt);
+  }
+  return r;
+};
+const smallBtn = (parent, label, title, accent) => {
+  const b = el('button', accent ? 'accent' : null, label);
+  b.title = title;
+  b.style.cssText += ';font-size:12px;padding:4px 9px;flex:none';
+  parent.appendChild(b);
+  return b;
+};
+
+let renderAvail = () => {};
+let renderMembers = () => {};
+
+renderAvail = async () => {
+  availCol.innerHTML = '';
+  availCol.appendChild(el('h2', null, S.availTitle));
+  availCol.appendChild(el('p', 'intro', S.availIntro));
+  // Only aircraft/scenery works can be members — packs don't nest.
+  const creations = (await listCreations()).filter((c) => c.kind === 'aircraft' || c.kind === 'scenery');
+  if (!creations.length) {
+    availCol.appendChild(el('div', 'msg', S.availEmpty));
+    return;
+  }
+  for (const c of creations) {
+    const r = itemRow(S.kindGlyph[c.kind] || '📦', c.name || c.id, c.identities[0] || c.sceneryIdent || '');
+    if (c.identities.length > 0 || (c.kind === 'scenery' && c.sceneryIdent)) {
+      const fly = smallBtn(r, S.fly, S.flyTitle, false);
+      fly.addEventListener('click', () => {
+        location.href = c.identities.length > 0
+          ? flyUrl(c.identities[0])
+          : flyUrl(DEFAULT_FLY_AIRCRAFT, c.sceneryIdent, SCENERY_START);
+      });
+    }
+    const add = smallBtn(r, S.add, S.addTitle, true);
+    add.addEventListener('click', async () => {
+      add.disabled = true;
+      msg.textContent = S.working;
+      try {
+        const rec = await opfs.getRecord(c.id);
+        const san = uniqueSan(c.name || c.id);
+        members.push({
+          sourceId: c.id, san, name: c.name || c.id, kind: c.kind,
+          files: await snapshotFromRecord(rec, san), orphan: false,
+        });
+        msg.textContent = '';
+        renderMembers();
+      } catch (e) {
+        msg.textContent = S.errorPrefix + ((e && e.message) || e);
+      } finally {
+        add.disabled = false;
+      }
+    });
+    availCol.appendChild(r);
+  }
+};
+
+renderMembers = () => {
+  memberCol.innerHTML = '';
+  memberCol.appendChild(el('h2', null, S.membersTitle));
+  memberCol.appendChild(el('p', 'intro', S.snapshotNote));
+  if (!members.length) {
+    memberCol.appendChild(el('div', 'msg', S.membersEmpty));
+    return;
+  }
+  members.forEach((m, i) => {
+    const r = itemRow(S.kindGlyph[m.kind] || '📦', m.name, m.orphan ? S.orphanNote : (m.files.length + 'f'));
+    if (!m.orphan) {
+      const rf = smallBtn(r, S.refresh, S.refreshTitle, false);
+      rf.addEventListener('click', async () => {
+        rf.disabled = true;
+        msg.textContent = S.working;
+        try {
+          const rec = await opfs.getRecord(m.sourceId);
+          if (!rec) { m.orphan = true; renderMembers(); return; }
+          m.files = await snapshotFromRecord(rec, m.san);
+          msg.textContent = S.refreshed(m.name);
+          renderMembers();
+        } catch (e) {
+          msg.textContent = S.errorPrefix + ((e && e.message) || e);
+        }
+      });
+    }
+    const rm = smallBtn(r, S.remove, S.removeTitle, false);
+    rm.style.color = '#c75d6a';
+    rm.addEventListener('click', () => { members.splice(i, 1); renderMembers(); });
+    memberCol.appendChild(r);
+  });
+};
+
+// rail: pack identity + save + export.
+function buildRail() {
+  rail.appendChild(el('h2', null, S.packTitle));
+  rail.appendChild(el('p', 'intro', S.packIntro));
+  const editBadge = el('div', 'msg');
+  rail.appendChild(editBadge);
+  const nameIn = row(rail, S.packName, Object.assign(document.createElement('input'), { type: 'text' }));
+  const btnRow = el('div', 'btnrow');
+  const saveBtn = el('button', 'accent', S.save);
+  btnRow.appendChild(saveBtn);
+  rail.appendChild(btnRow);
+  rail.appendChild(msg);
+
+  rail.appendChild(el('h2', null, S.exportTitle));
+  rail.appendChild(el('p', 'intro', S.exportIntro));
+  const expBtn = el('button', null, S.exportBtn);
+  const expWrap = el('div', 'btnrow');
+  expWrap.style.justifyContent = 'flex-start';
+  expWrap.appendChild(expBtn);
+  rail.appendChild(expWrap);
+  const expMsg = el('div', 'msg', S.exportNeedSave);
+  rail.appendChild(expMsg);
+
+  saveBtn.addEventListener('click', async () => {
+    const name = nameIn.value.trim();
+    if (!members.length) { msg.textContent = S.needMembers; return; }
+    if (!name) { msg.textContent = S.needName; return; }
+    saveBtn.disabled = true;
+    msg.textContent = S.working;
+    try {
+      const zip = composeZip(name);
+      const res = await saveOrReplace(zip, name, editingId);
+      editingId = res.id;
+      savedName = name;
+      savedZip = zip;
+      msg.textContent = S.saved(name, members.length);
+      expMsg.textContent = '';
+    } catch (e) {
+      msg.textContent = S.errorPrefix + ((e && e.message) || e);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  expBtn.addEventListener('click', () => {
+    if (!savedZip) { expMsg.textContent = S.exportNeedSave; return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([savedZip], { type: 'application/zip' }));
+    a.download = sanitize(savedName) + '.zip';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    expMsg.textContent = S.exported(sanitize(savedName));
+  });
+
+  return { nameIn, editBadge };
+}
+
+// --- boot -------------------------------------------------------------------------
+
+async function main2() {
+  const { nameIn, editBadge } = buildRail();
+
+  // ?edit=<id>: re-open a saved pack.  Members are re-snapshotted from their
+  // SOURCE creations when those still exist (recipe = curation, source = truth
+  // at edit time is wrong — ruling says frozen — so prefer the pack's own
+  // snapshot bytes; the source is only needed for ↺ refresh).
+  const editId = new URLSearchParams(location.search).get('edit');
+  if (editId) {
+    try {
+      const c = await loadCreation(editId);
+      if (c && c.recipe && c.recipe.type === 'pack') {
+        const packRec = await opfs.getRecord(editId);
+        members = [];
+        for (const m of c.recipe.members || []) {
+          const files = await snapshotFromPack(packRec, m.san);
+          const srcAlive = m.sourceId ? !!(await opfs.getRecord(m.sourceId)) : false;
+          members.push({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind, files, orphan: !srcAlive });
+        }
+        editingId = editId;
+        nameIn.value = c.recipe.packName || c.name || '';
+        editBadge.textContent = S.editingBadge(c.name || editId);
+      } else if (c && c.recipe) {
+        location.replace(pageUrl(c.recipe.type === 'scenery' ? 'studio-scenery.html' : 'studio-aircraft.html', { edit: editId }));
+        return;
+      }
+    } catch (e) {
+      console.warn('[pack-studio] edit load failed', e);
+    }
+  }
+
+  await renderAvail();
+  renderMembers();
+
+  window.ysfwStudio = {
+    ready: true,
+    page: 'pack',
+    counts: () => ({
+      available: availCol.querySelectorAll('button.accent').length,
+      members: members.length,
+    }),
+    // Smoke/console driver: curate every available creation into a pack and save.
+    composeAll: async (name) => {
+      members = [];
+      const creations = (await listCreations()).filter((c) => c.kind === 'aircraft' || c.kind === 'scenery');
+      for (const c of creations) {
+        const rec = await opfs.getRecord(c.id);
+        const san = uniqueSan(c.name || c.id);
+        members.push({ sourceId: c.id, san, name: c.name || c.id, kind: c.kind, files: await snapshotFromRecord(rec, san), orphan: false });
+      }
+      renderMembers();
+      const zip = composeZip(name);
+      const res = await saveOrReplace(zip, name, editingId);
+      editingId = res.id;
+      savedName = name;
+      savedZip = zip;
+      return { ...res, members: members.length };
+    },
+  };
+}
+main2();
