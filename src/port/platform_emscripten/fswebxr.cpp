@@ -45,6 +45,26 @@ that owns the session and fills that state every frame:
     flap %. The canvas is only redrawn when the sticky sector selection OR
     this state changes (see updateDialLayers/aircraftStateSig below), not
     every frame.
+  - Four on-device-tested control refinements (SaccFlight-style), all
+    implemented in processControllerPlain/deflectionFromDeltaQ below:
+      - Recenter: holding right A for >=1s re-offsets the reference space
+        from the CURRENT head pose (position fully, orientation by YAW ONLY
+        so gravity/horizon stay true) instead of firing the gear tap; a
+        quick press+release (<400ms) still fires gear as before (see
+        vrRecenter/A_RECENTER_MS/A_TAP_MAX_MS).
+      - Sticky grab: double-squeezing either grip within 250ms latches a
+        persistent grab that keeps tracking the stick/throttle without
+        holding the grip physically; the next full squeeze-release ends it
+        (see updateSticky).
+      - Rudder deadzone + optional expo: wrist-roll-into-rudder bleed is
+        filtered by a small deadzone on the yaw axis only (remapped so full
+        deflection still reaches +-1), plus an optional exponent curve on
+        all three stick axes -- both tunable via Module.ysfwVrOptions
+        (yawDeadzoneDeg, stickExpo; see applyDeadzone/applyExpo).
+      - Afterburner detent: shoving the grabbed throttle past its 1.0 stop
+        (>=~3cm of extra travel at a deliberate speed) taps the engine's
+        default afterburner key (Tab, FSBTF_AFTERBURNER -- a toggle); pulling
+        the lever back below ~0.95 taps it again to disengage.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -138,6 +158,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 		supported:false,
 		session:null,
 		refSpace:null,
+		// The un-offset 'local' space captured once at session start.
+		// vrRecenter() always re-offsets FROM this (not from the current
+		// vr.refSpace), so repeated recenters don't accumulate drift.
+		baseRefSpace:null,
+		// Last real XR viewer pose (plain {position,orientation}, copied out
+		// of the XRPose's read-only DOMPointReadOnly members each frame in
+		// onXRFrame) -- vrRecenter needs a pose to offset from but only runs
+		// from the right A button handler, which has no frame object of its
+		// own.
+		lastViewerPose:null,
+		// Bumped on every vrRecenter() call, even when the guard above
+		// aborts it (no real session yet) -- lets headless tests confirm
+		// the long-hold path actually ran the handler.
+		recenterAttempts:0,
 		xrFb:null,
 		origBind:null,
 		simSilentFrames:0,
@@ -166,10 +200,28 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// See fsvr.h / FsVrControlDataPointer for the 16-float block this
 		// feeds, and updateControllers/processControllerPlain below.
 		ctl:{
-			stick:{grabbed:false,q0:null},
-			thr:{grabbed:false,p0:null,fwd0:null,base:0,value:0,ever:false},
+			// sticky: double-squeeze latch state, shared shape for both
+			// hands (see updateSticky). latched: a persistent grab is
+			// active without the physical grip held. disengageArmed: while
+			// latched, a fresh physical press has been seen and the next
+			// release should end the latch. prevPhys: the grip's raw
+			// (pre-latch) squeeze-pressed state, to detect edges
+			// independent of the effective (physical-OR-latched) value.
+			// lastReleaseAt: timestamp of the last physical release, to
+			// detect a second press within the double-squeeze window.
+			stick:{grabbed:false,q0:null,sticky:{latched:false,disengageArmed:false,prevPhys:false,lastReleaseAt:0}},
+			thr:{grabbed:false,p0:null,fwd0:null,base:0,value:0,ever:false,
+				sticky:{latched:false,disengageArmed:false,prevPhys:false,lastReleaseAt:0},
+				// Afterburner detent (left/throttle hand only): abEngaged
+				// mirrors the engine's ctlAb toggle so the detent taps Tab
+				// exactly once per crossing; lastPushM/lastT are the
+				// previous frame's forward-push distance/timestamp, used to
+				// derive a m/s "shove speed" for the engage gate.
+				abEngaged:false,lastPushM:0,lastT:0},
 			rightTrigger:false,
-			rightA:false,
+			// Right A button: press/hold/release state for the tap-vs-
+			// recenter decision (see A_TAP_MAX_MS/A_RECENTER_MS).
+			aBtn:{pressed:false,pressAt:0,recentered:false},
 			rightB:false,
 			leftX:false,
 			leftY:false,
@@ -380,7 +432,35 @@ EM_JS(void,YsfwInstallWebXR,(),
 	var THROTTLE_SENS=6;       // 1/6 m (~17cm) forward push = full 0..1 range.
 	var GRAB_THRESHOLD=0.75;   // xr-standard squeeze/trigger value = "pressed".
 
+	// Right-A button (recenter/gear) timing (see processControllerPlain).
+	var A_TAP_MAX_MS=400;      // release at or before this -> gear tap.
+	var A_RECENTER_MS=1000;    // held at least this long -> recenter fires.
+
+	// Sticky-grab double-squeeze window (see updateSticky), both hands.
+	var STICKY_DOUBLE_MS=250;
+
+	// Afterburner detent (left/throttle hand, see processControllerPlain).
+	var AB_OVERSHOOT_M=0.03;      // virtual travel past the 1.0 stop to engage.
+	var AB_SHOVE_SPEED_MPS=0.15;  // minimum forward push speed to count as a shove.
+	var AB_DISENGAGE_VALUE=0.95;  // pulling back below this disengages.
+
+	// Rudder deadzone + stick expo defaults (Module.ysfwVrOptions overrides,
+	// see vrOpt/deflectionFromDeltaQ): ?vryawdz=/?vrexpo= in web/index.html.
+	var DEFAULT_YAW_DEADZONE_DEG=6;
+	var DEFAULT_STICK_EXPO=1.0;
+
 	function clamp(v,lo,hi){ return v<lo ? lo : (v>hi ? hi : v); }
+
+	// Reads a VR option, falling back to def when Module.ysfwVrOptions is
+	// absent or doesn't set that key.  Read fresh (not cached) each call:
+	// Module.ysfwVrOptions is assigned once by web/index.html before
+	// Module.ysfwVr.enter() but this glue's closure runs earlier, at
+	// YsfwSetUpWebXR/module-init time.
+	function vrOpt(name,def)
+	{
+		var o=Module.ysfwVrOptions||{};
+		return (undefined!==o[name] ? o[name] : def);
+	}
 
 	// Minimal quaternion math, no external libs, unit quaternions only.
 	function quatMultiply(a,b)
@@ -426,6 +506,31 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//     (that rotation is counter-clockwise from the user's viewpoint) --
 	//     so the sign is flipped here to make "wrist rolls right" (r'.y<0)
 	//     read as positive aileron.
+	// Deadzone on an angle already normalized to a max-deflection radius:
+	// |angle|<=dzRad reads as exactly 0; beyond it, the remaining range is
+	// remapped to 0..1 so the axis still reaches full deflection at
+	// maxAngleRad (linear remap, not just a clamp-and-shift).
+	function applyDeadzone(angleRad,dzRad,maxAngleRad)
+	{
+		var mag=Math.abs(angleRad);
+		if(mag<=dzRad)
+		{
+			return 0;
+		}
+		var remapped=(mag-dzRad)/(maxAngleRad-dzRad);
+		return clamp((angleRad<0 ? -remapped : remapped),-1,1);
+	}
+	// Exponent response curve, sign-preserving (expo=1 is a no-op passthrough,
+	// the default -- see DEFAULT_STICK_EXPO/?vrexpo=).
+	function applyExpo(x,expo)
+	{
+		if(1===expo)
+		{
+			return x; // Common case, and avoids a Math.pow(x,1) precision detour.
+		}
+		return (x<0 ? -1 : 1)*Math.pow(Math.abs(x),expo);
+	}
+
 	function deflectionFromDeltaQ(dq)
 	{
 		var f=rotateVecByQuat({x:0,y:0,z:-1},dq);
@@ -433,11 +538,117 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var pitch=Math.asin(clamp(f.y,-1,1));
 		var yaw=Math.atan2(-f.x,-f.z);
 		var roll=Math.asin(clamp(r.y,-1,1));
+
+		// Rudder-only deadzone: on-device testing found rolling the wrist
+		// (an aileron gesture) bleeds a little yaw into the rudder axis.
+		// Pitch/roll are unaffected.
+		var dzRad=vrOpt('yawDeadzoneDeg',DEFAULT_YAW_DEADZONE_DEG)*Math.PI/180;
+		var rudder=applyDeadzone(yaw,dzRad,MAX_ANGLE);
+
+		var expo=vrOpt('stickExpo',DEFAULT_STICK_EXPO);
 		return {
-			elevator:clamp(pitch/MAX_ANGLE,-1,1),
-			rudder:clamp(yaw/MAX_ANGLE,-1,1),
-			aileron:clamp(-roll/MAX_ANGLE,-1,1)
+			elevator:applyExpo(clamp(pitch/MAX_ANGLE,-1,1),expo),
+			rudder:applyExpo(rudder,expo),
+			aileron:applyExpo(clamp(-roll/MAX_ANGLE,-1,1),expo)
 		};
+	}
+
+	// Yaw-only component of a full orientation quaternion, for the recenter
+	// feature (vrRecenter): recentering should zero out the pilot's heading
+	// and position but must NOT bake in whatever incidental head pitch/roll
+	// existed at the moment of the button press, or the horizon would tilt.
+	// Same pitch/roll-immune convention as deflectionFromDeltaQ's yaw
+	// (rotate local forward, read its heading in the XZ plane), reassembled
+	// as a pure yaw-about-world-Y quaternion. Exposed as vr.yawOnlyQuatFromOrientation
+	// (a pure function, no XR/session state) so headless tests can check the
+	// math without a live WebXR session.
+	function yawOnlyQuatFromOrientation(o)
+	{
+		var f=rotateVecByQuat({x:0,y:0,z:-1},o);
+		var yaw=Math.atan2(-f.x,-f.z);
+		var half=yaw/2;
+		return {x:0,y:Math.sin(half),z:0,w:Math.cos(half)};
+	}
+
+	// Re-offsets vr.refSpace from the CURRENT head pose so the head reads
+	// ~identity afterward: position fully offset, orientation offset by YAW
+	// ONLY (see yawOnlyQuatFromOrientation) so gravity/pitch/roll stay real.
+	// Always re-offsets from vr.baseRefSpace (the space captured once at
+	// session start), never from the current vr.refSpace, so repeated
+	// recenters don't accumulate error. No-op (but still counted, see
+	// vr.recenterAttempts) without a real session/pose -- the headless test
+	// path has neither.
+	function vrRecenter()
+	{
+		++vr.recenterAttempts;
+		if(!vr.baseRefSpace || !vr.lastViewerPose || 'undefined'===typeof XRRigidTransform)
+		{
+			return;
+		}
+		var pos=vr.lastViewerPose.position;
+		var oriYaw=yawOnlyQuatFromOrientation(vr.lastViewerPose.orientation);
+		try
+		{
+			vr.refSpace=vr.baseRefSpace.getOffsetReferenceSpace(new XRRigidTransform(
+				{x:pos.x,y:pos.y,z:pos.z},{x:oriYaw.x,y:oriYaw.y,z:oriYaw.z,w:oriYaw.w}));
+		}
+		catch(e)
+		{
+			console.warn('[vr] recenter failed: '+(e&&e.message?e.message:e));
+			return;
+		}
+		vrHapticPulse(vr.lastRawSrc.right);
+		setTimeout(function(){ vrHapticPulse(vr.lastRawSrc.right); },120);
+	}
+
+	// Shared double-squeeze sticky-grab latch (SaccFlight convention),
+	// driven once per hand per frame from processControllerPlain with that
+	// hand's PHYSICAL squeeze state (entry.squeeze>GRAB_THRESHOLD) -- the
+	// caller ORs the returned latch into its own effective-grabbed value, so
+	// grab-begin/release (q0/p0 capture, spring-to-neutral) stays exactly
+	// the single existing code path in each hand's branch.
+	//   - Not latched: a physical press within STICKY_DOUBLE_MS of the
+	//     previous physical release engages the latch (two-pulse haptic).
+	//   - Latched: the NEXT full physical press+release cycle disengages it
+	//     (one-pulse haptic) -- not a second double-squeeze.
+	function updateSticky(sticky,physPressed,rawSrc)
+	{
+		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
+		var pressEdge=physPressed && !sticky.prevPhys;
+		var releaseEdge=!physPressed && sticky.prevPhys;
+		if(!sticky.latched)
+		{
+			if(pressEdge)
+			{
+				if(0<sticky.lastReleaseAt && (now-sticky.lastReleaseAt)<=STICKY_DOUBLE_MS)
+				{
+					sticky.latched=true;
+					sticky.disengageArmed=false;
+					vrHapticPulse(rawSrc);
+					setTimeout(function(){ vrHapticPulse(rawSrc); },80);
+				}
+			}
+			else if(releaseEdge)
+			{
+				sticky.lastReleaseAt=now;
+			}
+		}
+		else
+		{
+			if(pressEdge)
+			{
+				sticky.disengageArmed=true;
+			}
+			else if(releaseEdge && sticky.disengageArmed)
+			{
+				sticky.latched=false;
+				sticky.disengageArmed=false;
+				sticky.lastReleaseAt=now;
+				vrHapticPulse(rawSrc);
+			}
+		}
+		sticky.prevPhys=physPressed;
+		return sticky.latched;
 	}
 
 	// Synthetic-key dispatch, matching the on-screen touch controls in
@@ -537,11 +748,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 	function processControllerPlain(entry,viewerQuat,rawSrc)
 	{
 		var ptr=_YsfwVrControlDataPointer()>>2;
-		var grabbed=entry.squeeze>GRAB_THRESHOLD;
+		var physGrabbed=entry.squeeze>GRAB_THRESHOLD;
 
 		if('right'===entry.hand)
 		{
 			var st=vr.ctl.stick;
+			// Effective grab = physically squeezing OR sticky-latched (see
+			// updateSticky); grab-begin/release (q0 capture, spring-to-
+			// neutral) below is unchanged and fires exactly once, whichever
+			// condition made it rise/fall.
+			var stickyOn=updateSticky(st.sticky,physGrabbed,rawSrc);
+			var grabbed=physGrabbed||stickyOn;
 			if(grabbed && !st.grabbed)
 			{
 				st.q0=entry.quat;
@@ -594,9 +811,29 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 			vr.ctl.rightTrigger=triggerPressed;
 
+			// Right A: quick press+release (<A_TAP_MAX_MS) taps the gear key,
+			// same as before; holding it >=A_RECENTER_MS instead recenters
+			// the view (once per hold) and suppresses the gear tap on the
+			// eventual release. A hold released in between (neither quick
+			// nor long enough) intentionally does nothing.
 			var aPressed=!!(entry.buttons && entry.buttons.a);
-			vrKeyEdge('KeyG',aPressed); // Default landing-gear key.
-			vr.ctl.rightA=aPressed;
+			var aBtn=vr.ctl.aBtn;
+			var aNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
+			if(aPressed && !aBtn.pressed)
+			{
+				aBtn.pressAt=aNow;
+				aBtn.recentered=false;
+			}
+			if(aPressed && !aBtn.recentered && (aNow-aBtn.pressAt)>=A_RECENTER_MS)
+			{
+				vrRecenter();
+				aBtn.recentered=true;
+			}
+			if(!aPressed && aBtn.pressed && !aBtn.recentered && (aNow-aBtn.pressAt)<A_TAP_MAX_MS)
+			{
+				vrKeyTap('KeyG'); // Default landing-gear key: a real tap, not a hold.
+			}
+			aBtn.pressed=aPressed;
 
 			var bPressed=!!(entry.buttons && entry.buttons.b);
 			vrKeyEdge('KeyB',bPressed); // Default spoiler/air-brake key.
@@ -605,6 +842,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		else if('left'===entry.hand)
 		{
 			var th=vr.ctl.thr;
+			// Same effective-grab pattern as the stick (see above): physical
+			// squeeze OR sticky latch, grab-begin/release unchanged.
+			var thStickyOn=updateSticky(th.sticky,physGrabbed,rawSrc);
+			var grabbed=physGrabbed||thStickyOn;
 			if(grabbed && !th.grabbed)
 			{
 				th.p0=entry.pos;
@@ -614,6 +855,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 				var flen=vecLen(fwd);
 				th.fwd0=(1e-4<flen) ? {x:fwd.x/flen,y:0,z:fwd.z/flen} : {x:0,y:0,z:-1};
 				th.base=th.value; // Latch the current value as this grab's baseline.
+				// Fresh grab: reset the afterburner shove-speed tracker so a
+				// stale previous position/timestamp from a past grab can't
+				// read as a huge fake shove on this grab's first frame.
+				th.lastPushM=0;
+				th.lastT=0;
 				vrHapticPulse(rawSrc);
 			}
 			else if(!grabbed && th.grabbed)
@@ -624,12 +870,45 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(grabbed && th.p0)
 			{
 				var d=vecSub(entry.pos,th.p0);
-				var value=clamp(th.base+vecDot(d,th.fwd0)*THROTTLE_SENS,0,1);
+				var pushM=vecDot(d,th.fwd0);
+				var raw=th.base+pushM*THROTTLE_SENS;
+				var value=clamp(raw,0,1);
 				HEAPF32[ptr+4]=1;
 				HEAPF32[ptr+5]=value;
 				HEAPF32[ptr+6]=1;
 				th.value=value;
 				th.ever=true;
+
+				// Afterburner detent: shoving the lever past its 1.0 stop by
+				// AB_OVERSHOOT_M at a deliberate (non-drift) speed engages
+				// it; pulling back below AB_DISENGAGE_VALUE disengages.
+				// FSBTF_AFTERBURNER (default key Tab, fscontrol.cpp) is a
+				// toggle in the engine, so each transition is one key TAP,
+				// matched by the abEngaged flag so it fires exactly once per
+				// crossing (see fscontrol.cpp: ctlAb=!ctlAb on FSBTF_AFTERBURNER).
+				var abNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
+				var dtS=(0<th.lastT) ? (abNow-th.lastT)/1000 : 0;
+				var shoveSpeed=(0<dtS) ? (pushM-th.lastPushM)/dtS : 0;
+				th.lastPushM=pushM;
+				th.lastT=abNow;
+				var overshootM=(raw-1.0)/THROTTLE_SENS;
+				if(!th.abEngaged)
+				{
+					if(1<=value && AB_OVERSHOOT_M<=overshootM && AB_SHOVE_SPEED_MPS<=shoveSpeed)
+					{
+						th.abEngaged=true;
+						vrKeyTap('Tab');
+						vrHapticPulse(rawSrc);
+						setTimeout(function(){ vrHapticPulse(rawSrc); },80);
+					}
+				}
+				else if(value<AB_DISENGAGE_VALUE)
+				{
+					th.abEngaged=false;
+					vrKeyTap('Tab');
+					vrHapticPulse(rawSrc);
+					setTimeout(function(){ vrHapticPulse(rawSrc); },80);
+				}
 			}
 			else
 			{
@@ -1203,6 +1482,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 
 		var pose=frame.getViewerPose(vr.refSpace);
+		if(pose)
+		{
+			// Buffer a plain-object copy for vrRecenter (driven from the right
+			// A button handler, which has no frame/pose of its own): the
+			// XRPose's transform members are read-only DOMPointReadOnly
+			// instances tied to this frame, so copy the fields out rather
+			// than keep a reference.
+			var vp=pose.transform.position,vo=pose.transform.orientation;
+			vr.lastViewerPose={
+				position:{x:vp.x,y:vp.y,z:vp.z},
+				orientation:{x:vo.x,y:vo.y,z:vo.z,w:vo.w}
+			};
+		}
 		if(vr.mvLayer)
 		{
 			if(pose)
@@ -1345,6 +1637,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}).then(function(refSpace)
 			{
 				vr.refSpace=refSpace;
+				// The un-offset space vrRecenter always re-offsets FROM (see
+				// its doc comment) -- captured once, here, at session start.
+				vr.baseRefSpace=refSpace;
 				// Head-locked space for the dial quad layers (see
 				// ensureDialResources); requested once up front rather than
 				// lazily since 'viewer' is always available on an
@@ -1380,6 +1675,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 					}
 					vr.session=null;
 					vr.refSpace=null;
+					vr.baseRefSpace=null;
+					vr.lastViewerPose=null;
 					vr.xrFb=null;
 					vr.mvExt=null;
 					vr.mvBinding=null;
@@ -1406,10 +1703,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 						HEAPF32[ctlPtr+zi]=0;
 					}
 					vrReleaseAllKeys();
-					vr.ctl.stick={grabbed:false,q0:null};
-					vr.ctl.thr={grabbed:false,p0:null,fwd0:null,base:0,value:0,ever:false};
+					vr.ctl.stick={grabbed:false,q0:null,sticky:{latched:false,disengageArmed:false,prevPhys:false,lastReleaseAt:0}};
+					vr.ctl.thr={grabbed:false,p0:null,fwd0:null,base:0,value:0,ever:false,
+						sticky:{latched:false,disengageArmed:false,prevPhys:false,lastReleaseAt:0},
+						abEngaged:false,lastPushM:0,lastT:0};
 					vr.ctl.rightTrigger=false;
-					vr.ctl.rightA=false;
+					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false};
 					vr.ctl.rightB=false;
 					vr.ctl.leftX=false;
 					vr.ctl.leftY=false;
@@ -1517,6 +1816,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		return out;
 	};
+
+	// Headless test hooks for the recenter feature (scripts/smoke-vrctl.mjs):
+	// yawOnlyQuatFromOrientation is a pure function (no session/refSpace
+	// needed) so the yaw-extraction math can be checked directly; recenter
+	// lets a test invoke the same handler the right-A long-hold path calls
+	// (it is a no-op without a real baseRefSpace/lastViewerPose, but still
+	// bumps vr.recenterAttempts -- see vrRecenter's doc comment).
+	vr.yawOnlyQuatFromOrientation=function(q)
+	{
+		var r=yawOnlyQuatFromOrientation({x:q[0],y:q[1],z:q[2],w:q[3]});
+		return [r.x,r.y,r.z,r.w];
+	};
+	vr.recenter=vrRecenter;
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read
