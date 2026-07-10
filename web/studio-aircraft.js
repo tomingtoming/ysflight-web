@@ -17,6 +17,7 @@ import {
   extractDnmColors, repaintDnm,
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
+import { dnmToGlb, glbToDnm } from './dnm-gltf.js';
 import { listStaged, getStaged, putStaged, removeStaged } from './staging.js';
 
 const S = ({
@@ -26,7 +27,17 @@ const S = ({
     working: '作業中…',
     acTitle: '✈️ 組み立て',
     acIntro: 'モデラーで作った .dnm / .srf と、飛行特性 .dat を1機に組み立てます。.dat が無ければ下の「stockから作る」で。',
-    acDrop: '機体のファイル (.dat / .dnm / .srf) をドロップ / クリックして選択',
+    acDrop: '機体のファイル (.dat / .dnm / .srf / .glb) をドロップ / クリックして選択',
+    glbImported: (n, k, t) => '✓ ' + n + ' をDNMに変換して取り込みました（' + k + 'ノード・' + t + '三角形）',
+    blTitle: '🟠 Blenderで作る',
+    blIntro: 'Blenderが主役のモデリング経路。テンプレから始めて、書き出した .glb を上のドロップ欄に入れるだけ。',
+    blTemplate: '📥 機体テンプレをダウンロード (.glb)',
+    blTemplateTitle: '可動部（脚・フラップ・プロペラ・VTOLノズル等）が配線済みの箱組み機体。Blenderで箱を彫り替えれば飛ばせます',
+    blExport: '⬇ 選択中の外観を .glb で書き出す',
+    blExportTitle: '外観モデル (.dnm) をBlender用glTFに変換してダウンロード（階層・可動アニメ・YSFLIGHT情報つき）',
+    blExportNone: '書き出すには外観モデル (.dnm) を選んでください',
+    blExported: (n, a) => '✓ ' + n + ' を書き出しました（アニメ: ' + (a.length ? a.join('・') : 'なし') + '）',
+    blHint: '⚠ Blenderからの書き出しは glTF 2.0 (.glb)、「含める → データ → カスタムプロパティ」にチェック（可動部情報の保持に必須）',
     stagedTitle: '🧊 モデラから届いたファイル',
     stagedHint: 'Polygon Crest（3Dモデラ）で保存したファイルは自動でここに届きます',
     stagedAdd: '追加',
@@ -96,7 +107,17 @@ const S = ({
     working: 'Working…',
     acTitle: '✈️ Assemble',
     acIntro: 'Combine your modeler-made .dnm / .srf with a flight-model .dat. No .dat? Make one below from a stock base.',
-    acDrop: 'Drop aircraft files (.dat / .dnm / .srf) / click to choose',
+    acDrop: 'Drop aircraft files (.dat / .dnm / .srf / .glb) / click to choose',
+    glbImported: (n, k, t) => '✓ Converted ' + n + ' to DNM (' + k + ' nodes, ' + t + ' triangles)',
+    blTitle: '🟠 Build in Blender',
+    blIntro: 'The Blender-first modeling path: start from the template, drop the exported .glb into the file drop above.',
+    blTemplate: '📥 Download the aircraft template (.glb)',
+    blTemplateTitle: 'A boxy airframe with every movable part (gear, flaps, propeller, VTOL nozzles, ...) pre-wired — carve the boxes and it flies',
+    blExport: '⬇ Export the selected visual as .glb',
+    blExportTitle: 'Convert the visual model (.dnm) to Blender-ready glTF (hierarchy, movable-part animations, YSFLIGHT metadata)',
+    blExportNone: 'Select a visual model (.dnm) to export',
+    blExported: (n, a) => '✓ Exported ' + n + ' (animations: ' + (a.length ? a.join(', ') : 'none') + ')',
+    blHint: '⚠ Export from Blender as glTF 2.0 (.glb) with Include > Data > Custom Properties checked (required to keep the movable-part wiring)',
     stagedTitle: '🧊 From the modeler',
     stagedHint: 'Files you save in Polygon Crest (the 3D modeler) arrive here automatically',
     stagedAdd: 'Add',
@@ -339,7 +360,7 @@ function buildAssembleSection(rail) {
   const drop = el('label', 'drop', S.acDrop);
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.dat,.dnm,.srf';
+  input.accept = '.dat,.dnm,.srf,.glb,.gltf';
   input.multiple = true;
   input.style.display = 'none';
   drop.appendChild(input);
@@ -357,6 +378,20 @@ function buildAssembleSection(rail) {
 
   const addFiles = async (fileList) => {
     for (const f of Array.from(fileList)) {
+      // .glb (Blender export) converts to .dnm on the way in — after that it
+      // is a perfectly ordinary visual model.
+      if (/\.(glb|gltf)$/i.test(f.name)) {
+        try {
+          const res = glbToDnm(new Uint8Array(await f.arrayBuffer()));
+          const name = f.name.replace(/\.(glb|gltf)$/i, '.dnm');
+          entries = entries.filter((e) => e.name !== name);
+          entries.push({ name, bytes: res.dnm });
+          acMsg.textContent = S.glbImported(f.name, res.nodes, res.triangles);
+        } catch (e) {
+          acMsg.textContent = S.errorPrefix + ((e && e.message) || e);
+        }
+        continue;
+      }
       if (!/\.(dat|dnm|srf)$/i.test(f.name)) continue;
       entries = entries.filter((e) => e.name !== f.name);
       entries.push({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
@@ -563,6 +598,45 @@ async function buildDatSection(rail) {
   box.appendChild(btnR);
 }
 
+// --- Blender section --------------------------------------------------------------------
+// The primary from-scratch modeling path: template out, .glb in (via the file
+// drop, which converts to DNM), and export of any visual for editing.
+
+function buildBlenderSection(rail) {
+  rail.appendChild(el('h2', null, S.blTitle));
+  rail.appendChild(el('p', 'intro', S.blIntro));
+  const tpl = el('a', null, S.blTemplate);
+  tpl.href = './aircraft-starter.glb';
+  tpl.download = 'aircraft-starter.glb';
+  tpl.title = S.blTemplateTitle;
+  tpl.style.cssText = 'display:inline-block;margin:0 0 8px;padding:6px 12px;border:1px solid #4da3ff;' +
+    'border-radius:6px;color:#4da3ff;font-size:12.5px;text-decoration:none;background:rgba(77,163,255,.14)';
+  rail.appendChild(tpl);
+  const expBtn = el('button', null, S.blExport);
+  expBtn.title = S.blExportTitle;
+  const btnR = el('div', 'btnrow');
+  btnR.style.justifyContent = 'flex-start';
+  btnR.appendChild(expBtn);
+  rail.appendChild(btnR);
+  const msg = el('div', 'msg', S.blHint);
+  rail.appendChild(msg);
+  expBtn.addEventListener('click', () => {
+    const ent = visualEntry();
+    if (!ent) { msg.textContent = S.blExportNone; return; }
+    try {
+      const res = dnmToGlb(ent.bytes);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([res.glb], { type: 'model/gltf-binary' }));
+      a.download = ent.name.replace(/\.dnm$/i, '') + '.glb';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      msg.textContent = S.blExported(a.download, res.animations) + '\n' + S.blHint;
+    } catch (e) {
+      msg.textContent = S.errorPrefix + ((e && e.message) || e);
+    }
+  });
+}
+
 // --- modeler bridge section ------------------------------------------------------------
 
 function buildModelerSection(rail) {
@@ -664,6 +738,7 @@ async function main() {
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
   await buildDatSection(chrome.rail);
+  buildBlenderSection(chrome.rail);
   buildModelerSection(chrome.rail);
 
   // ?edit=<id>: re-open a creation — loose files come back out of the pack

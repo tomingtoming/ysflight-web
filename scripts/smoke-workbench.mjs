@@ -221,6 +221,23 @@ console.log('library: delete works (back to 3 creations)');
   const acEntries = await page.evaluate(() => window.ysfwStudio.getEntries());
   if (!Array.isArray(acEntries) || acEntries.length < 2) die('aircraft studio did not restore entries from ?edit: ' + JSON.stringify(acEntries));
 
+  // Blender bridge in the browser: the staged template .glb converts to a DNM
+  // whose movable wiring survives, and converts back out with animations.
+  const glbCheck = await page.evaluate(async () => {
+    const { glbToDnm, dnmToGlb } = await import('./dnm-gltf.js');
+    const { parseDnm } = await import('./dnm-preview.js');
+    const glb = new Uint8Array(await (await fetch('./aircraft-starter.glb')).arrayBuffer());
+    const res = glbToDnm(glb);
+    const p = parseDnm(res.dnm);
+    const gear = p.nodes.get('NoseGear');
+    const fwd = dnmToGlb(res.dnm);
+    return { nodes: p.nodes.size, tris: res.triangles, gearCla: gear && gear.cla, anims: fwd.animations.length };
+  });
+  if (!(glbCheck.nodes >= 18) || glbCheck.gearCla !== 0 || !(glbCheck.anims >= 5)) {
+    die('browser glb<->dnm conversion failed: ' + JSON.stringify(glbCheck));
+  }
+  console.log('blender bridge: template .glb -> DNM -> .glb in-browser ' + JSON.stringify(glbCheck));
+
   if ((await bootStudio('studio-scenery.html', { edit: isl.id })) !== 'scenery') die('scenery studio wrong page id');
   const scCounts = await page.evaluate(() => window.ysfwStudio.counts());
   if (!scCounts || !(scCounts.islands >= 1)) die('scenery studio did not restore islands from ?edit: ' + JSON.stringify(scCounts));
