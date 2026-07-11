@@ -18,7 +18,6 @@ import {
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf } from './dnm-gltf.js';
-import { listStaged, getStaged, putStaged, removeStaged } from './staging.js';
 
 const S = ({
   ja: {
@@ -26,7 +25,7 @@ const S = ({
     errorPrefix: 'エラー: ',
     working: '作業中…',
     acTitle: '✈️ 組み立て',
-    acIntro: 'モデラーで作った .dnm / .srf と、飛行特性 .dat を1機に組み立てます。.dat が無ければ下の「stockから作る」で。',
+    acIntro: 'Blenderで作った .glb（または .dnm / .srf）と、飛行特性 .dat を1機に組み立てます。.dat が無ければ下の「stockから作る」で。',
     acDrop: '機体のファイル (.dat / .dnm / .srf / .glb) をドロップ / クリックして選択',
     glbImported: (n, k, t) => '✓ ' + n + ' をDNMに変換して取り込みました（' + k + 'ノード・' + t + '三角形）',
     glbAutoColl: '＋ 当たり判定を外観から自動生成しました',
@@ -41,22 +40,10 @@ const S = ({
     blExportNone: '書き出すには外観モデル (.dnm) を選んでください',
     blExported: (n, a) => '✓ ' + n + ' を書き出しました（アニメ: ' + (a.length ? a.join('・') : 'なし') + '）',
     blHint: '⚠ Blenderからの書き出しは glTF 2.0 (.glb)、「含める → データ → カスタムプロパティ」にチェック（可動部情報の保持に必須）',
-    stagedTitle: '🧊 モデラから届いたファイル',
-    stagedHint: 'Polygon Crest（3Dモデラ）で保存したファイルは自動でここに届きます',
-    stagedAdd: '追加',
-    stagedAddTitle: '機体組み立てのファイルに加える',
-    stagedEmpty: '（まだありません — 🧊 でモデルを作って保存すると届きます）',
-    stagedAdded: (n) => '✓ ' + n + ' を組み立てに追加しました',
     borrowLabel: '🎨 stockの見た目を借りる',
     borrowBtn: '取り込む',
     borrowTitle: 'stock機体の外観・当たり判定・コックピットをこの組み立てに取り込む（.datは下のウィザードで）',
     borrowDone: (name, n) => '✓ ' + name + ' の見た目（' + n + 'ファイル）を取り込みました。あとは .dat＝下の「stockから作る」で完成',
-    stagedDl: '⬇', stagedDlTitle: 'ダウンロード（手元に保存）',
-    stagedSend: '＋ ファイルを送る',
-    stagedSendTitle: '手持ちの .srf/.dnm/.dat をモデラと組み立ての共有領域に入れる',
-    stagedSent: (n) => '✓ ' + n + ' 件を送りました（モデラでは次回起動時に File→Open で見えます）',
-    modelerLink: '🧊 3Dモデラを開く（Polygon Crest・上級者向け）',
-    modelerLinkTitle: 'ゼロから新しい形を作りたい人向けのYSFLIGHT公式3Dエディタ（実験版・操作は本格的）。見るだけ・色を変えるだけならプレビューと「🎨 塗装」で十分です',
     slotDat: '飛行特性 (.dat) ※必須',
     slotVisual: '外観モデル (.dnm) ※必須',
     slotColl: '当たり判定 (.srf) ※必須',
@@ -109,7 +96,7 @@ const S = ({
     errorPrefix: 'Error: ',
     working: 'Working…',
     acTitle: '✈️ Assemble',
-    acIntro: 'Combine your modeler-made .dnm / .srf with a flight-model .dat. No .dat? Make one below from a stock base.',
+    acIntro: 'Combine your Blender-made .glb (or .dnm / .srf) with a flight-model .dat. No .dat? Make one below from a stock base.',
     acDrop: 'Drop aircraft files (.dat / .dnm / .srf / .glb) / click to choose',
     glbImported: (n, k, t) => '✓ Converted ' + n + ' to DNM (' + k + ' nodes, ' + t + ' triangles)',
     glbAutoColl: '+ Generated a collision shell from the visual',
@@ -124,22 +111,10 @@ const S = ({
     blExportNone: 'Select a visual model (.dnm) to export',
     blExported: (n, a) => '✓ Exported ' + n + ' (animations: ' + (a.length ? a.join(', ') : 'none') + ')',
     blHint: '⚠ Export from Blender as glTF 2.0 (.glb) with Include > Data > Custom Properties checked (required to keep the movable-part wiring)',
-    stagedTitle: '🧊 From the modeler',
-    stagedHint: 'Files you save in Polygon Crest (the 3D modeler) arrive here automatically',
-    stagedAdd: 'Add',
-    stagedAddTitle: 'Add to the aircraft assembly files',
-    stagedEmpty: '(Nothing yet — make and save a model in 🧊 and it lands here)',
-    stagedAdded: (n) => '✓ Added ' + n + ' to the assembly',
     borrowLabel: '🎨 Borrow a stock airframe',
     borrowBtn: 'Import',
     borrowTitle: 'Pull a stock aircraft’s visual/collision/cockpit into this assembly (make the .dat below)',
     borrowDone: (name, n) => '✓ Imported ' + name + '’s airframe (' + n + ' files). Now make a .dat below to complete it',
-    stagedDl: '⬇', stagedDlTitle: 'Download a copy',
-    stagedSend: '＋ Send a file',
-    stagedSendTitle: 'Put your own .srf/.dnm/.dat into the shared modeler/assembly area',
-    stagedSent: (n) => '✓ Sent ' + n + ' file(s) (visible in the modeler’s File→Open on its next start)',
-    modelerLink: '🧊 Open the 3D modeler (Polygon Crest — advanced)',
-    modelerLinkTitle: 'YSFLIGHT’s official 3D editor for making new geometry from scratch (experimental, a serious tool). To just look or recolor, the preview and 🎨 Paint are enough',
     slotDat: 'Flight model (.dat) — required',
     slotVisual: 'Visual model (.dnm) — required',
     slotColl: 'Collision shell (.srf) — required',
@@ -669,97 +644,6 @@ function buildBlenderSection(rail) {
   });
 }
 
-// --- modeler bridge section ------------------------------------------------------------
-
-function buildModelerSection(rail) {
-  rail.appendChild(el('h2', null, S.stagedTitle));
-  const stagedBox = el('div');
-  rail.appendChild(stagedBox);
-  const modelerA = el('a', null, S.modelerLink);
-  modelerA.href = './modeler.html';
-  modelerA.title = S.modelerLinkTitle;
-  modelerA.style.cssText = 'display:inline-block;margin-top:8px;font-size:12.5px';
-  rail.appendChild(modelerA);
-
-  // Files the modeler saved arrive via the OPFS staging bridge — one click puts
-  // them into the assembly.  Refreshed whenever the tab comes back into view
-  // (the user flips between the modeler and this page).
-  const renderStaged = async () => {
-    let staged = [];
-    try { staged = await listStaged(); } catch (e) { /* OPFS unavailable — hide */ }
-    stagedBox.innerHTML = '';
-    const hint = el('div', null, staged.length ? S.stagedHint : S.stagedEmpty);
-    hint.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:4px';
-    stagedBox.appendChild(hint);
-    for (const s of staged) {
-      const rowEl = el('div');
-      rowEl.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 8px;border:1px solid #2a3647;border-radius:6px;margin-bottom:4px';
-      const nm = el('span', null, s.name);
-      nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6edf3;font-size:12.5px';
-      const sz = el('span', null, (s.size / 1024).toFixed(1) + 'KB');
-      sz.style.cssText = 'flex:none;color:#7d93b0;font-size:11px';
-      const add = el('button', 'accent', S.stagedAdd);
-      add.title = S.stagedAddTitle;
-      add.style.cssText += ';font-size:11.5px;padding:3px 10px;flex:none';
-      add.addEventListener('click', async () => {
-        try {
-          const bytes = await getStaged(s.name);
-          entries = entries.filter((e) => e.name !== s.name);
-          entries.push({ name: s.name, bytes });
-          rebuildSlots();
-          acMsg.textContent = S.stagedAdded(s.name);
-        } catch (e) { acMsg.textContent = S.errorPrefix + ((e && e.message) || e); }
-      });
-      const dl = el('button', null, S.stagedDl);
-      dl.title = S.stagedDlTitle;
-      dl.style.cssText += ';font-size:11.5px;padding:3px 8px;flex:none';
-      dl.addEventListener('click', async () => {
-        const bytes = await getStaged(s.name);
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([bytes]));
-        a.download = s.name;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      });
-      const del = el('button', null, '🗑');
-      del.style.cssText += ';font-size:11.5px;padding:3px 8px;flex:none;color:#c75d6a';
-      del.addEventListener('click', async () => { await removeStaged(s.name); renderStaged(); });
-      rowEl.appendChild(nm);
-      rowEl.appendChild(sz);
-      rowEl.appendChild(add);
-      rowEl.appendChild(dl);
-      rowEl.appendChild(del);
-      stagedBox.appendChild(rowEl);
-    }
-    // Local files INTO the shared area (they reach the modeler's File->Open on
-    // its next start; the assembly can add them from this same list).
-    const sendLab = el('label', null, S.stagedSend);
-    sendLab.title = S.stagedSendTitle;
-    sendLab.style.cssText =
-      'display:inline-block;margin-top:2px;padding:4px 10px;border:1px dashed #2a3647;border-radius:6px;' +
-      'color:#7d93b0;font-size:11.5px;cursor:pointer';
-    const sendIn = document.createElement('input');
-    sendIn.type = 'file';
-    sendIn.accept = '.srf,.dnm,.dat';
-    sendIn.multiple = true;
-    sendIn.style.display = 'none';
-    sendIn.addEventListener('change', async () => {
-      let n = 0;
-      for (const f of Array.from(sendIn.files)) {
-        if (!/\.(srf|dnm|dat)$/i.test(f.name)) continue;
-        await putStaged(f.name, new Uint8Array(await f.arrayBuffer()));
-        n++;
-      }
-      if (n) acMsg.textContent = S.stagedSent(n);
-      renderStaged();
-    });
-    sendLab.appendChild(sendIn);
-    stagedBox.appendChild(sendLab);
-  };
-  renderStaged();
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') renderStaged(); });
-  window.addEventListener('focus', renderStaged);
-}
 
 // --- boot ------------------------------------------------------------------------------
 
@@ -771,7 +655,7 @@ async function main() {
   buildPaintSection(chrome.rail);
   await buildDatSection(chrome.rail);
   buildBlenderSection(chrome.rail);
-  buildModelerSection(chrome.rail);
+
 
   // ?edit=<id>: re-open a creation — loose files come back out of the pack
   // payload, the slot assignment and name from the embedded recipe.

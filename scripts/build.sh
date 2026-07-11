@@ -74,8 +74,10 @@ emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \
     -DCMAKE_EXE_LINKER_FLAGS="-Oz"
 
 cmake --build "$BUILD_DIR" --target ysflight32_gl2 -j"$(nproc)"
-# Polygon Crest for the browser (experimental second wasm target).
-cmake --build "$BUILD_DIR" --target ysgebl_web -j"$(nproc)"
+# Polygon Crest (ysgebl_web) is DORMANT: the Blender bridge (web/dnm-gltf.js)
+# became the primary modeling path (toming's ruling, 2026-07-11).  The port
+# lives on under src/port/ysgebl + web/modeler.html — rebuild by restoring
+# the ysgebl_web target build + the modeler staging block below.
 
 # --- Stage dist/ with content-hashed asset names ------------------------------
 rm -rf "$DIST_DIR"
@@ -92,7 +94,7 @@ H_DATA=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.data")
 H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" \
   "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" \
   "$ROOT/web/workbench.js" "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" \
-  "$ROOT/web/staging.js" "$ROOT/web/modeler-bridge.js" "$ROOT/web/modeler.html" \
+  "$ROOT/web/staging.js" \
   "$ROOT/web/dnm-preview.js" "$ROOT/web/studio-shared.js" "$ROOT/web/dnm-gltf.js" \
   "$ROOT/web/studio-aircraft.js" "$ROOT/web/studio-scenery.js" "$ROOT/web/studio-pack.js" \
   "$ROOT/web/sw.js" 2>/dev/null | sha1sum | cut -c1-8)
@@ -110,7 +112,7 @@ cp "$ROOT/web/icons/"*.png "$DIST_DIR/icons/"
 
 # Add-on pack layer: engine-agnostic core (packs.js) + pre-boot UI (packs-ui.js)
 # + vendored unzip (vendor/fflate.js).  Plain ES modules, no bundler.
-cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" "$ROOT/web/workbench.js" "$ROOT/web/staging.js" "$ROOT/web/modeler-bridge.js" "$DIST_DIR/"
+cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" "$ROOT/web/workbench.js" "$ROOT/web/staging.js" "$DIST_DIR/"
 mkdir -p "$DIST_DIR/vendor"
 cp "$ROOT/web/vendor/fflate.js" "$DIST_DIR/vendor/"
 
@@ -128,17 +130,6 @@ cp "$ROOT/templates/aircraft-starter.glb" "$DIST_DIR/"
 cp "$ROOT/web/vendor/three.module.js" "$DIST_DIR/vendor/"
 node "$ROOT/scripts/gen-stock-index.mjs" "$ROOT/upstream/YSFLIGHT/runtime" "$DIST_DIR/stock"
 
-# Polygon Crest (experimental): hash the modeler assets and point modeler.html
-# at them (same cache-busting pattern as the engine assets).
-MJS_H=$(hash8 "$BUILD_DIR/platform_emscripten/ysgebl_web.js")
-MWASM_H=$(hash8 "$BUILD_DIR/platform_emscripten/ysgebl_web.wasm")
-MDATA_H=$(hash8 "$BUILD_DIR/platform_emscripten/ysgebl_web.data")
-cp "$BUILD_DIR/platform_emscripten/ysgebl_web.js"   "$DIST_DIR/ysgebl_web.$MJS_H.js"
-cp "$BUILD_DIR/platform_emscripten/ysgebl_web.wasm" "$DIST_DIR/ysgebl_web.$MWASM_H.wasm"
-cp "$BUILD_DIR/platform_emscripten/ysgebl_web.data" "$DIST_DIR/ysgebl_web.$MDATA_H.data"
-sed "s|^.*// __MODELER_ASSET_LINE__\$|  var ASSET = {js:'ysgebl_web.$MJS_H.js',wasm:'ysgebl_web.$MWASM_H.wasm',data:'ysgebl_web.$MDATA_H.data'};|" \
-    "$ROOT/web/modeler.html" > "$DIST_DIR/modeler.html"
-
 # index.html: point the ASSET line at the hashed names.
 sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',data:'$DATA_FILE',build:'$BUILD_ID'};|" \
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
@@ -153,8 +144,6 @@ sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
 # COOP/COEP cross-origin isolation headers are not required.)
 cat > "$DIST_DIR/_headers" <<EOF
 /ysflight32_gl2.*
-  Cache-Control: public, max-age=31536000, immutable
-/ysgebl_web.*
   Cache-Control: public, max-age=31536000, immutable
 /icons/*
   Cache-Control: public, max-age=86400

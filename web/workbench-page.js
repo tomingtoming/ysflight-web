@@ -30,7 +30,7 @@ const S = ({
     studios: [
       {
         page: 'studio-aircraft.html', glyph: '✈️', title: '機体スタジオ',
-        desc: 'stockの見た目を借りて塗装し、性能を .dat ウィザードでいじって、3Dプレビューで確かめる。モデラで作った .dnm/.srf の組み立てもここ。',
+        desc: 'stockの見た目を借りて塗装し、性能を .dat ウィザードでいじって、3Dプレビューで確かめる。Blenderで作った .glb の取り込みもここ。',
       },
       {
         page: 'studio-scenery.html', glyph: '🏝', title: 'マップスタジオ',
@@ -52,7 +52,6 @@ const S = ({
     libEdit: '✏️', libEditTitle: 'スタジオで続きから編集',
     libDel: '🗑', libDelTitle: '削除',
     libDelConfirm: (n) => '「' + n + '」を削除しますか？',
-    modelerLink: '🧊 3Dモデラを開く（Polygon Crest・上級者向け）',
   },
   en: {
     title: '🛠 Workbench',
@@ -61,7 +60,7 @@ const S = ({
     studios: [
       {
         page: 'studio-aircraft.html', glyph: '✈️', title: 'Aircraft Studio',
-        desc: 'Borrow a stock airframe, paint it, tune the .dat, and check it in a live 3D preview. Assembling modeler-made .dnm/.srf happens here too.',
+        desc: 'Borrow a stock airframe, paint it, tune the .dat, and check it in a live 3D preview. Blender-made .glb files import here too.',
       },
       {
         page: 'studio-scenery.html', glyph: '🏝', title: 'Scenery Studio',
@@ -83,7 +82,6 @@ const S = ({
     libEdit: '✏️', libEditTitle: 'Continue editing in its studio',
     libDel: '🗑', libDelTitle: 'Delete',
     libDelConfirm: (n) => 'Delete “' + n + '”?',
-    modelerLink: '🧊 Open the 3D modeler (Polygon Crest — advanced)',
   },
 })[LANG];
 
@@ -121,10 +119,6 @@ function studioCards() {
     wrap.appendChild(card);
   }
   app.appendChild(wrap);
-  const ml = el('a', null, S.modelerLink);
-  ml.href = './modeler.html';
-  ml.style.cssText = 'display:inline-block;margin:0 0 16px;padding:6px 12px;border:1px solid #2a3647;border-radius:6px;color:#8fa3bb;font-size:12.5px;text-decoration:none';
-  app.appendChild(ml);
 }
 
 // --- creations library ---------------------------------------------------------

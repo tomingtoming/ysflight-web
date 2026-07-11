@@ -62,11 +62,8 @@ jobs:
         if: github.event_name == 'pull_request'
         run: scripts/smoke-workbench.sh
 
-      # Polygon Crest boot smoke (PR only): the editor's second wasm target
-      # boots, reaches its main loop, and survives input without fatals.
-      - name: Modeler smoke (PR only)
-        if: github.event_name == 'pull_request'
-        run: scripts/smoke-modeler.sh
+      # (Polygon Crest is dormant — see scripts/build.sh.  Restore its build
+      # block and this smoke together: scripts/smoke-modeler.sh)
 
       # Real 2-browser P2P pack transfer over WebRTC (loopback ICE — no STUN/internet):
       # a host serves from OPFS while a joiner pulls a single pack AND a multi-pack set
