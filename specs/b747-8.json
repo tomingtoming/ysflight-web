@@ -1,0 +1,80 @@
+{
+  "name": "B747-8",
+  "comment": "Measured from the official Boeing 747-8 three-view (mlit.go.jp/common/000214986.pdf): span 224ft5in=68.4m, length 250ft2in=76.25m, height 63ft6in=19.35m, h-stab span 72ft2in=22.0m, wing sweep 37.5deg.  Aircraft coords: nose +Z, fuselage axis y=0, meters.",
+  "length": 76.25,
+  "colors": {
+    "body": [235, 235, 232],
+    "wing": [200, 203, 208],
+    "engine": [150, 155, 162],
+    "dark": [70, 74, 82]
+  },
+  "fuselage": {
+    "comment": "stations: zn = meters from the NOSE TIP; top/bottom/halfwidth of the section (y up).  The 747 hump is the raised top between zn 3 and 26.",
+    "ringPoints": 12,
+    "stations": [
+      { "zn": 0.0,  "top": -0.3, "bottom": -0.9, "w": 0.3 },
+      { "zn": 1.6,  "top": 1.0,  "bottom": -2.0, "w": 1.8 },
+      { "zn": 4.0,  "top": 3.6,  "bottom": -2.9, "w": 2.7 },
+      { "zn": 8.0,  "top": 5.4,  "bottom": -3.25, "w": 3.25 },
+      { "zn": 14.0, "top": 5.6,  "bottom": -3.25, "w": 3.25 },
+      { "zn": 22.0, "top": 5.3,  "bottom": -3.25, "w": 3.25 },
+      { "zn": 27.5, "top": 4.0,  "bottom": -3.25, "w": 3.25 },
+      { "zn": 31.0, "top": 3.3,  "bottom": -3.25, "w": 3.25 },
+      { "zn": 52.0, "top": 3.3,  "bottom": -3.25, "w": 3.25 },
+      { "zn": 60.0, "top": 3.2,  "bottom": -2.2,  "w": 2.9 },
+      { "zn": 68.0, "top": 2.9,  "bottom": -0.6,  "w": 1.9 },
+      { "zn": 73.0, "top": 2.4,  "bottom": 0.8,   "w": 0.9 },
+      { "zn": 76.25, "top": 1.9, "bottom": 1.5,   "w": 0.15 }
+    ]
+  },
+  "wing": {
+    "comment": "planform sections: x = span position, znLE = leading edge (m from nose), chord (m), y = vertical at that section (dihedral).  Low wing, sweep 37.5deg, dihedral ~7deg.",
+    "color": "wing",
+    "thickness": 1.1,
+    "sections": [
+      { "x": 2.8,  "znLE": 23.4, "chord": 16.6, "y": -2.4 },
+      { "x": 12.0, "znLE": 30.5, "chord": 10.6, "y": -1.3 },
+      { "x": 22.0, "znLE": 38.2, "chord": 6.6,  "y": 0.0 },
+      { "x": 34.2, "znLE": 47.6, "chord": 3.4,  "y": 1.55 }
+    ],
+    "flaps":    { "spanFrom": 4.5,  "spanTo": 20.5, "chordFrac": 0.28 },
+    "ailerons": { "spanFrom": 24.0, "spanTo": 32.5, "chordFrac": 0.26 }
+  },
+  "hstab": {
+    "color": "wing",
+    "thickness": 0.55,
+    "sections": [
+      { "x": 0.8,  "znLE": 63.2, "chord": 9.2, "y": 1.1 },
+      { "x": 11.0, "znLE": 71.2, "chord": 3.0, "y": 2.0 }
+    ],
+    "elevator": { "spanFrom": 1.6, "spanTo": 10.2, "chordFrac": 0.32 }
+  },
+  "fin": {
+    "color": "body",
+    "thickness": 0.6,
+    "comment": "sections use y as the span axis (vertical fin): x is ignored, y = height",
+    "sections": [
+      { "y": 2.8,  "znLE": 58.8, "chord": 11.6 },
+      { "y": 13.6, "znLE": 68.0, "chord": 4.6 }
+    ],
+    "rudder": { "spanFrom": 3.6, "spanTo": 12.8, "chordFrac": 0.30 }
+  },
+  "engines": {
+    "comment": "GEnx nacelles: 4 under-wing pods.  zn = nacelle FRONT from nose.",
+    "color": "engine",
+    "diameter": 3.0,
+    "length": 5.2,
+    "positions": [
+      { "x": -11.9, "y": -3.6, "zn": 27.6 },
+      { "x": 11.9,  "y": -3.6, "zn": 27.6 },
+      { "x": -21.3, "y": -2.9, "zn": 34.6 },
+      { "x": 21.3,  "y": -2.9, "zn": 34.6 }
+    ]
+  },
+  "gear": {
+    "comment": "3-post simplification: nose gear 25ft5in=7.7m from nose, mains at 97ft4in=29.7m behind it (from the side view dimensions); wheels reach ~2.4m below the belly.",
+    "nose":  { "x": 0.0, "zn": 7.7,  "topY": -2.6, "bottomY": -5.6 },
+    "mains": { "x": 5.6, "zn": 37.4, "topY": -2.6, "bottomY": -5.7 }
+  },
+  "beacon": { "y": "top", "zn": 33.0 }
+}
