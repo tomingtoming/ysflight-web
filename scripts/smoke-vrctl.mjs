@@ -40,7 +40,10 @@ function check(name, cond, detail) {
 const browser = await chromium.launch({
   executablePath: process.env.YSFW_CHROMIUM || undefined,
   headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required']
+  // Native-GL ANGLE: SwiftShader's default backend lacks OVR_multiview2, which
+  // Group 11 (help placards) needs via vr.forceMultiview -- same flag as
+  // scripts/smoke-mv.mjs/smoke-vrdial.mjs/smoke-vrhud.mjs.
+  args: ['--autoplay-policy=no-user-gesture-required', '--use-angle=gl']
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
@@ -183,7 +186,9 @@ const keysAfterTrigger = await page.evaluate(() => {
 });
 check('trigger: fire-gun key ("Space") dispatched', keysAfterTrigger.includes('Space'), 'keys=' + JSON.stringify(keysAfterTrigger));
 
-// ---- Group 5 (extra coverage): face buttons -> gear/brake/flap keys ------
+// ---- Group 5 (extra coverage): face buttons -> brake/flap keys -----------
+// Right A no longer fires gear on the bare press edge (see Feature 1 / Group
+// 6 below): a press with no release yet must NOT dispatch KeyG immediately.
 const keysAfterButtons = await page.evaluate(() => {
   const M = globalThis.Module;
   const vr = M.ysfwVr;
@@ -198,10 +203,197 @@ const keysAfterButtons = await page.evaluate(() => {
   ]);
   return window.__vrctlKeys.slice();
 });
-check('buttons: gear key ("KeyG") dispatched (right A)', keysAfterButtons.includes('KeyG'), 'keys=' + JSON.stringify(keysAfterButtons));
 check('buttons: air-brake key ("KeyB") dispatched (right B)', keysAfterButtons.includes('KeyB'), 'keys=' + JSON.stringify(keysAfterButtons));
 check('buttons: flaps-down key ("KeyF") dispatched (left X)', keysAfterButtons.includes('KeyF'), 'keys=' + JSON.stringify(keysAfterButtons));
 check('buttons: flaps-up key ("KeyR") dispatched (left Y)', keysAfterButtons.includes('KeyR'), 'keys=' + JSON.stringify(keysAfterButtons));
+check('buttons: right A press-only does NOT immediately fire gear (tap/recenter semantics, see Group 6)', !keysAfterButtons.includes('KeyG'), 'keys=' + JSON.stringify(keysAfterButtons));
+// Release right A (a quick tap) so it doesn't linger into Group 6 -- this is
+// expected to fire a delayed KeyG tap of its own, which is fine, it's not
+// asserted on here.
+await page.evaluate(() => {
+  globalThis.Module.ysfwVr.pokeControllerFrame([
+    { hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }
+  ]);
+});
+
+// ---- Group 6: right A press/hold/release -> gear tap vs recenter --------
+// Feature 1: a quick press+release (<A_TAP_MAX_MS=400ms, fswebxr.cpp) still
+// taps the gear key exactly as before; holding it >=A_RECENTER_MS=1000ms
+// instead attempts a recenter (vr.recenterAttempts increments even headless,
+// where there is no real baseRefSpace/pose so vrRecenter is a guarded
+// no-op) and suppresses the gear tap on the eventual release.
+await page.evaluate(() => { window.__vrctlKeys = []; });
+await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]);
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]);
+});
+let keysAfterQuickTap = await page.evaluate(() => window.__vrctlKeys.slice());
+check('right A: quick press+release (<400ms) still taps gear ("KeyG")', keysAfterQuickTap.includes('KeyG'), 'keys=' + JSON.stringify(keysAfterQuickTap));
+
+await page.evaluate(() => { window.__vrctlKeys = []; });
+const recenterBefore = await page.evaluate(() => globalThis.Module.ysfwVr.recenterAttempts);
+// Fabricate the hold duration (vr.ctl.aBtn.pressAt is a plain, test-visible
+// field) instead of a real >=1s wait: deterministic and fast.
+const longHoldResult = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]); // press edge
+  vr.ctl.aBtn.pressAt = performance.now() - 1100; // pretend it has been held 1.1s
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]); // still held -> crosses A_RECENTER_MS
+  const keysWhileHeld = window.__vrctlKeys.slice();
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]); // release
+  return { keysWhileHeld, keysAfterRelease: window.__vrctlKeys.slice() };
+});
+const recenterAfter = await page.evaluate(() => globalThis.Module.ysfwVr.recenterAttempts);
+check('right A: long hold (>=1s) attempts recenter (vr.recenterAttempts increments)', recenterAfter > recenterBefore, 'before=' + recenterBefore + ' after=' + recenterAfter);
+check('right A: long hold does not fire gear while still held', !longHoldResult.keysWhileHeld.includes('KeyG'), 'keys=' + JSON.stringify(longHoldResult.keysWhileHeld));
+check('right A: long hold does not fire gear on release either (suppressed by recenter)', !longHoldResult.keysAfterRelease.includes('KeyG'), 'keys=' + JSON.stringify(longHoldResult.keysAfterRelease));
+
+// ---- Group 7: rudder-only yaw deadzone (Feature 3) -----------------------
+// Default yawDeadzoneDeg=6 (fswebxr.cpp DEFAULT_YAW_DEADZONE_DEG): a wrist
+// twist under that reads as rudder==0 exactly; halfway between the deadzone
+// and MAX_ANGLE (45deg) -- (25.5-6)/(45-6) = 0.5 -- after the linear remap.
+// yawQuat(deg): a pure rotation about the local Y axis. Per
+// deflectionFromDeltaQ's derivation (yaw=atan2(-f.x,-f.z) of the rotated
+// forward vector), this reads out as yaw=+deg directly, so positive deg
+// gives positive rudder here.
+function yawQuat(deg) {
+  const half = (deg * Math.PI / 180) / 2;
+  return [0, Math.sin(half), 0, Math.cos(half)];
+}
+const b4 = await page.evaluate((q) => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // release
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // fresh grab, q0=identity
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: q, squeeze: 1, trigger: 0, buttons: {} }]);
+  return vr.readControlBlock();
+}, yawQuat(4));
+check('yaw deadzone: ~4deg wrist twist -> rudder == 0 (inside the 6deg deadzone)', 0 === b4[3], 'rudder=' + b4[3]);
+
+const b255 = await page.evaluate((q) => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // release
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // fresh grab, q0=identity
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: q, squeeze: 1, trigger: 0, buttons: {} }]);
+  return vr.readControlBlock();
+}, yawQuat(25.5));
+check('yaw deadzone: ~25.5deg (halfway past the deadzone) -> rudder ~= 0.5', Math.abs(b255[3] - 0.5) < 0.05, 'rudder=' + b255[3]);
+
+// ---- Group 8: sticky grab (Feature 2, double-squeeze latch) --------------
+// Squeeze-release-squeeze-release quickly (within STICKY_DOUBLE_MS=250ms of
+// each other -- trivially true for back-to-back synchronous pokes below)
+// latches a persistent grab: deflections must then keep being written even
+// with squeeze=0 (no physical grip). One more squeeze+release ends the
+// latch and deflections stop (and zero, the existing spring-to-neutral
+// release behavior).
+await page.evaluate(() => {
+  // Reset first: an earlier group's own release-then-immediate-regrab
+  // pattern (all within a single synchronous evaluate(), i.e. effectively
+  // 0ms apart) could otherwise have already tripped the double-squeeze
+  // window and left the latch engaged, which would make this group's
+  // starting state ambiguous.
+  const sticky = globalThis.Module.ysfwVr.ctl.stick.sticky;
+  sticky.latched = false; sticky.disengageArmed = false; sticky.prevPhys = false; sticky.lastReleaseAt = 0;
+});
+await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // clean 0-edge
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // press 1
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // release 1
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // press 2 (within window) -> latches
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // release 2 -> stays latched
+});
+const stickyRot = yawQuat(20); // past the yaw deadzone, so rudder reads a clear nonzero value
+const bSticky = await page.evaluate((q) => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: q, squeeze: 0, trigger: 0, buttons: {} }]); // squeeze=0, still latched
+  return vr.readControlBlock();
+}, stickyRot);
+check('sticky grab: stickGrabbed stays 1 with squeeze=0 after the double-squeeze latch', 1 === bSticky[0], 'block=' + JSON.stringify(bSticky));
+check('sticky grab: deflections still written while latched (nonzero rudder)', Math.abs(bSticky[3]) > 0.1, 'block=' + JSON.stringify(bSticky));
+
+const bAfterEnd = await page.evaluate((q) => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: q, squeeze: 1, trigger: 0, buttons: {} }]); // squeeze again -> arms the disengage
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: q, squeeze: 0, trigger: 0, buttons: {} }]); // release -> disengages
+  return vr.readControlBlock();
+}, stickyRot);
+check('sticky grab: one more squeeze+release ends the latch (stickGrabbed=0)', 0 === bAfterEnd[0], 'block=' + JSON.stringify(bAfterEnd));
+check('sticky grab: deflections zeroed after the latch ends (spring-to-neutral)', 0 === bAfterEnd[1] && 0 === bAfterEnd[2] && 0 === bAfterEnd[3], 'block=' + JSON.stringify(bAfterEnd));
+
+// ---- Group 9: afterburner detent (Feature 4, left/throttle hand) ---------
+// Shoving the grabbed throttle past its 1.0 stop (>=AB_OVERSHOOT_M=0.03m at
+// a deliberate shove speed, see fswebxr.cpp) taps the engine's default
+// afterburner key (Tab, FSBTF_AFTERBURNER -- a toggle, see
+// upstream/YSFLIGHT/src/core/fscontrol.cpp); pulling back below
+// AB_DISENGAGE_VALUE=0.95 taps it again to disengage.
+const abEngageState = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const th = vr.ctl.thr;
+  // Deterministic baseline: force the throttle value to 0 (rather than
+  // whatever Group 3 left it at) so the push distances below map to known
+  // values, and reset the AB tracking state.
+  th.value = 0; th.ever = true; th.abEngaged = false;
+  window.__vrctlKeys = [];
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // clean 0-edge
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // grab-begin, base=0 (also resets lastPushM/lastT)
+  // Fabricate a "one frame ago" baseline 100ms in the past at a partial push
+  // (0.05m -> value 0.30), so the next poke's frame-to-frame shove speed is
+  // deterministic instead of depending on real wall-clock timing between
+  // page.evaluate calls: (0.30-0.05)/0.1s = 2.5 m/s, well past
+  // AB_SHOVE_SPEED_MPS=0.15.
+  th.lastPushM = 0.05; th.lastT = performance.now() - 100;
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.30], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // fast shove past 1.0
+  return { keys: window.__vrctlKeys.slice(), abEngaged: th.abEngaged, block: vr.readControlBlock() };
+});
+check('AB detent: fast shove past throttle max taps the afterburner key ("Tab")', abEngageState.keys.includes('Tab'), 'keys=' + JSON.stringify(abEngageState.keys));
+check('AB detent: engaged flag set after the shove', true === abEngageState.abEngaged, 'abEngaged=' + abEngageState.abEngaged);
+check('AB detent: throttle value still clamped to 1.0 while overshooting', 1 === abEngageState.block[5], 'throttle=' + abEngageState.block[5]);
+
+const abDisengageState = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  window.__vrctlKeys = [];
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.10], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // pull back to value 0.6 (< 0.95)
+  return { keys: window.__vrctlKeys.slice(), abEngaged: vr.ctl.thr.abEngaged };
+});
+check('AB detent: pulling back below 0.95 taps the afterburner key again ("Tab")', abDisengageState.keys.includes('Tab'), 'keys=' + JSON.stringify(abDisengageState.keys));
+check('AB detent: engaged flag cleared after pulling back', false === abDisengageState.abEngaged, 'abEngaged=' + abDisengageState.abEngaged);
+
+// Tidy up: release the throttle so a re-run (or later manual poking) starts clean.
+await page.evaluate(() => {
+  globalThis.Module.ysfwVr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.10], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]);
+});
+
+// ---- Group 10: yawOnlyQuatFromOrientation pure function (recenter math) --
+// Exercised directly (no session needed -- it's a pure function, exposed by
+// fswebxr.cpp specifically so this is possible): a pure yaw quat must pass
+// through unchanged, and pitch mixed into the input must be stripped, only
+// the yaw surviving.
+const pureYaw15 = yawQuat(15);
+const yawExtractPure = await page.evaluate((q) => globalThis.Module.ysfwVr.yawOnlyQuatFromOrientation(q), pureYaw15);
+check('yawOnlyQuatFromOrientation: a pure yaw quat passes through unchanged',
+  Math.abs(yawExtractPure[1] - pureYaw15[1]) < 1e-6 && Math.abs(yawExtractPure[0]) < 1e-9 && Math.abs(yawExtractPure[2]) < 1e-9 && Math.abs(yawExtractPure[3] - pureYaw15[3]) < 1e-6,
+  'out=' + JSON.stringify(yawExtractPure));
+
+// Combine a 20deg pitch (about local X) with the 15deg yaw above (quaternion
+// multiply reimplemented locally, matching fswebxr.cpp's quatMultiply/
+// convention: q=qYaw*qPitch applies the pitch first, then the yaw, in world
+// terms) -- the extracted yaw must still read ~15deg, with the pitch
+// stripped out entirely.
+function quatMul(a, b) {
+  return [
+    a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+    a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+    a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+    a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]
+  ];
+}
+const pitchQuat20 = [Math.sin(10 * Math.PI / 180), 0, 0, Math.cos(10 * Math.PI / 180)]; // 20deg about local X
+const pitchYawCombined = quatMul(pureYaw15, pitchQuat20);
+const yawExtractCombined = await page.evaluate((q) => globalThis.Module.ysfwVr.yawOnlyQuatFromOrientation(q), pitchYawCombined);
+check('yawOnlyQuatFromOrientation: pitch mixed into the input is stripped, yaw survives (~15deg)',
+  Math.abs(yawExtractCombined[1] - pureYaw15[1]) < 0.01 && Math.abs(yawExtractCombined[0]) < 1e-9 && Math.abs(yawExtractCombined[2]) < 1e-9,
+  'out=' + JSON.stringify(yawExtractCombined) + ' expectedY=' + pureYaw15[1]);
 
 // NOTE ON THE "HOLD TO START" BONUS CHECK (spec's optional bonus item):
 // deliberately not attempted.  The pre-flight "CENTER JOYSTICK... TO GO!"
@@ -215,6 +407,53 @@ check('buttons: flaps-up key ("KeyR") dispatched (left Y)', keysAfterButtons.inc
 // WAITING_FOR_RELEASE transition inside FsCenterJoystick -- not something
 // that can be checked cleanly without either a dedicated flag or fragile
 // timing/pixel assertions, so it is skipped rather than faked.
+
+// ---- Group 11: help placards -- visibility timer + thumbstick toggle ----
+// Feature: per-hand controller help placards (fswebxr.cpp showHelp/
+// toggleHelp/updateHelpAutoHide/updateHelpLayers). The quad-layer visuals
+// can't run headless (no real WebXR session here), but the visibility/
+// toggle state (vr.help) is kept plain and pokeable exactly for this
+// reason. vr.forceMultiview -- the same headless multiview-entry hook
+// scripts/smoke-mv.mjs, smoke-vrdial.mjs and smoke-vrhud.mjs already use --
+// doubles as a "session started" stand-in here and calls showHelp() the
+// same way vr.enter does when a real session begins (hence this group runs
+// last: forceMultiview recompiles the shared renderers for multiview, same
+// as those other scripts do as their own final/only state change).
+const helpAfterEnter = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const forced = vr.forceMultiview(512, 512);
+  return { forced, visible: vr.help.visible };
+});
+check('help: forceMultiview succeeded (native-GL ANGLE, OVR_multiview2 present)', 'ok' === helpAfterEnter.forced, 'forced=' + helpAfterEnter.forced);
+check('help: placards auto-show on session start', true === helpAfterEnter.visible, 'visible=' + helpAfterEnter.visible);
+
+// Thumbstick click (xr-standard buttons[3]) on either hand toggles both
+// placards on the press edge only -- extend the plain entry shape with
+// buttons.stick (existing pokes above never set it, so their implicit
+// "stick: undefined" reads as not-pressed and never trips this new edge --
+// see the falsy-default coercion in fswebxr.cpp's stick-toggle blocks).
+const helpToggle1 = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: false } }]); // clean 0-edge
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // press edge -> toggle off
+  return vr.help.visible;
+});
+check('help: thumbstick-click press edge toggles placards off', false === helpToggle1, 'visible=' + helpToggle1);
+
+const helpToggleHeld = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // still held, no new edge
+  return vr.help.visible;
+});
+check('help: holding the thumbstick click (no new edge) does not re-toggle', false === helpToggleHeld, 'visible=' + helpToggleHeld);
+
+const helpToggle2 = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: false } }]); // release right
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.1], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // press edge on the OTHER hand -> toggle back on
+  return vr.help.visible;
+});
+check('help: thumbstick click on the other hand also toggles (either hand, press edge -> on)', true === helpToggle2, 'visible=' + helpToggle2);
 
 await page.screenshot({ path: outDir + '-final.png' });
 await browser.close();

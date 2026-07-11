@@ -1150,7 +1150,9 @@
     // VR perf knobs for on-headset A/B testing (read by the WebXR glue at
     // session start): ?vrscale=0.5 halves the XR framebuffer per axis,
     // ?vrfov=0..1 sets Quest fixed foveation, ?vrfps=72|90 the target refresh
-    // rate, ?vraa=1 re-enables MSAA.
+    // rate, ?vraa=1 re-enables MSAA. Controller-feel knobs: ?vryawdz=<deg>
+    // rudder-only deadzone (default 6), ?vrexpo=<n> stick exponent curve
+    // (default 1.0 = off) -- see fswebxr.cpp's deflectionFromDeltaQ.
     (function () {
       var q = new URLSearchParams(location.search);
       var o = {};
@@ -1159,6 +1161,16 @@
       if (q.get('vrfps')) o.frameRate = parseFloat(q.get('vrfps'));
       if (q.get('vraa')) o.antialias = q.get('vraa') === '1';
       if (q.get('vrhud') === '0') o.hud = false; // kill switch for the VR HUD composite
+      if (q.get('vrhelp') === '0') o.help = false; // kill switch for the per-hand controller help placards
+      // ?vrpanel=1 forces the in-flight-dialog quad on (default off: the
+      // right dial's selection guide alone drives any dialog that fits it,
+      // see fswebxr.cpp's guiPanelWanted/maybeForceGuiPanel).
+      if (q.get('vrpanel') === '1') o.guiPanel = true;
+      // ?vryawdz=<deg> rudder-only deadzone (default 6, see fswebxr.cpp's
+      // DEFAULT_YAW_DEADZONE_DEG); ?vrexpo=<n> exponent response curve on all
+      // three stick axes (default 1.0 = off, see DEFAULT_STICK_EXPO).
+      if (q.get('vryawdz') !== null && q.get('vryawdz') !== '') o.yawDeadzoneDeg = parseFloat(q.get('vryawdz'));
+      if (q.get('vrexpo') !== null && q.get('vrexpo') !== '') o.stickExpo = parseFloat(q.get('vrexpo'));
       Module.ysfwVrOptions = o;
     })();
     var vrBtn = document.createElement('button');

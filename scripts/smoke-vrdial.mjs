@@ -20,6 +20,14 @@
 // selection + trigger-routing logic lives entirely in processControllerPlain,
 // independent of rendering, and this test asserts exactly that: the logic
 // works with vr.mvBinding falsy (checked explicitly at the end).
+//
+// It also exercises the live aircraft-state block the dial canvases read
+// (fsvr.h / FsVrAircraftStateDataPointer, forwarded to JS as
+// vr.readAircraftState()): forcing VR + multiview through the same headless
+// hooks as scripts/smoke-mv.mjs flips FsVrIsActive() true, which is all the
+// engine needs to start filling the block each sim frame (no real XR
+// session/headset required for that part either) -- then a Gear tap through
+// the dial must move it.
 import { chromium } from 'playwright';
 
 const url = process.argv[2] || 'http://localhost:8923/index.html?freeflight=F-15C_EAGLE';
@@ -42,7 +50,9 @@ function check(name, cond, detail) {
 const browser = await chromium.launch({
   executablePath: process.env.YSFW_CHROMIUM || undefined,
   headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required']
+  // Native-GL ANGLE (see scripts/smoke-mv.mjs): SwiftShader's WebGL1 fallback
+  // has no OVR_multiview2, and Group 5/6 below need forceMultiview to work.
+  args: ['--autoplay-policy=no-user-gesture-required', '--use-angle=gl']
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 
@@ -166,6 +176,56 @@ await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0,
 // onXRFrame, which never ran).
 const mvBindingUnset = await page.evaluate(() => !globalThis.Module.ysfwVr.mvBinding);
 check('dial logic verified with no WebXR layers session active (mvBinding unset)', mvBindingUnset, 'mvBinding=' + mvBindingUnset);
+
+// ---- Group 5: live aircraft-state block (fsvr.h) -------------------------
+// Force VR + multiview via the same headless hooks as scripts/smoke-mv.mjs
+// (pokeEye + forceMultiview). That flips FsVrIsActive() true, which is the
+// only gate FsSimulation::SimDrawAllScreen checks before filling
+// FsVrAircraftStateDataPointer each sim frame -- no real XR session/headset
+// needed for this part.
+const MV_W = 512, MV_H = 512;
+const forced = await page.evaluate(([w, h]) => {
+  const M = globalThis.Module;
+  const vr = M && M.ysfwVr;
+  if (!vr || !vr.pokeEye || !vr.forceMultiview || !vr.readAircraftState) return 'hooks-missing';
+  const identity24 = [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, w, h];
+  vr.pokeEye(0, identity24);
+  vr.pokeEye(1, identity24);
+  return vr.forceMultiview(w, h);
+}, [MV_W, MV_H]);
+check('VR + multiview forced for aircraft-state test', forced === 'ok', 'forced=' + forced);
+
+await page.waitForTimeout(500); // let a few sim frames run so the block populates
+let state = await page.evaluate(() => globalThis.Module.ysfwVr.readAircraftState());
+check('aircraft state valid==1 in flight', 1 === state[0], 'state=' + JSON.stringify(state));
+check('aircraft state gear in [0,1]', state[1] >= 0 && state[1] <= 1, 'gear=' + state[1]);
+check('aircraft state brake in [0,1]', state[2] >= 0 && state[2] <= 1, 'brake=' + state[2]);
+check('aircraft state flap in [0,1]', state[3] >= 0 && state[3] <= 1, 'flap=' + state[3]);
+
+// ---- Group 6: a Gear tap through the dial moves the live gear value ------
+// Gear transitions take real sim time (not instantaneous), so poll for a few
+// seconds rather than asserting a specific end value -- direction-agnostic,
+// same as the brief: it just must have left its initial value.
+const initialGear = state[1];
+await resetKeys();
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 1], buttons: {} }]); // select Gear
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 1, thumb: [0, 0], buttons: {} }]); // tap: KeyG down+up
+await page.waitForTimeout(150);
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release trigger
+keys = await readKeys();
+check('Gear dial tap dispatched KeyG (down+up)', keys.includes('down:KeyG') && keys.includes('up:KeyG'), 'keys=' + JSON.stringify(keys));
+
+let gearChanged = false, lastGear = initialGear;
+const tGear0 = Date.now();
+while (Date.now() - tGear0 < 5000) {
+  await page.waitForTimeout(300);
+  state = await page.evaluate(() => globalThis.Module.ysfwVr.readAircraftState());
+  lastGear = state[1];
+  if (Math.abs(lastGear - initialGear) > 0.01) { gearChanged = true; break; }
+}
+check('Gear dial tap changes the live gear value within a few seconds', gearChanged, 'initial=' + initialGear + ' last=' + lastGear);
 
 await page.screenshot({ path: outDir + '-final.png' });
 await browser.close();
