@@ -26,16 +26,20 @@ const S = ({
     modeObject: '🚢 置き物',
     modeMountain: '⛰ 山',
     modeStart: '🛫 スタート',
+    modeRunway: '🛬 滑走路',
     modeHint: {
       draw: 'ドラッグで海岸線を描くと島になります',
       object: '置きたい物を選んでクリックで配置（空母は本当に着艦・発艦できます）',
       mountain: 'クリックで山を置きます（なだらかな本物の地形＝緩い斜面には着陸もできます）',
       start: 'クリックで開始地点を置きます（低高度・速度0なら降着装置が下りた状態で始まります）',
+      runway: 'クリックで滑走路を敷きます（着陸可・端に離陸位置つき。海の上でもOK）',
     },
     objPick: '置く物',
     headingDeg: '向き (°)',
     mtRadius: '山の半径 (m)',
     mtHeight: '山の高さ (m)',
+    rwLength: '長さ (m)',
+    rwWidth: '幅 (m)',
     stAlt: '開始高度 (m)',
     stSpeed: '開始速度 (m/s)',
     isDone: (n, k) => '✓ マップ「' + n + '」（島 ' + k + ' 個）を保存しました',
@@ -61,16 +65,20 @@ const S = ({
     modeObject: '🚢 Objects',
     modeMountain: '⛰ Mountains',
     modeStart: '🛫 Starts',
+    modeRunway: '🛬 Runways',
     modeHint: {
       draw: 'Drag to draw coastlines — each stroke becomes an island',
       object: 'Pick something and click to place it (the carrier really works for landing/launching)',
       mountain: 'Click to place a mountain (real terrain — gentle slopes are landable)',
       start: 'Click to place a spawn point (low + slow starts with gear down)',
+      runway: 'Click to lay a runway (landable, with a takeoff spawn at the threshold — even over water)',
     },
     objPick: 'Object',
     headingDeg: 'Heading (°)',
     mtRadius: 'Mountain radius (m)',
     mtHeight: 'Mountain height (m)',
+    rwLength: 'Length (m)',
+    rwWidth: 'Width (m)',
     stAlt: 'Start altitude (m)',
     stSpeed: 'Start speed (m/s)',
     isDone: (n, k) => '✓ Saved map "' + n + '" (' + k + ' island' + (k === 1 ? '' : 's') + ')',
@@ -116,7 +124,7 @@ async function main() {
   rail.appendChild(el('h2', null, S.usageTitle));
   rail.appendChild(el('p', 'intro', S.isIntro));
   const modeLabels = {
-    draw: S.modeDraw, object: S.modeObject, mountain: S.modeMountain, start: S.modeStart,
+    draw: S.modeDraw, object: S.modeObject, mountain: S.modeMountain, start: S.modeStart, runway: S.modeRunway,
   };
   const legend = el('div');
   legend.style.cssText = 'color:#7d93b0;font-size:11.5px';
@@ -195,18 +203,28 @@ async function main() {
   stCtl.appendChild(clab(S.stSpeed));  stCtl.appendChild(stSpd);
   stCtl.appendChild(clab(S.headingDeg)); stCtl.appendChild(stHead);
 
-  const perModeCtls = { draw: null, object: objCtl, mountain: mtCtl, start: stCtl };
+  // Runway mode controls
+  const rwLen  = numIn(2000, 400, 6000, 90);
+  const rwWid  = numIn(45,   20,  120,  80);
+  const rwHead = numIn(0,    0,   359,  70);
+  const rwCtl  = el('div');
+  rwCtl.style.cssText = 'display:none;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px';
+  rwCtl.appendChild(clab(S.rwLength));   rwCtl.appendChild(rwLen);
+  rwCtl.appendChild(clab(S.rwWidth));    rwCtl.appendChild(rwWid);
+  rwCtl.appendChild(clab(S.headingDeg)); rwCtl.appendChild(rwHead);
+
+  const perModeCtls = { draw: null, object: objCtl, mountain: mtCtl, start: stCtl, runway: rwCtl };
 
   const setMode = (m) => {
     mode = m;
     modeHintEl.textContent = S.modeHint[m];
     for (const [k, b] of Object.entries(modeBtns)) b.className = k === m ? 'accent' : '';
-    for (const ctl of [objCtl, mtCtl, stCtl]) ctl.style.display = 'none';
+    for (const ctl of [objCtl, mtCtl, stCtl, rwCtl]) ctl.style.display = 'none';
     const c = perModeCtls[m];
     if (c) c.style.display = 'flex';
   };
 
-  for (const [m, label] of [['draw', S.modeDraw], ['object', S.modeObject], ['mountain', S.modeMountain], ['start', S.modeStart]]) {
+  for (const [m, label] of [['draw', S.modeDraw], ['object', S.modeObject], ['mountain', S.modeMountain], ['runway', S.modeRunway], ['start', S.modeStart]]) {
     const b = el('button', m === 'draw' ? 'accent' : null, label);
     b.addEventListener('click', () => setMode(m));
     modeBtns[m] = b;
@@ -221,6 +239,7 @@ async function main() {
   toolbar.appendChild(objCtl);
   toolbar.appendChild(mtCtl);
   toolbar.appendChild(stCtl);
+  toolbar.appendChild(rwCtl);
   mainEl.appendChild(toolbar);
 
   // ── main: canvas wrap ─────────────────────────────────────────────────────────
@@ -252,6 +271,7 @@ async function main() {
   const objects   = [];   // {nam, x, z, headingDeg} in world meters
   const mountains = [];   // {x, z, radiusM, heightM} in world meters
   const starts    = [];   // {x, z, altM, speedMS, headingDeg} in world meters
+  const runways   = [];   // {x, z, headingDeg, lengthM, widthM} in world meters
   const placed    = [];   // undo order: 'poly' | 'object' | 'mountain' | 'start'
   let stroke = null;
 
@@ -289,6 +309,27 @@ async function main() {
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fill();
+    }
+
+    for (const rw of runways) {
+      const [cx, cy] = fromWorld([rw.x, rw.z]);
+      const h = (rw.headingDeg || 0) * Math.PI / 180;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(h);
+      // heading 0 = north = canvas -y; the rect's long side runs along -y
+      const lpx = rw.lengthM * pxPerM;
+      const wpx = Math.max(4, rw.widthM * pxPerM);
+      ctx.fillStyle = '#585a5e';
+      ctx.fillRect(-wpx / 2, -lpx / 2, wpx, lpx);
+      ctx.strokeStyle = 'rgba(255,255,255,.8)';
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, -lpx / 2 + 3);
+      ctx.lineTo(0, lpx / 2 - 3);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
     }
 
     ctx.textAlign    = 'center';
@@ -341,6 +382,9 @@ async function main() {
     } else if (mode === 'mountain') {
       mountains.push({ x: wx, z: wz, radiusM: Number(mtRad.value) || 1500, heightM: Number(mtHt.value) || 300 });
       placed.push('mountain');
+    } else if (mode === 'runway') {
+      runways.push({ x: wx, z: wz, headingDeg: Number(rwHead.value) || 0, lengthM: Number(rwLen.value) || 2000, widthM: Number(rwWid.value) || 45 });
+      placed.push('runway');
     } else if (mode === 'start') {
       starts.push({ x: wx, z: wz, altM: Number(stAlt.value) || 0, speedMS: Number(stSpd.value) || 0, headingDeg: Number(stHead.value) || 0 });
       placed.push('start');
@@ -371,12 +415,13 @@ async function main() {
     if (kind === 'poly')     polygons.pop();
     else if (kind === 'object')   objects.pop();
     else if (kind === 'mountain') mountains.pop();
+    else if (kind === 'runway')   runways.pop();
     else if (kind === 'start')    starts.pop();
     redraw();
   });
 
   clearBtn.addEventListener('click', () => {
-    polygons.length = 0; objects.length = 0; mountains.length = 0; starts.length = 0; placed.length = 0;
+    polygons.length = 0; objects.length = 0; mountains.length = 0; starts.length = 0; runways.length = 0; placed.length = 0;
     redraw();
   });
 
@@ -399,6 +444,7 @@ async function main() {
         objects:   objects.slice(),
         mountains: mountains.slice(),
         starts:    starts.slice(),
+        runways:   runways.slice(),
       };
       const asm = assembleSceneryZip({ ...scenery, recipe: { scenery } });
       const res = await saveOrReplace(asm.zipBytes, asm.packName, editingId);
@@ -457,6 +503,8 @@ async function main() {
         for (const m of sc.mountains   || []) mountains.push({ ...m });
         starts.length    = 0;
         for (const sp of sc.starts     || []) starts.push({ ...sp });
+        runways.length   = 0;
+        for (const rw of sc.runways    || []) runways.push({ ...rw });
         placed.length = 0; // undo history does not survive a re-open
         editingId = editId;
         editBadge.textContent = S.libEditingBadge(c.name || editId);
@@ -470,7 +518,7 @@ async function main() {
   window.ysfwStudio = {
     ready: true,
     page: 'scenery',
-    counts: () => ({ islands: polygons.length, objects: objects.length, mountains: mountains.length, starts: starts.length }),
+    counts: () => ({ islands: polygons.length, objects: objects.length, mountains: mountains.length, starts: starts.length, runways: runways.length }),
   };
 }
 

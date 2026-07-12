@@ -242,6 +242,45 @@ test('assembleSceneryZip rich: GOB objects, TER mountains, extra starts', async 
   assert.equal(a.diagnostics.missing, 0);
 });
 
+test('assembleSceneryZip runways: pavement PLGs + landable pad + threshold spawn', async () => {
+  const asm = assembleSceneryZip({
+    name: 'RWY',
+    runways: [{ x: 1000, z: -2000, headingDeg: 90, lengthM: 2000, widthM: 45 }],
+  });
+  const { unzipSync } = await import('../web/vendor/fflate.js');
+  const z = unzipSync(asm.zipBytes);
+  const fld = new TextDecoder().decode(z['scenery/rwy.fld']);
+  const stp = new TextDecoder().decode(z['scenery/rwy.stp']);
+
+  // Pavement rides the shared .pc2 even with zero islands, PCK count exact.
+  const m = fld.match(/^PCK "00000000\.pc2" (\d+)$/m);
+  assert.ok(m, 'pc2 PCK present');
+  const lines = fld.split('\n');
+  const at = lines.findIndex((l) => l.startsWith('PCK "00000000.pc2"'));
+  const pc2 = lines.slice(at + 1, at + 1 + parseInt(m[1], 10));
+  assert.equal(pc2[0], 'Pict2');
+  assert.equal(pc2[pc2.length - 1], 'ENDPICT');
+  // grey base + 2 threshold bars + centerline dashes
+  assert.equal(pc2.filter((l) => l === 'COL 88 90 94').length, 1);
+  assert.ok(pc2.filter((l) => l === 'COL 230 232 235').length >= 10);
+  // heading 90 = runway along +X: base corners span x 0..2000 at z ~ -2000
+  assert.ok(pc2.includes('VER 2000.00 -2022.50'), 'east end corner');
+  assert.ok(pc2.includes('VER 0.00 -1977.50'), 'west end corner');
+
+  // Landable pad: a PST AREA LAND loop with a 10m margin.
+  assert.match(fld, /^PST\nISLOOP TRUE\nAREA LAND\nPNT 2010\.00 0\.00 -1967\.50$/m);
+
+  // Threshold spawn: on the ground at the approach end, rolling heading 90.
+  assert.match(stp, /^N RUNWAY01$/m);
+  assert.match(stp, /^C POSITION 60\.00m 0\.00m -2000\.00m$/m);
+  assert.match(stp, /^C ATTITUDE 90\.00deg 0\.00deg 0\.00deg$/m);
+  assert.match(stp, /^C CTLLDGEA TRUE$/m);
+
+  const a = await analyzePack(asm.zipBytes, { sha256 });
+  assert.deepEqual(a.categories, ['scenery']);
+  assert.equal(a.diagnostics.missing, 0);
+});
+
 test('makeDatFromBase extras: SET knobs replace-or-append, smoke gets a generator', () => {
   const base = new TextEncoder().encode(
     'IDENTIFY "X"\nCATEGORY FIGHTER\nSTRENGTH 10\nGUNINTVL 0.075\n',
