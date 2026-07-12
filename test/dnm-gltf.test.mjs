@@ -63,6 +63,39 @@ test('template glb converts and keeps its movable wiring', { skip: !glbToDnm }, 
   assert.equal(p.nodes.get('Propeller').cla, 18);
 });
 
+test('R (round vertex) flags survive dnm -> glb -> dnm', { skip: !dnmToGlb }, () => {
+  // Synthetic model: an octagonal prism whose 16 vertices are all R (smooth),
+  // plus one flat quad with plain vertices.  Through the round trip the prism
+  // vertices' baked smooth normals deviate from their face normals (22.5deg),
+  // so the converter must re-emit R on them — and must NOT invent R on the
+  // flat quad, whose corner normals equal the face normal exactly.
+  const V = [], F = [];
+  for (const z of [0, 2]) for (let k = 0; k < 8; k++) {
+    const a = (k * Math.PI) / 4;
+    V.push('V ' + Math.cos(a).toFixed(4) + ' ' + Math.sin(a).toFixed(4) + ' ' + z + ' R');
+  }
+  for (let k = 0; k < 8; k++) {
+    const k2 = (k + 1) % 8, a = ((k + 0.5) * Math.PI) / 4;
+    F.push('F', 'C 200 200 200',
+      'N 0 0 1 ' + Math.cos(a).toFixed(4) + ' ' + Math.sin(a).toFixed(4) + ' 0',
+      'V ' + k + ' ' + k2 + ' ' + (8 + k2) + ' ' + (8 + k), 'E');
+  }
+  V.push('V -1 -1 -4', 'V 1 -1 -4', 'V 1 1 -4', 'V -1 1 -4');
+  F.push('F', 'C 200 200 200', 'N 0 0 -4 0 0 -1', 'V 16 17 18 19', 'E');
+  const srfLines = ['SURF', ...V, ...F, 'E'];
+  const dnm = ['DYNAMODEL', 'DNMVER 2', 'PCK prism.srf ' + srfLines.length, ...srfLines,
+    'SRF "Body"', 'FIL prism.srf', 'CLA 0', 'NST 1', 'STA 0 0 0 0 0 0 1',
+    'POS 0 0 0 0 0 0 1', 'CNT 0 0 0', 'REL DEP', 'NCH 0', 'END', 'END', ''].join('\n');
+
+  const back = glbToDnm(dnmToGlb(new TextEncoder().encode(dnm)).glb);
+  const p = parseDnm(back.dnm);
+  const srf = [...p.srfByName.values()][0];
+  assert.equal(tris(p), 18, 'triangle count');
+  const rOn = (pred) => srf.vertices.filter((v, i) => pred(v) && srf.smooth[i]).length;
+  assert.equal(rOn((v) => v[2] > -1), 16, 'all 16 prism vertices keep R');
+  assert.equal(rOn((v) => v[2] < -1), 0, 'flat quad vertices stay non-R');
+});
+
 test('collision shell bakes visible rest geometry, skips retracted gear', { skip: !dnmToCollisionSrf }, () => {
   const dnm = readFileSync(join(here, '..', 'templates', 'aircraft-starter.dnm'));
   const total = (new TextDecoder().decode(dnm).match(/^F$/gm) || []).length;
