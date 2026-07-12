@@ -73,10 +73,10 @@
 //     FsGuiAutoPilotDialog::TakeOff side effect as before).
 //   - The right grip stick (aileron) still overrides flight control while
 //     the dialog is open, regardless of which hand owns it.
-//   - The owner hand's A/B (left X/Y here) dispatch the truthful extra
-//     hotkeys Digit5/Digit0 (apMenu mode) instead of Escape unconditionally
-//     (the old cross-hand-cancel wording) -- and instead of their own normal
-//     flap keys.
+//   - The owner hand's A/B (left X/Y here) are PARKED: their normal flap
+//     keys are suppressed AND they dispatch no dialog hotkey either -- the
+//     N-way sectors already reach every real option, so the whole dialog
+//     grammar is sector pick + trigger confirm + stick-click cancel.
 //   - The owner hand's thumbstick click is the new truthful cancel binding
 //     (dispatches Escape, closes the dialog) -- the RIGHT hand's thumbstick
 //     click, meanwhile, still just toggles the help placards (unaffected,
@@ -418,33 +418,32 @@ const ctl = await page.evaluate(() => globalThis.Module.ysfwVr.readControlBlock(
 check('right grip stick still overrides flight control while a (left-owned) dialog is open', ctl[0] === 1 && (Math.abs(ctl[1]) > 0.05 || Math.abs(ctl[2]) > 0.05), 'ctl=' + JSON.stringify(ctl.slice(0, 4)));
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release grip
 
-// ---- Owner (left) X/Y: truthful extra hotkeys Digit5/Digit0 -------------
+// ---- Owner (left) X/Y: parked while the dialog is open ------------------
 await resetKeys(page);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { a: false } }]);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { a: true } }]); // left X press edge
 await page.waitForTimeout(120);
 keys = await readKeys(page);
 check('owner (left) hand: left-X does NOT dispatch the normal flaps-down key (KeyF)', !keys.includes('down:KeyF'), 'keys=' + JSON.stringify(keys));
-check('owner (left) hand: left-X dispatches Digit5 (the truthful extra hotkey, apMenu mode) -- not an unconditional Escape', keys.includes('down:Digit5') && keys.includes('up:Digit5'), 'keys=' + JSON.stringify(keys));
+check('owner (left) hand: left-X is PARKED -- no Digit5, no Escape either (the N-way sectors already reach every option)', !keys.includes('down:Digit5') && !keys.includes('down:Escape'), 'keys=' + JSON.stringify(keys));
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { a: false } }]);
 
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
-check('selecting "5...Fly Heading Bug" via left-X closes the menu itself (dialogVisible back to 0)', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
+check('dialog still open after left-X (a parked button touches nothing)', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
 
-await openApViaLeftDial(page);
 await resetKeys(page);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: false } }]);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: true } }]); // left Y press edge
 await page.waitForTimeout(120);
 keys = await readKeys(page);
 check('owner (left) hand: left-Y does NOT dispatch the normal flaps-up key (KeyR)', !keys.includes('down:KeyR'), 'keys=' + JSON.stringify(keys));
-check('owner (left) hand: left-Y dispatches Digit0 (the truthful extra hotkey, "0...Disengage")', keys.includes('down:Digit0') && keys.includes('up:Digit0'), 'keys=' + JSON.stringify(keys));
+check('owner (left) hand: left-Y is PARKED -- no Digit0, no Escape either', !keys.includes('down:Digit0') && !keys.includes('down:Escape'), 'keys=' + JSON.stringify(keys));
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: false } }]);
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
-check('selecting "0...Disengage" via left-Y closes the menu itself (dialogVisible back to 0)', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
+check('dialog still open after left-Y (a parked button touches nothing)', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
 
 // ---- Owner-hand cancel: thumbstick click, no more cross-hand escape -----
-await openApViaLeftDial(page);
+// (the dialog is still open -- the parked X/Y above never closed it)
 await resetKeys(page);
 // The RIGHT hand's thumbstick click, meanwhile, is NOT the owner -- it must
 // still just toggle the help placards, not touch the dialog at all.

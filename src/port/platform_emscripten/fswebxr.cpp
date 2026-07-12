@@ -110,10 +110,11 @@ that owns the session and fills that state every frame:
     vr.ctl.lastDialTapHand -- see processControllerPlain's doc comment;
     defaults to 'left', where the AP tap lives, if that is stale/unknown).
     While a dialog is open, processControllerPlain reroutes the owner hand's
-    stick sectors + A/B to the dialog's own hotkeys when guiMenu.drivable, or
+    stick sectors to the dialog's own hotkeys when guiMenu.drivable, or
     to a generic Escape/cancel tap otherwise (GUI_ESCAPE_ACTION); the owner
     hand's thumbstick click is repurposed as a truthful cancel/Escape
-    binding. Unlike the normal RIGHT_DIAL/LEFT_DIAL (always exactly 4
+    binding. That is the WHOLE dialog grammar: sector pick + trigger
+    confirm + stick-click cancel, nothing else. Unlike the normal RIGHT_DIAL/LEFT_DIAL (always exactly 4
     sectors), the drivable guide dial is N-WAY: it shows one sector PER REAL
     OPTION the open dialog reports (N=guiMenu.options.length, up to
     GUI_DIAL_CAPACITY=8), evenly dividing the circle starting at up (12
@@ -123,16 +124,19 @@ that owns the session and fills that state every frame:
     Digit1..4 table, so a 6- or 7-option menu (radio-comm's wingman-command
     dialog has 7 numbered commands plus an explicit "0...Don't send" option,
     8 total) is fully dial-selectable without ever needing the on-quad panel.
-    A/B (X/Y on the left hand) remain fixed Digit5/Digit0 taps regardless of
-    N -- redundant once N>=5/N==10-ish covers those positions via a sector
-    already, harmless (a no-op tap) when the open dialog has fewer options,
-    exactly as before this change. The OTHER hand is completely untouched --
+    The owner hand's A/B (X/Y on the left hand) are simply PARKED while the
+    dialog is open: their normal flight taps (gear/brake, flaps) are
+    suppressed so a face-button fumble mid-dialog can't drop the gear, and
+    they carry no dialog meaning either -- the N sectors already reach every
+    real option, so a second fixed-digit path would only be a redundant
+    grammar to memorize. (A's long-press recenter stays live -- view-only,
+    dialog-irrelevant.) The OTHER hand is completely untouched --
     its dial, trigger, A/B/X/Y all keep their normal flight-control meaning,
     exactly as if no dialog were open, so the pilot never loses that hand's
     functions to a dialog they didn't open. Discoverability: the owner hand's
     quad is FORCED visible for as long as a dialog stays open (regardless of
     thumbstick engagement) and switches to a dialog-guide face -- N sectors
-    numbered 1..N (+A=5/B=0 in the centre, see above) labelled with the
+    numbered 1..N labelled with the
     dialog's REAL option text when drivable, or a uniform "ESC" face (with a
     "see panel" hint once the panel is forced) otherwise -- see
     drawGuiDialGuide/rdial.guiMode/rdial.guiMenu (ldial.* symmetrically);
@@ -378,9 +382,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// Right A button: press/hold/release state for the tap-vs-
 			// recenter decision (see A_TAP_MAX_MS/A_RECENTER_MS).
 			aBtn:{pressed:false,pressAt:0,recentered:false},
-			rightB:false,
-			leftX:false,
-			leftY:false,
 			leftTrigger:false,
 			keys:{},
 			// Radial function-dial state per hand (see RIGHT_DIAL/LEFT_DIAL).
@@ -493,10 +494,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// dial-selectable without the on-quad panel, where the old fixed-4
 	// table needed the owner hand's A/B buttons to reach options 5/6 (see
 	// GUI_DIAL_CAPACITY's doc comment) and forced the panel on above that.
-	// A/B (X/Y on the left hand) still tap the fixed Digit5/Digit0 keys
-	// unconditionally when apMenu (processControllerPlain, unchanged by this)
-	// -- redundant once a sector already covers that position, a harmless
-	// no-op when the open dialog has fewer options, exactly as before.
+	// With every real option reachable by a sector, the owner hand's A/B
+	// (X/Y on the left hand) carry NO dialog meaning at all any more --
+	// they are parked while a dialog is open (see processControllerPlain),
+	// keeping the dialog grammar to exactly three inputs: sector pick,
+	// trigger confirm, thumbstick-click cancel.
 	//
 	// hotkeyCode(opt,idx): the DOM KeyboardEvent code for one parsed option
 	// (see parseMenuLabel) -- opt.hotkey ('1'..'9' or '0') when the engine's
@@ -1594,15 +1596,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// the view (once per hold) and suppresses the gear tap on the
 			// eventual release. A hold released in between (neither quick
 			// nor long enough) intentionally does nothing. While THIS hand
-			// owns an open dialog (rActive), the short tap's target key is
-			// rerouted instead: Digit5 (the AP menu's 5th option, "Fly
-			// Heading Bug") when apMenu, else Escape (generic close). Fixed
-			// regardless of N -- redundant with sector 5 of the N-way guide
-			// once the open dialog has that many options (see
-			// guiDialEngagedFor), a harmless no-op otherwise, kept for
-			// muscle-memory continuity with dialogs that predate the N-way
-			// guide. Recenter is left enabled either way -- it is a
-			// view-only action, not a flight or dialog control.
+			// owns an open dialog (rActive), the tap is simply parked --
+			// no gear drop from a mid-dialog fumble, and no dialog meaning
+			// either (the N-way sectors already reach every real option;
+			// cancel is the thumbstick click). Recenter is left enabled
+			// either way -- it is a view-only action, not a flight or
+			// dialog control.
 			var aPressed=!!(entry.buttons && entry.buttons.a);
 			var aBtn=vr.ctl.aBtn;
 			var aNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -1622,19 +1621,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 				{
 					vrKeyTap('KeyG'); // Default landing-gear key: a real tap, not a hold.
 				}
-				else
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit5' : 'Escape');
-				}
 			}
 			aBtn.pressed=aPressed;
 
 			// Right B: normally a held spoiler/air-brake key; while THIS hand
-			// owns an open dialog, rerouted to Digit0 (the AP menu's
-			// "Disengage" option) when apMenu, else Escape (generic close)
-			// -- dispatched as a tap on the press edge, not held, since
-			// neither target is a holdable key.
+			// owns an open dialog it is parked (same reasoning as A above),
+			// with a release-if-held safety so a brake held from before the
+			// dialog opened doesn't stay stuck on.
 			var bPressed=!!(entry.buttons && entry.buttons.b);
 			if(!rActive)
 			{
@@ -1643,13 +1636,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			else
 			{
 				vrKeyEdge('KeyB',false); // Release it if it was held from before the dialog opened.
-				if(bPressed && !vr.ctl.rightB)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit0' : 'Escape');
-				}
 			}
-			vr.ctl.rightB=bPressed;
 
 			// Thumbstick click (xr-standard buttons[3]): normally toggles the
 			// help placards on the press edge, either hand (see toggleHelp).
@@ -1759,12 +1746,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 
 			// Left X/Y (buttons.a/.b): normally held flap-down/flap-up keys;
-			// while THIS hand owns an open dialog (lActive), rerouted to the
-			// same truthful extra hotkeys the right A/B give when it is the
-			// owner -- Digit5/Digit0 when apMenu, else a generic Escape.
-			// When the RIGHT hand owns the dialog instead (or none is open),
-			// lActive is false and these fall straight through to their
-			// normal flap behaviour, undisturbed.
+			// while THIS hand owns an open dialog (lActive) they are parked,
+			// exactly like the right hand's A/B when it is the owner (see
+			// above) -- flap taps suppressed, no dialog meaning, with the
+			// same release-if-held safety. When the RIGHT hand owns the
+			// dialog instead (or none is open), lActive is false and these
+			// fall straight through to their normal flap behaviour,
+			// undisturbed.
 			var xPressed=!!(entry.buttons && entry.buttons.a);
 			if(!lActive)
 			{
@@ -1773,13 +1761,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			else
 			{
 				vrKeyEdge('KeyF',false);
-				if(xPressed && !vr.ctl.leftX)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit5' : 'Escape');
-				}
 			}
-			vr.ctl.leftX=xPressed;
 
 			var yPressed=!!(entry.buttons && entry.buttons.b);
 			if(!lActive)
@@ -1789,13 +1771,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			else
 			{
 				vrKeyEdge('KeyR',false);
-				if(yPressed && !vr.ctl.leftY)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit0' : 'Escape');
-				}
 			}
-			vr.ctl.leftY=yPressed;
 
 			// Left trigger: dial-selected function (see LEFT_DIAL) when this
 			// hand is NOT the dialog owner (including no dialog at all) --
@@ -2156,23 +2132,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//                stick-selected sector (dial.guiSel) is highlighted so
 	//                the pilot can confirm a pick before pulling the
 	//                trigger, mirroring the normal dial's own
-	//                (dir===sel)-highlight (see drawDial below). A/B (X/Y on
-	//                the left hand) still show the fixed Digit5/Digit0
-	//                shortcut reminder in the centre (labelled A/B on the
-	//                right hand, X/Y on the left, matching each hand's real
-	//                Touch controller silkscreen) -- redundant with a sector
-	//                once N covers that position, but still a truthful
-	//                description of what those buttons do. If the dialog has
-	//                MORE real options than GUI_DIAL_CAPACITY (guiMenu.overflow
+	//                (dir===sel)-highlight (see drawDial below). The cancel
+	//                binding (the owner hand's thumbstick click,
+	//                unconditional on rActive/lActive) is re-stated on a
+	//                single small corner hint line; if the dialog has MORE
+	//                real options than GUI_DIAL_CAPACITY (guiMenu.overflow
 	//                -- e.g. radio-comm's wingman-command menu sits exactly
 	//                at the 8-option cap, so only a 9th+ option would ever
-	//                overflow), the second centre line becomes a pointer at
-	//                the on-quad panel (forced on, see maybeForceGuiPanel)
-	//                instead of the cancel-binding reminder, since both
-	//                don't fit -- the cancel binding (the owner hand's
-	//                thumbstick click, unconditional on rActive/lActive)
-	//                still works either way, it is just not re-stated
-	//                on-canvas that frame. Full option text (not a clipped
+	//                overflow), that same line also points at the on-quad
+	//                panel (forced on, see maybeForceGuiPanel). The owner
+	//                hand's A/B (X/Y) do nothing during a dialog (parked --
+	//                see processControllerPlain), so there is nothing to
+	//                remind about and no centre hub any more -- the middle
+	//                of the guide stays fully transparent. Full option text
+	//                (not a clipped
 	//                few characters) is drawn RADIALLY along each sector's
 	//                spoke (see drawSpokeSpan/fitSpokeLabel below), so
 	//                legibility degrades much more gracefully as N grows
@@ -2187,8 +2160,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//                the engine reported apMenu but zero parseable options.
 	//                This face stays the ORIGINAL fixed 4-sector uniform
 	//                "ESC" look (not N-way -- there is no per-option content
-	//                to divide sectors by), matching that every sector, A,
-	//                and B all dispatch the exact same GUI_ESCAPE_ACTION tap
+	//                to divide sectors by), matching that every sector
+	//                dispatches the exact same GUI_ESCAPE_ACTION tap
 	//                (see rdial/ldial's engaged assignment above). The
 	//                on-quad panel is forced on here too, so the dialog's
 	//                real content (however many options it has) is still
@@ -2200,9 +2173,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// ---- Fully-transparent, radial-label redesign (2026-07) ----------------
 	// Replaces the old opaque-wedge-fill + horizontally-clipped-text look
 	// (e.g. "Brea…" for "Break and Attack") with: NO outer circle, NO wedge
-	// fill, NO wedge borders -- only floating text (plus a small centre hub
-	// and thin per-sector tick marks) over whatever the pilot is actually
-	// looking at. Every option's FULL label text is drawn ROTATED to run
+	// fill, NO wedge borders, NO centre hub -- only floating text (plus thin
+	// per-sector tick marks and one small corner hint line) over whatever
+	// the pilot is actually looking at. Every option's FULL label text is drawn ROTATED to run
 	// outward along its own sector's spoke (see drawSpokeSpan), which is
 	// what makes room for the full text instead of a handful of clipped
 	// characters: a spoke's usable length is far greater than a wedge's
@@ -2296,12 +2269,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var rOuter=w/2-10*k;
 		var menu=vr.ctl.dial[hand].guiMenu; // {options,cancel,overflow,drivable} or null/stale -- see computeGuiMenuLayout.
 		var options=(menu && menu.options) || [];
-		// Real Touch-controller face-button labels: A/B on the right
-		// controller, X/Y on the left -- the abstraction in
-		// processControllerPlain calls both hands' pair "a"/"b" internally,
-		// but the guide should tell the truth about which physical buttons
-		// the pilot's OWNER hand actually has.
-		var btnLabel1=('right'===hand ? 'A' : 'X'), btnLabel2=('right'===hand ? 'B' : 'Y');
+		// No hub disc is drawn any more (see the tail of this function), but
+		// its radius lives on as the central keep-clear zone the tick marks
+		// and label spans still start outside of -- the centre stays fully
+		// transparent so the stick's own physical direction is the pointer.
 		var hubR=28*k;
 		if('ap'===guiMode && 0<options.length)
 		{
@@ -2413,48 +2384,36 @@ EM_JS(void,YsfwInstallWebXR,(),
 				ctx.fillText('ESC',glx,gly);
 			}
 		}
-		// Small translucent centre hub -- the one deliberately-kept solid
-		// shape, so the A/B (or X/Y) shortcut reminder and the self-
-		// contained cancel binding stay readable regardless of what is
-		// behind the quad.
-		ctx.beginPath();
-		ctx.arc(cx,cy,hubR,0,2*Math.PI);
-		ctx.fillStyle='rgba(20,26,34,0.72)';
-		ctx.fill();
-		ctx.strokeStyle='rgba(230,237,243,0.6)';
-		ctx.lineWidth=2*k;
-		ctx.stroke();
-		ctx.textAlign='center';
-		ctx.textBaseline='middle';
-		// The old design's hub text could safely bleed a little past the
-		// hub's own circle -- it just spilled onto the neighbouring wedge's
-		// OPAQUE fill. On the now fully-transparent background that same
-		// overflow would collide with a nearby spoke's radial label
-		// instead, so both hub lines are fit-shrunk (same fitSpokeLabel
-		// helper the spoke labels use, just centre-aligned here) to stay
-		// within the hub's own diameter.
-		var hubTextMaxWidth=2*hubR-6*k;
-		function drawHubLine(text,startPx,floorPx,y,fillStyle)
-		{
-			var fit=fitSpokeLabel(ctx,text,hubTextMaxWidth,startPx,floorPx);
-			ctx.font='bold '+fit.fontPx+'px sans-serif';
-			ctx.fillStyle=fillStyle;
-			ctx.fillText(fit.text,cx,y);
-		}
+		// No centre hub any more -- the old hub disc only repeated what the
+		// selected sector's accent already shows, and the "A=5 B=0" reminder
+		// it carried died with the face-button reroutes it described (see
+		// processControllerPlain: the owner hand's A/B are parked now), so
+		// the centre stays fully transparent like everything else. The ONE
+		// binding no sector can label -- cancel, this SAME hand's thumbstick
+		// click -- plus the overflow/panel pointer goes on a single small
+		// fit-shrunk line tucked into the canvas' bottom-LEFT corner: the
+		// only bottom-edge region no spoke label can ever reach (a straight-
+		// down spoke's rotated text runs through bottom-CENTRE; the bottom-
+		// left DIAGONAL spoke is capped at rOuter, whose corner-ward
+		// component tops out at rOuter/sqrt(2), well above this line).
+		var hint;
 		if('ap'===guiMode)
 		{
-			drawHubLine(btnLabel1+'=5 '+btnLabel2+'=0',13*k,9*k,cy-8*k,'#fff');
-			// Cancel is now this SAME hand's thumbstick click (see
-			// processControllerPlain's rActive/lActive stick-click branch) --
-			// no more cross-hand escape, so label it as a self-contained
-			// binding rather than pointing at the other controller.
-			drawHubLine((menu && menu.overflow) ? '他はパネル参照' : '取消:スティック',11*k,7*k,cy+9*k,'rgba(255,224,130,0.95)');
+			hint=(menu && menu.overflow) ? '他はパネル参照 / 取消:スティック押込' : '取消:スティック押込';
 		}
 		else
 		{
-			drawHubLine('ESC',15*k,10*k,cy-7*k,'#fff');
-			drawHubLine(0<options.length ? 'パネル参照('+options.length+')' : '全入力=ESC',10*k,7*k,cy+9*k,'rgba(255,224,130,0.95)');
+			hint=(0<options.length ? 'パネル参照('+options.length+') / ' : '')+'全入力=ESC';
 		}
+		var hintFit=fitSpokeLabel(ctx,hint,cx-16*k,12*k,8*k);
+		ctx.font='bold '+hintFit.fontPx+'px sans-serif';
+		ctx.textAlign='left';
+		ctx.textBaseline='middle';
+		ctx.lineWidth=Math.max(2,hintFit.fontPx*0.22);
+		ctx.strokeStyle='rgba(8,10,14,0.9)';
+		ctx.strokeText(hintFit.text,6*k,h-10*k);
+		ctx.fillStyle='rgba(255,224,130,0.95)';
+		ctx.fillText(hintFit.text,6*k,h-10*k);
 	}
 	function drawDial(ctx,hand,sel,state,guiMode)
 	{
@@ -3322,9 +3281,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.lastDialTapHand=null;
 					vr.ctl.lastDialTapAt=0;
 					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false};
-					vr.ctl.rightB=false;
-					vr.ctl.leftX=false;
-					vr.ctl.leftY=false;
 					vr.ctl.leftTrigger=false;
 					vr.ctl.dial.right={sel:'up',engaged:null,visible:false,hideAt:0};
 					vr.ctl.dial.left={sel:'up',engaged:null,visible:false,hideAt:0};
