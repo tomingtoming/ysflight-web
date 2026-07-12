@@ -957,15 +957,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			drivable:(true===hotkeyMenu && 0<options.length)
 		};
 	}
-	function clipGuideText(text,maxLen)
-	{
-		maxLen=maxLen||9;
-		if(!text)
-		{
-			return '';
-		}
-		return (maxLen<text.length) ? (text.slice(0,maxLen-1)+'…') : text;
-	}
 
 	// ---- VR controller -> flight-control state block --------------------
 	// Writes into the 16-float block at _YsfwVrControlDataPointer() (see
@@ -2025,6 +2016,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// CanvasRenderingContext2D.arc's convention) for each sector's wedge
 	// centre -- "up" is drawn at the top of the texture (-90deg).
 	var DIAL_SECTOR_CANVAS_DEG={up:-90,right:0,down:90,left:180};
+	// Per-hand dial canvas/quad-layer texture resolution, in px (square).
+	// Raised from the original 256 to 384 (2026-07 radial-label redesign):
+	// the GUI guide now draws FULL option text (not clipped to ~5-9 chars)
+	// rotated along each sector's spoke, so crisp small text at the outer
+	// radius matters far more than it did for the old fixed 4-word normal
+	// dial labels. 384 is still a trivial per-frame 2D-canvas-plus-
+	// texSubImage2D cost (same code path as the old 256, just more texels)
+	// and the physical quad size (ensureDialResources's width/height:0.12,
+	// unchanged) stays the same, so this is resolution-only, not layout.
+	// drawDial/drawGuiDialGuide/ensureDialResources/dumpDialLayer all derive
+	// their w/h/cx/cy/rOuter from the ACTUAL canvas size (ctx.canvas.width),
+	// not this constant directly, so the normal 4-way dial's proportions are
+	// bit-for-bit the same design, just rendered at higher resolution.
+	var DIAL_CANVAS_PX=384;
 
 	// Weapon short-name map for the right dial's centre readout (fsdef.h's
 	// FSWEAPON_* enum -- see FsVrAircraftStateDataPointer's doc comment in
@@ -2140,12 +2145,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//                don't fit -- the cancel binding (the owner hand's
 	//                thumbstick click, unconditional on rActive/lActive)
 	//                still works either way, it is just not re-stated
-	//                on-canvas that frame. Label legibility at 256px
-	//                honestly degrades as N grows past ~6 (shrinking font,
-	//                see numFontPx/textFontPx/clipLen below) -- that is a
-	//                real tradeoff of staying dial-first up to 8 rather than
-	//                a bug; scripts/smoke-vrgui.mjs dumps a PNG of an N>4
-	//                guide for a human to judge.
+	//                on-canvas that frame. Full option text (not a clipped
+	//                few characters) is drawn RADIALLY along each sector's
+	//                spoke (see drawSpokeSpan/fitSpokeLabel below), so
+	//                legibility degrades much more gracefully as N grows
+	//                past ~6 than the old horizontal-clipped-text-in-a-
+	//                wedge layout did -- font size only shrinks (down to a
+	//                12px*canvasScale floor) as a LAST resort before finally
+	//                ellipsizing; scripts/smoke-vrgui.mjs dumps a PNG of an
+	//                N>4 guide for a human to judge.
 	//   'generic' -- !guiMenu.drivable: either the open dialog is not
 	//                hotkey-driven at all (replay/continue/stationary/
 	//                vehicle-change/chat dialogs -- mouse-only), or (rare)
@@ -2161,10 +2169,104 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// The OTHER (non-owner) hand never reaches this function at all -- its
 	// guiMode stays null and it keeps drawing its own normal dial face, see
 	// drawDial below.
+	//
+	// ---- Fully-transparent, radial-label redesign (2026-07) ----------------
+	// Replaces the old opaque-wedge-fill + horizontally-clipped-text look
+	// (e.g. "Brea…" for "Break and Attack") with: NO outer circle, NO wedge
+	// fill, NO wedge borders -- only floating text (plus a small centre hub
+	// and thin per-sector tick marks) over whatever the pilot is actually
+	// looking at. Every option's FULL label text is drawn ROTATED to run
+	// outward along its own sector's spoke (see drawSpokeSpan), which is
+	// what makes room for the full text instead of a handful of clipped
+	// characters: a spoke's usable length is far greater than a wedge's
+	// horizontal chord ever was.
+	//
+	// Upside-down prevention (drawSpokeSpan's `flip`): a span rotated by
+	// its sector's canvas angle (centerRad) reads fine -- at worst sideways,
+	// comfortable with a slight head tilt -- as long as the spoke's
+	// on-canvas X-direction is non-negative (Math.cos(centerRad)>=0, i.e.
+	// the spoke points into the canvas-RIGHT half). Past that (the spoke's
+	// direction has crossed more than +-90deg off upright, into the
+	// canvas-LEFT half, Math.cos(centerRad)<0) an unflipped span would
+	// render fully upside-down and mirrored. For exactly those sectors,
+	// drawSpokeSpan rotates an EXTRA 180deg (folding the effective on-screen
+	// rotation back into the readable +-90deg range) and right-aligns the
+	// text instead of left-aligning it, so it still visually starts near
+	// the hub and grows outward -- every label ends up readable without the
+	// viewer ever needing to tilt their head past +-90deg.
 	var GUI_GUIDE_SECTORS=['up','right','down','left'];
+	// Shrinks `text`'s font (bold sans-serif) from startPx down to floorPx
+	// (1px steps) until it fits maxWidth; if even the floor size overflows,
+	// ellipsizes at the floor size as a last resort (fit-then-shrink-then-
+	// ellipsize, in that priority order -- see this function's callers).
+	// ctx.font/measureText are unaffected by the current transform (translate/
+	// rotate), so this is safe to call before drawSpokeSpan's save/rotate.
+	function fitSpokeLabel(ctx,text,maxWidth,startPx,floorPx)
+	{
+		text=text||'';
+		var fontPx=startPx;
+		ctx.font='bold '+fontPx+'px sans-serif';
+		while(floorPx<fontPx && maxWidth<ctx.measureText(text).width)
+		{
+			fontPx-=1;
+			ctx.font='bold '+fontPx+'px sans-serif';
+		}
+		if(maxWidth>=ctx.measureText(text).width)
+		{
+			return {text:text,fontPx:fontPx};
+		}
+		var t=text;
+		while(1<t.length && maxWidth<ctx.measureText(t+'…').width)
+		{
+			t=t.slice(0,-1);
+		}
+		return {text:t+'…',fontPx:fontPx};
+	}
+	// Draws `text` along the spoke at canvas angle `centerRad`, treating `r`
+	// as a physical (always-positive, hub-to-rim) starting radius and
+	// returning the physical radius immediately past what was just drawn --
+	// so callers can chain multiple spans (a hotkey digit, then the option
+	// text) outward along the same spoke without having to reason about the
+	// upside-down `flip` themselves (see this function's doc comment on
+	// drawGuiDialGuide above for the flip rule). A dark stroke under the
+	// bright fill keeps the label legible against both a bright sky and a
+	// dark ground behind this fully-transparent canvas.
+	function drawSpokeSpan(ctx,cx,cy,centerRad,flip,r,text,fontPx,fillStyle)
+	{
+		ctx.save();
+		ctx.translate(cx,cy);
+		ctx.rotate(flip ? centerRad+Math.PI : centerRad);
+		ctx.font='bold '+fontPx+'px sans-serif';
+		ctx.textBaseline='middle';
+		ctx.textAlign=flip ? 'right' : 'left';
+		var localX=flip ? -r : r;
+		var width=ctx.measureText(text).width;
+		ctx.lineWidth=Math.max(2,fontPx*0.22);
+		ctx.strokeStyle='rgba(8,10,14,0.9)';
+		ctx.strokeText(text,localX,0);
+		ctx.fillStyle=fillStyle;
+		ctx.fillText(text,localX,0);
+		ctx.restore();
+		return r+width;
+	}
 	function drawGuiDialGuide(ctx,guiMode,hand)
 	{
-		var w=256,h=256,cx=128,cy=128,rOuter=110;
+		// k is relative to a 384px canvas (DIAL_CANVAS_PX) -- ALL the pixel
+		// budget numbers below (hubR, tick lengths, digit/text start radii,
+		// rOuter's margin from the edge) are tuned against that baseline so
+		// a full-length option label actually gets the ~140px of spoke
+		// length it needs; if the canvas is ever smaller (no quad-layer
+		// support -- see dumpDialLayer/ensureDialResources), k<1 shrinks
+		// everything proportionally rather than recomputing a second set of
+		// constants. (drawDial's own k is intentionally still relative to
+		// 256 -- that face's numbers were tuned for the original 256px
+		// canvas and must stay bit-for-bit the same proportions.)
+		var w=ctx.canvas.width,h=ctx.canvas.height,cx=w/2,cy=h/2,k=w/384;
+		// rOuter reaches almost to the canvas edge -- there is no outer
+		// circle/wedge border to stay inside of any more, so the old
+		// 110/256=0.43 fraction would waste more than half the available
+		// spoke length for nothing.
+		var rOuter=w/2-10*k;
 		var menu=vr.ctl.dial[hand].guiMenu; // {options,cancel,overflow,drivable} or null/stale -- see computeGuiMenuLayout.
 		var options=(menu && menu.options) || [];
 		// Real Touch-controller face-button labels: A/B on the right
@@ -2173,122 +2275,170 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// but the guide should tell the truth about which physical buttons
 		// the pilot's OWNER hand actually has.
 		var btnLabel1=('right'===hand ? 'A' : 'X'), btnLabel2=('right'===hand ? 'B' : 'Y');
-		ctx.fillStyle='rgba(10,14,20,0.55)';
-		ctx.beginPath();
-		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
-		ctx.fill();
+		var hubR=28*k;
 		if('ap'===guiMode && 0<options.length)
 		{
-			// N-way: one wedge per real option, N<=GUI_DIAL_CAPACITY (8).
+			// N-way: one spoke per real option, N<=GUI_DIAL_CAPACITY (8).
 			// Sector i's centre is at canvas angle -90deg (up) + i*wedge,
 			// clockwise -- the SAME convention updateDialStick's N-way pick
 			// quantizes the stick angle to, so the highlighted/selected
-			// wedge here always matches what a trigger pull would actually
+			// spoke here always matches what a trigger pull would actually
 			// confirm.
 			var n=options.length;
 			var wedge=2*Math.PI/n;
 			var selIdx=vr.ctl.dial[hand].guiSel;
-			// Font sizes/clip length shrink as N grows so labels keep
-			// clearing the wedge at 256px -- honestly tight above ~6 (see
-			// this function's doc comment above).
-			var numFontPx=(4>=n ? 26 : (6>=n ? 20 : 16));
-			var textFontPx=(4>=n ? 12 : (6>=n ? 11 : 10));
-			var clipLen=(4>=n ? 9 : (6>=n ? 7 : 5));
+			// Starting font sizes shrink a little as N grows (tighter
+			// angular clearance near the hub) -- fitSpokeLabel then shrinks
+			// the OPTION TEXT further per-label, down to a floor, before
+			// ever ellipsizing (see drawGuiDialGuide's doc comment above).
+			var numFontBase=(4>=n ? 22 : (6>=n ? 20 : 18))*k;
+			var textFontStart=(4>=n ? 17 : (6>=n ? 16 : 14))*k;
+			var floorFontPx=12*k;
 			for(var i=0; i<n; ++i)
 			{
 				var centerRad=-Math.PI/2+i*wedge;
-				var a0=centerRad-wedge/2, a1=centerRad+wedge/2;
+				var flip=Math.cos(centerRad)<0; // see the flip-rule doc comment above.
+				var selected=(i===selIdx);
+				// Thin tick mark at the sector's inner end -- minimal
+				// orientation accent replacing the old wedge borders. Kept
+				// SHORT (unlike the old wedge-radius-spanning border) so it
+				// does not eat into the label's radius budget -- the tick
+				// is purely an orientation cue, not a boundary. Always
+				// drawn along the TRUE outward direction (never flipped):
+				// only TEXT readability needs the 180deg fold, the geometry
+				// itself is fine either way.
+				var tickInnerR=hubR+3*k, tickOuterR=selected ? hubR+13*k : hubR+7*k;
+				ctx.save();
+				ctx.translate(cx,cy);
+				ctx.rotate(centerRad);
 				ctx.beginPath();
-				ctx.moveTo(cx,cy);
-				ctx.arc(cx,cy,rOuter,a0,a1);
-				ctx.closePath();
-				// Brighter fill for the currently stick-selected sector --
-				// same idea as drawDial's (dir===sel) highlight on the
-				// normal face, generalized to an index compare.
-				ctx.fillStyle=(i===selIdx) ? 'rgba(120,196,255,0.75)' : 'rgba(77,163,255,0.45)';
-				ctx.fill();
-				ctx.strokeStyle='rgba(230,237,243,0.6)';
-				ctx.lineWidth=2;
+				ctx.moveTo(tickInnerR,0);
+				ctx.lineTo(tickOuterR,0);
+				ctx.lineWidth=(selected ? 3 : 1.5)*k;
+				ctx.strokeStyle=selected ? 'rgba(255,214,64,0.95)' : 'rgba(230,237,243,0.55)';
 				ctx.stroke();
-				var labelR=rOuter*0.62;
-				var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
-				ctx.textAlign='center';
+				// digitStartR: where the hotkey digit begins. Chained off
+				// THIS sector's own tickOuterR (with a bigger gap when
+				// selected, since the arrowhead below reaches a bit further
+				// than the plain tick) so the arrowhead can never overlap
+				// the digit even though selected/unselected ticks differ.
+				var digitStartR=tickOuterR+(selected ? 9*k : 5*k);
+				if(selected)
+				{
+					// Selection accent: a small arrowhead beyond the tick,
+					// since there is no wedge fill left to highlight with.
+					// Sized to stay clear of digitStartR above.
+					var apexR=tickOuterR+6*k;
+					ctx.beginPath();
+					ctx.moveTo(apexR,0);
+					ctx.lineTo(apexR-5*k,-4*k);
+					ctx.lineTo(apexR-5*k,4*k);
+					ctx.closePath();
+					ctx.fillStyle='rgba(255,214,64,0.95)';
+					ctx.fill();
+				}
+				ctx.restore();
 				var opt=options[i];
-				ctx.fillStyle='#fff';
-				ctx.font='bold '+numFontPx+'px sans-serif';
-				ctx.textBaseline='middle';
-				ctx.fillText(opt.hotkey||String(i+1),lx,ly-numFontPx*0.4);
-				ctx.font='bold '+textFontPx+'px sans-serif';
-				ctx.fillText(clipGuideText(opt.text,clipLen),lx,ly+numFontPx*0.42);
+				var digitFontPx=selected ? numFontBase+3*k : numFontBase;
+				var digitColor=selected ? '#ffe066' : '#fff';
+				var r=drawSpokeSpan(ctx,cx,cy,centerRad,flip,digitStartR,opt.hotkey||String(i+1),digitFontPx,digitColor);
+				r+=4*k; // gap between the hotkey digit and the option text.
+				var avail=Math.max(20*k,rOuter-r);
+				var fit=fitSpokeLabel(ctx,opt.text||'',avail,selected ? textFontStart+2*k : textFontStart,floorFontPx);
+				var textColor=selected ? '#ffe066' : '#dff2e8';
+				drawSpokeSpan(ctx,cx,cy,centerRad,flip,r,fit.text,fit.fontPx,textColor);
 			}
 		}
 		else
 		{
-			// Generic/ESC face: unchanged fixed 4-sector uniform look (see
-			// this function's doc comment above -- there is no per-option
-			// content to divide N ways here).
+			// Generic/ESC face: same fully-transparent treatment, but there
+			// is no per-option content to label -- every sector dispatches
+			// the identical GUI_ESCAPE_ACTION, so this stays a simple fixed
+			// 4-spoke "ESC" reminder (unrotated: 3 short latin letters read
+			// fine upright at any position, so radial rotation would only
+			// add visual noise here for no legibility gain).
 			for(var gi=0; gi<GUI_GUIDE_SECTORS.length; ++gi)
 			{
 				var dir=GUI_GUIDE_SECTORS[gi];
 				var gCenterRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
-				var ga0=gCenterRad-Math.PI/4, ga1=gCenterRad+Math.PI/4;
+				ctx.save();
+				ctx.translate(cx,cy);
+				ctx.rotate(gCenterRad);
 				ctx.beginPath();
-				ctx.moveTo(cx,cy);
-				ctx.arc(cx,cy,rOuter,ga0,ga1);
-				ctx.closePath();
-				// Amber/red -- a different hue from the 'ap' N-way face
-				// makes the "this isn't the usual dial" state obvious at a
-				// glance, before reading any text.
-				ctx.fillStyle='rgba(214,96,64,0.55)';
-				ctx.fill();
-				ctx.strokeStyle='rgba(230,237,243,0.6)';
-				ctx.lineWidth=2;
+				ctx.moveTo(hubR+4*k,0);
+				ctx.lineTo(hubR+14*k,0);
+				ctx.lineWidth=1.5*k;
+				ctx.strokeStyle='rgba(230,237,243,0.55)';
 				ctx.stroke();
-				var gLabelR=rOuter*0.62;
+				ctx.restore();
+				var gLabelR=hubR+26*k;
 				var glx=cx+Math.cos(gCenterRad)*gLabelR, gly=cy+Math.sin(gCenterRad)*gLabelR;
 				ctx.textAlign='center';
-				ctx.fillStyle='#fff';
-				ctx.font='bold 20px sans-serif';
 				ctx.textBaseline='middle';
+				ctx.font='bold '+(20*k)+'px sans-serif';
+				// Amber -- a different hue from the 'ap' N-way face's white/
+				// yellow makes "this isn't the usual dial" obvious at a
+				// glance, before reading any text.
+				ctx.lineWidth=3*k;
+				ctx.strokeStyle='rgba(8,10,14,0.9)';
+				ctx.strokeText('ESC',glx,gly);
+				ctx.fillStyle='#ffb37a';
 				ctx.fillText('ESC',glx,gly);
 			}
 		}
+		// Small translucent centre hub -- the one deliberately-kept solid
+		// shape, so the A/B (or X/Y) shortcut reminder and the self-
+		// contained cancel binding stay readable regardless of what is
+		// behind the quad.
 		ctx.beginPath();
-		ctx.arc(cx,cy,30,0,2*Math.PI);
-		ctx.fillStyle='rgba(20,26,34,0.9)';
+		ctx.arc(cx,cy,hubR,0,2*Math.PI);
+		ctx.fillStyle='rgba(20,26,34,0.72)';
 		ctx.fill();
 		ctx.strokeStyle='rgba(230,237,243,0.6)';
-		ctx.lineWidth=2;
+		ctx.lineWidth=2*k;
 		ctx.stroke();
 		ctx.textAlign='center';
+		ctx.textBaseline='middle';
+		// The old design's hub text could safely bleed a little past the
+		// hub's own circle -- it just spilled onto the neighbouring wedge's
+		// OPAQUE fill. On the now fully-transparent background that same
+		// overflow would collide with a nearby spoke's radial label
+		// instead, so both hub lines are fit-shrunk (same fitSpokeLabel
+		// helper the spoke labels use, just centre-aligned here) to stay
+		// within the hub's own diameter.
+		var hubTextMaxWidth=2*hubR-6*k;
+		function drawHubLine(text,startPx,floorPx,y,fillStyle)
+		{
+			var fit=fitSpokeLabel(ctx,text,hubTextMaxWidth,startPx,floorPx);
+			ctx.font='bold '+fit.fontPx+'px sans-serif';
+			ctx.fillStyle=fillStyle;
+			ctx.fillText(fit.text,cx,y);
+		}
 		if('ap'===guiMode)
 		{
-			ctx.fillStyle='#fff';
-			ctx.font='bold 13px sans-serif';
-			ctx.textBaseline='middle';
-			ctx.fillText(btnLabel1+'=5 '+btnLabel2+'=0',cx,cy-8);
-			ctx.fillStyle='rgba(255,224,130,0.95)';
-			ctx.font='bold 11px sans-serif';
+			drawHubLine(btnLabel1+'=5 '+btnLabel2+'=0',13*k,9*k,cy-8*k,'#fff');
 			// Cancel is now this SAME hand's thumbstick click (see
 			// processControllerPlain's rActive/lActive stick-click branch) --
 			// no more cross-hand escape, so label it as a self-contained
 			// binding rather than pointing at the other controller.
-			ctx.fillText((menu && menu.overflow) ? '他はパネル参照' : '取消:スティック',cx,cy+9);
+			drawHubLine((menu && menu.overflow) ? '他はパネル参照' : '取消:スティック',11*k,7*k,cy+9*k,'rgba(255,224,130,0.95)');
 		}
 		else
 		{
-			ctx.fillStyle='#fff';
-			ctx.font='bold 15px sans-serif';
-			ctx.textBaseline='middle';
-			ctx.fillText('ESC',cx,cy-7);
-			ctx.fillStyle='rgba(255,224,130,0.95)';
-			ctx.font='bold 10px sans-serif';
-			ctx.fillText(0<options.length ? 'パネル参照('+options.length+')' : '全入力=ESC',cx,cy+9);
+			drawHubLine('ESC',15*k,10*k,cy-7*k,'#fff');
+			drawHubLine(0<options.length ? 'パネル参照('+options.length+')' : '全入力=ESC',10*k,7*k,cy+9*k,'rgba(255,224,130,0.95)');
 		}
 	}
 	function drawDial(ctx,hand,sel,state,guiMode)
 	{
-		var w=256,h=256,cx=128,cy=128,rOuter=110;
+		// w/h/cx/cy/rOuter derive from the ACTUAL canvas size (ctx.canvas.*,
+		// via k=w/256) rather than hardcoded 256/128/110 literals, so this
+		// normal 4-way face's design/proportions are bit-for-bit the same
+		// as before the GUI-guide's canvas was raised to 384px (see
+		// DIAL_CANVAS_PX) -- just rendered crisper. This function's own
+		// wedge-fill/border look is otherwise UNCHANGED by the GUI-guide
+		// redesign below (guiMode only ever routes to drawGuiDialGuide).
+		var w=ctx.canvas.width,h=ctx.canvas.height,cx=w/2,cy=h/2,k=w/256,rOuter=110*k;
 		ctx.clearRect(0,0,w,h);
 		// guiMode is only ever non-null for whichever hand currently OWNS an
 		// open dialog (see processControllerPlain's rActive/lActive) -- so
@@ -2315,7 +2465,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			ctx.fillStyle=(dir===sel) ? 'rgba(77,163,255,0.85)' : 'rgba(143,163,187,0.28)';
 			ctx.fill();
 			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2;
+			ctx.lineWidth=2*k;
 			ctx.stroke();
 			var labelR=rOuter*0.62;
 			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
@@ -2324,19 +2474,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(stateLine)
 			{
 				// Smaller label + a highlighted state line beneath it -- both
-				// still fit inside the wedge at 256px.
+				// still fit inside the wedge.
 				ctx.fillStyle='#fff';
-				ctx.font='bold 17px sans-serif';
+				ctx.font='bold '+(17*k)+'px sans-serif';
 				ctx.textBaseline='middle';
-				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly-9);
+				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly-9*k);
 				ctx.fillStyle='rgba(255,224,130,0.95)';
-				ctx.font='bold 15px sans-serif';
-				ctx.fillText(stateLine,lx,ly+10);
+				ctx.font='bold '+(15*k)+'px sans-serif';
+				ctx.fillText(stateLine,lx,ly+10*k);
 			}
 			else
 			{
 				ctx.fillStyle='#fff';
-				ctx.font='bold 22px sans-serif';
+				ctx.font='bold '+(22*k)+'px sans-serif';
 				ctx.textBaseline='middle';
 				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly);
 			}
@@ -2345,14 +2495,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(centerText)
 		{
 			ctx.beginPath();
-			ctx.arc(cx,cy,22,0,2*Math.PI);
+			ctx.arc(cx,cy,22*k,0,2*Math.PI);
 			ctx.fillStyle='rgba(20,26,34,0.88)';
 			ctx.fill();
 			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2;
+			ctx.lineWidth=2*k;
 			ctx.stroke();
 			ctx.fillStyle='#fff';
-			ctx.font='bold 13px sans-serif';
+			ctx.font='bold '+(13*k)+'px sans-serif';
 			ctx.textAlign='center';
 			ctx.textBaseline='middle';
 			ctx.fillText(centerText,cx,cy);
@@ -2360,7 +2510,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		else
 		{
 			ctx.beginPath();
-			ctx.arc(cx,cy,14,0,2*Math.PI);
+			ctx.arc(cx,cy,14*k,0,2*Math.PI);
 			ctx.fillStyle='rgba(230,237,243,0.85)';
 			ctx.fill();
 		}
@@ -2377,12 +2527,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(vr.mvBinding && vr.viewerSpace)
 			{
 				var canvas=document.createElement('canvas');
-				canvas.width=256;
-				canvas.height=256;
+				canvas.width=DIAL_CANVAS_PX;
+				canvas.height=DIAL_CANVAS_PX;
 				var quad=vr.mvBinding.createQuadLayer({
 					space:vr.viewerSpace,
-					viewPixelWidth:256,
-					viewPixelHeight:256,
+					viewPixelWidth:DIAL_CANVAS_PX,
+					viewPixelHeight:DIAL_CANVAS_PX,
 					layout:'mono',
 					width:0.12,
 					height:0.12,
@@ -3691,8 +3841,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			hand=hand||'right';
 			var canvas=document.createElement('canvas');
-			canvas.width=256;
-			canvas.height=256;
+			canvas.width=DIAL_CANVAS_PX;
+			canvas.height=DIAL_CANVAS_PX;
 			var ctx=canvas.getContext('2d');
 			var dial=vr.ctl.dial[hand];
 			var state=readAircraftStateSnapshot();
