@@ -579,13 +579,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GL.textures[texId]=tex;
 		tex.name=texId;
 
+		// hudData[6] is the collimated gunsight-reticle enable (default on):
+		// when set, the engine suppresses the baked-in flat-HUD crosshair and
+		// instead draws a per-eye world-space reticle in the scene pass (see
+		// SimDrawAllScreen / FsVrDrawReticle).  Module.ysfwVrOptions.reticle
+		// ===false (?vrreticle=0) turns it off AND restores the baked crosshair.
+		var reticle=(false===opts.reticle ? 0 : 1);
 		var p=_YsfwVrHudDataPointer()>>2;
 		HEAPF32[p+0]=1;     // enable
 		HEAPF32[p+1]=fbId;  // hudFbo
 		HEAPF32[p+2]=texId; // hudTexArray
 		HEAPF32[p+3]=W;
 		HEAPF32[p+4]=H;
-		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
+		HEAPF32[p+5]=0; HEAPF32[p+6]=reticle; HEAPF32[p+7]=0;
 
 		vr.hud={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H};
 		console.log('[vr] HUD composite '+W+'x'+H+'x2 (fbId='+fbId+' texId='+texId+')');
@@ -3160,6 +3166,77 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return { meanDiff:sum/(a.length/4)/3 };
 	};
 
+	// Headless test hooks for the collimated gunsight reticle
+	// (scripts/smoke-vrreticle.mjs).  readMultiviewCenterPatch reads back a
+	// (2*half)x(2*half) RGBA patch centered on a scene layer of the test color
+	// texture-array; the .mjs then locates the HUD-green reticle pixels and
+	// compares their centroid between the two eye layers (zero disparity is the
+	// whole point of the collimated fix).  GL readPixels is bottom-up; the patch
+	// is returned in that native orientation (fine for a layer-vs-layer compare).
+	vr.readMultiviewCenterPatch=function(layer,half)
+	{
+		var W=vr.testW,H=vr.testH;
+		var cx=Math.floor(W/2),cy=Math.floor(H/2);
+		var x0=cx-half,y0=cy-half,w=2*half,h=2*half;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.testColor,0,layer);
+		var px=new Uint8Array(w*h*4);
+		GLctx.readPixels(x0,y0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		return { W:W,H:H,x0:x0,y0:y0,w:w,h:h,px:Array.from(px) };
+	};
+	// dumpMultiviewLayer: center-cropped PNG (data URL) of a scene layer, for
+	// eyeball/golden-image evidence of the reticle (scripts/smoke-vrreticle.mjs
+	// writes it out).  cropHalf defaults to a full-frame dump; scale (default 1)
+	// nearest-neighbor upscales the crop so the ~3 px reticle is legible.
+	// Vertically flipped (readPixels bottom-up -> top-down canvas), like
+	// dumpHudLayer.
+	vr.dumpMultiviewLayer=function(layer,cropHalf,scale)
+	{
+		scale=scale||1;
+		var W=vr.testW,H=vr.testH;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.testColor,0,layer);
+		var full=new Uint8ClampedArray(W*H*4);
+		GLctx.readPixels(0,0,W,H,GLctx.RGBA,GLctx.UNSIGNED_BYTE,full);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		var cx=Math.floor(W/2),cy=Math.floor(H/2);
+		var half=cropHalf||Math.floor(Math.min(W,H)/2);
+		var ox=cx-half,oy=cy-half,cw=2*half,ch=2*half;
+		var out=new Uint8ClampedArray(cw*ch*4);
+		for(var y=0; y<ch; ++y)
+		{
+			var srcY=H-1-(oy+y);
+			for(var x=0; x<cw; ++x)
+			{
+				var si=(srcY*W+(ox+x))*4,di=(y*cw+x)*4;
+				out[di]=full[si];out[di+1]=full[si+1];out[di+2]=full[si+2];out[di+3]=full[si+3];
+			}
+		}
+		var src=document.createElement('canvas');
+		src.width=cw;src.height=ch;
+		var sctx=src.getContext('2d');
+		var imgData=sctx.createImageData(cw,ch);
+		imgData.data.set(out);
+		sctx.putImageData(imgData,0,0);
+		if(1===scale)
+		{
+			return src.toDataURL('image/png');
+		}
+		var canvas=document.createElement('canvas');
+		canvas.width=cw*scale;canvas.height=ch*scale;
+		var ctx2d=canvas.getContext('2d');
+		ctx2d.imageSmoothingEnabled=false;
+		ctx2d.drawImage(src,0,0,canvas.width,canvas.height);
+		return canvas.toDataURL('image/png');
+	};
+
 	// Headless test hooks for the VR HUD composite (scripts/smoke-vrhud.mjs).
 	// readHudData exposes the 8-float HUD state block (see fsvr.h);
 	// readHudLayerStats reads back a given layer of the HUD texture array and
@@ -3190,6 +3267,38 @@ EM_JS(void,YsfwInstallWebXR,(),
 			out.push(HEAPF32[p+i]);
 		}
 		return out;
+	};
+	// readHudPatchStats: mean luminance + mean alpha (0-255) over a patch of a
+	// HUD texture layer centered on top-down texture coords (cxTop,cyTop).  Used
+	// by scripts/smoke-vrreticle.mjs to assert the gun-crosshair region of the
+	// flat HUD is now empty (the crosshair moved to the world-space reticle),
+	// while the rest of the HUD (readHudLayerStats) is untouched.  readPixels is
+	// bottom-up, so the top-down row is flipped here.
+	vr.readHudPatchStats=function(layer,cxTop,cyTop,half)
+	{
+		if(!vr.hud)
+		{
+			return { lum:0, alpha:0, n:0 };
+		}
+		var W=vr.hud.w,H=vr.hud.h;
+		var x0=Math.max(0,cxTop-half),x1=Math.min(W,cxTop+half);
+		var gy0=Math.max(0,H-(cyTop+half)),gy1=Math.min(H,H-(cyTop-half));
+		var w=x1-x0,h=gy1-gy0;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.hud.tex,0,layer);
+		var px=new Uint8Array(w*h*4);
+		GLctx.readPixels(x0,gy0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		var lum=0,alpha=0,n=px.length/4;
+		for(var i=0; i<px.length; i+=4)
+		{
+			lum+=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+			alpha+=px[i+3];
+		}
+		return { lum:lum/n, alpha:alpha/n, n:n };
 	};
 	vr.readHudLayerStats=function(layer)
 	{
