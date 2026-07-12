@@ -1259,7 +1259,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// "up" sector) is y NEGATIVE. Flip to upY=-y once here so the rest of
 	// this function reads in plain screen terms (up=away, down=toward,
 	// matching a top-down view of the stick).
-	var DIAL_SELECT_THRESHOLD=0.5;  // magnitude to (re)pick a sector.
+	var DIAL_SELECT_THRESHOLD=0.5;
+	var DIAL_HYSTERESIS_DEG=6;  // Extra angle past a sector boundary before the pick switches (anti-flicker).  // magnitude to (re)pick a sector.
 	var DIAL_VISIBLE_THRESHOLD=0.3; // magnitude to fade the dial layer in.
 	var DIAL_HIDE_DELAY_MS=1200;    // time after re-centring before it hides.
 	// guiSectorN: 0/undefined runs the NORMAL 4-way pick (dial.sel, a
@@ -1294,6 +1295,21 @@ EM_JS(void,YsfwInstallWebXR,(),
 					deg2+=360;
 				}
 				var idx=Math.round(deg2/(360/guiSectorN))%guiSectorN;
+				// Boundary hysteresis: keep the current sector until the
+				// stick points DIAL_HYSTERESIS_DEG past the shared boundary,
+				// so aiming near a boundary doesn't flicker (and buzz)
+				// between two sectors.  Sweeping the stick around the rim
+				// still re-selects continuously, sector by sector.
+				if(idx!==dial.guiSel && null!=dial.guiSel && dial.guiSel<guiSectorN)
+				{
+					var half=180/guiSectorN;
+					var curCen=dial.guiSel*(360/guiSectorN);
+					var away=Math.abs(((deg2-curCen)%360+540)%360-180);
+					if(away<=half+DIAL_HYSTERESIS_DEG)
+					{
+						idx=dial.guiSel;
+					}
+				}
 				if(idx!==dial.guiSel)
 				{
 					dial.guiSel=idx;
@@ -1306,6 +1322,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 				// +-180deg=down, -90deg=left.
 				var deg=Math.atan2(x,upY)*180/Math.PI;
 				var sector=(-45<=deg && deg<45) ? 'up' : (45<=deg && deg<135) ? 'right' : (-135<=deg && deg<-45) ? 'left' : 'down';
+				// Same boundary hysteresis as the N-way pick above.
+				if(sector!==dial.sel && dial.sel)
+				{
+					var cen4={up:0,right:90,down:180,left:270}[dial.sel];
+					var degN=(deg%360+360)%360;
+					var away4=Math.abs(((degN-cen4)%360+540)%360-180);
+					if(away4<=45+DIAL_HYSTERESIS_DEG)
+					{
+						sector=dial.sel;
+					}
+				}
 				if(sector!==dial.sel)
 				{
 					dial.sel=sector;
