@@ -29,8 +29,10 @@
 //     rendering of the dialog itself (setupGui/SimDrawVrGui) is opt-in,
 //     default OFF (Module.ysfwVrOptions.guiPanel, ?vrpanel=1), and only
 //     force-enabled when the guide itself determines the current dialog does
-//     not fit (more real options than the dial's 6 slots, or not a
-//     hotkey-driven dialog at all).
+//     not fit (more real options than GUI_DIAL_CAPACITY=8, or not a
+//     hotkey-driven dialog at all). The guide dial is N-WAY -- one sector per
+//     real option, up to 8 -- so a 6- or 7-option menu never needs the panel;
+//     see PHASE 3 below.
 //
 // Feature 4 (owner-hand model) is the core of THIS revision: the dialog is
 // now driven ENTIRELY by whichever hand's dial opened it (vr.ctl.guiOwner) --
@@ -61,13 +63,14 @@
 //     bystander hand) and is NOT force-visible.
 //   - The bystander (right) hand's dial, trigger, and B button all keep
 //     firing their ordinary flight functions (Gear/KeyG, Brake/KeyB) while
-//     the dialog is open on the left -- and do NOT get routed to
-//     GUI_DIAL/Digit3 -- proving "the other hand fully reverts to its normal
+//     the dialog is open on the left -- and do NOT get routed to the
+//     dialog's Digit3 -- proving "the other hand fully reverts to its normal
 //     functions".
 //   - The owner (left) hand's stick-sector + trigger dispatches the
-//     dialog's real positional hotkey (Digit3, "3...Landing") instead of its
+//     dialog's real positional hotkey for that N-way sector (N=6 for this
+//     menu, so "down" is sector 3 -> Digit4, "4...Takeoff") instead of its
 //     normal Flap-Down key (KeyF), closing the dialog end to end (same
-//     FsGuiAutoPilotDialog::Landing side effect as before).
+//     FsGuiAutoPilotDialog::TakeOff side effect as before).
 //   - The right grip stick (aileron) still overrides flight control while
 //     the dialog is open, regardless of which hand owns it.
 //   - The owner hand's A/B (left X/Y here) dispatch the truthful extra
@@ -90,6 +93,29 @@
 //   - Opening the AP menu (again via the left dial) draws real content into
 //     the GUI texture on both multiview layers (nonzero alpha, bigger
 //     fraction than the old 1024x640 texture gave).
+//
+// Assertions -- PHASE 3, N-way sectors beyond the AP menu's 6 options: the
+// wingman-command radio-comm menu (up to 8 real options: 7 numbered
+// commands + an explicit "0...Don't send") needs a live AI wingman in
+// formation to reach headlessly, which is well beyond what this smoke test
+// scripts -- so this phase fabricates the engine's option-label list via
+// vr.pokeGuiMenu/vr.clearGuiOverride (see fswebxr.cpp's vr.testGuiOverride
+// doc comment) instead, exercising the SAME parseMenuLabel/
+// computeGuiMenuLayout/updateDialStick/guiDialEngagedFor code a real dialog
+// would drive, just skipping the (unrelated) engine-side wingman/formation
+// setup:
+//   - A fabricated 8-option menu (exactly at GUI_DIAL_CAPACITY) is fully
+//     drivable: sector 0 (up), 2 (right), 4 (down), 6 (left) each dispatch
+//     THEIR OWN option's real hotkey (Digit1/3/5/7, not a fixed table), and
+//     guiForced/the on-quad panel are NOT triggered (guiData[0] stays 0).
+//   - A fabricated 7-option menu is also fully drivable with no forced
+//     panel (the raised >8 threshold, not the old >6).
+//   - A fabricated 9-option menu (one past the cap) still shows/dispatches
+//     its first 8 options via the guide, but overflows -- guiMenu.overflow
+//     is true and the on-quad panel DOES get force-enabled (guiData[0]
+//     becomes 1), proving the raised threshold's ceiling is real.
+//   - dumpDialLayer for the 7-option case is dumped to nway-guide.png for a
+//     human to eyeball legibility at 256px.
 //
 //   node scripts/smoke-vrgui.mjs [url] [outDir]
 import { chromium } from 'playwright';
@@ -354,22 +380,30 @@ guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
 check('dialog still open after exercising the bystander hand (unaffected by it)', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
 
 // ---- Owner (left) hand: stick-select + trigger confirms, closes dialog ---
+// N-way guide math (see fswebxr.cpp's updateDialStick doc comment): the AP
+// menu has 6 real options, so N=6, wedge=60deg, sector i centred at
+// i*60deg clockwise from up. "down" is exactly 180deg -> idx=round(180/60)=3
+// -> guiMenu.options[3] ("4...Takeoff") -- NOT the old fixed-4-sector
+// GUI_DIAL.down/Digit3 ("3...Landing") that this test asserted before the
+// dial went N-way; the sector-to-hotkey mapping now reads the menu's OWN
+// positional hotkey instead of a fixed table, so a 6-option menu's "down"
+// lands on its 4th option, not always its 3rd.
 await resetKeys(page);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
-await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: SECTOR_THUMB.down, buttons: {} }]); // same geometry as RIGHT_DIAL/LEFT_DIAL's "down" -- now GUI_DIAL.down under the owner
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: SECTOR_THUMB.down, buttons: {} }]); // N=6 sector index 3 ("4...Takeoff") under the owner
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 1, thumb: [0, 0], buttons: {} }]); // trigger edge 0->1
 await page.waitForTimeout(120);
 keys = await readKeys(page);
 check('owner (left) hand: left-stick-down + trigger does NOT dispatch the normal Flap-Down key (KeyF)', !keys.includes('down:KeyF'), 'keys=' + JSON.stringify(keys));
-check('owner (left) hand: left-stick-down + trigger dispatches Digit3 (GUI_DIAL.down, "3...Landing")', keys.includes('down:Digit3') && keys.includes('up:Digit3'), 'keys=' + JSON.stringify(keys));
+check('owner (left) hand: left-stick-down + trigger dispatches Digit4 (N-way sector 3 of 6, "4...Takeoff")', keys.includes('down:Digit4') && keys.includes('up:Digit4'), 'keys=' + JSON.stringify(keys));
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release trigger
 
-// FsGuiAutoPilotDialog::Landing (Digit3), like every other option, both
+// FsGuiAutoPilotDialog::TakeOff (Digit4), like every other option, both
 // engages that autopilot mode AND closes the dialog itself.
 await page.waitForTimeout(300);
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
-check('selecting "3...Landing" from the owner hand closes the menu itself (dialogVisible back to 0)', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
+check('selecting "4...Takeoff" from the owner hand closes the menu itself (dialogVisible back to 0)', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
 check('quad still never allocated after a full open/select/close round-trip', guiData[0] === 0, 'guiData=' + JSON.stringify(guiData));
 
 // ---- Right grip stick still flies the plane while the dialog is open ----
@@ -519,6 +553,173 @@ if (guiDump) {
 }
 check('vr.dumpGuiLayer(0) returned a PNG data URL', typeof guiDump === 'string' && guiDump.startsWith('data:image/png'), 'guiDump=' + (guiDump ? guiDump.slice(0, 30) + '...' : guiDump));
 await page2.screenshot({ path: outDir + '/vrgui-test-3-vrpanel1.png' });
+
+// =========================================================================
+// PHASE 3: N-way sectors beyond the AP menu's 6 options. The real dialog
+// that goes past 6 (radio-comm's wingman-command menu, up to 8 options)
+// needs a live AI wingman in formation to reach -- not worth scripting here
+// -- so this phase fabricates the engine's option-label list via
+// vr.pokeGuiMenu/vr.clearGuiOverride instead (see fswebxr.cpp's
+// vr.testGuiOverride doc comment), exercising the SAME parseMenuLabel/
+// computeGuiMenuLayout/updateDialStick/guiDialEngagedFor code a real dialog
+// would drive on the RIGHT hand (attributed via the real
+// lastDialTapHand->guiOwner mechanism, not hardcoded).
+// =========================================================================
+const page3 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page3.__url = baseUrl;
+page3.on('console', (m) => { const t = m.text(); if (FATAL_PATTERNS.some((re) => re.test(t))) fatal.push('[console] ' + t); });
+page3.on('pageerror', (e) => fatal.push('[pageerror] ' + e.message));
+
+if (!(await bootFlight(page3))) { await browser.close(); process.exit(1); }
+
+const forced3 = await forceVr(page3);
+if (forced3 !== 'ok') {
+  console.error('FAILED to force multiview mode (phase 3): ' + forced3);
+  await browser.close();
+  process.exit(1);
+}
+await page3.waitForTimeout(2000);
+await installKeyListener(page3);
+
+// thumbFor(deg): the stick vector that selects N-way sector-angle `deg`
+// (0=up, clockwise) -- same atan2 convention updateDialStick/
+// drawGuiDialGuide use (see SECTOR_THUMB above for the cardinal-only version).
+function thumbFor(deg) {
+  const rad = deg * Math.PI / 180;
+  return [Math.sin(rad), -Math.cos(rad)];
+}
+
+// openFabricatedMenu: attribute a fresh fabricated dialog to the RIGHT hand
+// via the real dial-tap attribution mechanism (vr.ctl.lastDialTapHand ->
+// guiOwner, see processControllerPlain's doc comment -- the SAME mechanism
+// openApViaLeftDial exercises for the left hand with a real dialog), then
+// fabricate the option list and poke a neutral right-hand frame so
+// processControllerPlain sees the dialogVisible false->true transition and
+// assigns guiOwner + resets guiSel to 0.
+async function openFabricatedMenu(page, lines, opts) {
+  await page.evaluate(() => {
+    const vr = globalThis.Module.ysfwVr;
+    vr.ctl.lastDialTapHand = 'right';
+    vr.ctl.lastDialTapAt = performance.now();
+  });
+  await page.evaluate(([l, o]) => globalThis.Module.ysfwVr.pokeGuiMenu(l, o), [lines, opts || {}]);
+  await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]);
+}
+function closeFabricatedMenu(page) {
+  return page.evaluate(() => globalThis.Module.ysfwVr.clearGuiOverride());
+}
+// selectSector: the exact real gesture (sector pick, sticky recentre,
+// trigger edge, release) mirroring openApViaLeftDial's shape, generalized to
+// an arbitrary stick angle instead of just the 4 cardinal SECTOR_THUMB ones.
+async function selectSector(page, deg, triggerValue) {
+  const t = (triggerValue !== undefined) ? triggerValue : 1;
+  const thumb = thumbFor(deg);
+  await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
+  await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb, buttons: {} }]); // select sector
+  await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
+  await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: t, thumb: [0, 0], buttons: {} }]); // trigger edge
+  await page.waitForTimeout(120);
+  await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release
+}
+
+// ---- 8-option menu (exactly at GUI_DIAL_CAPACITY) -------------------------
+const MENU8 = [
+  '1...Break and Attack',
+  '2...Attack Ground Target',
+  '3...Cover Me',
+  '4...Form on My Wing',
+  '5...Return to Base',
+  '6...Stay in Holding Pattern',
+  '7...Land, Refuel and Take Off',
+  "0...Don't Send",
+];
+await openFabricatedMenu(page3, MENU8);
+let dialR = await page3.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  return { guiMode: vr.ctl.dial.right.guiMode, guiMenu: vr.ctl.dial.right.guiMenu, guiOwner: vr.ctl.guiOwner };
+});
+check('phase3: guiOwner attributed to "right" for the fabricated menu (via lastDialTapHand)', dialR.guiOwner === 'right', 'guiOwner=' + dialR.guiOwner);
+check('phase3 (N=8): fabricated menu is drivable with no overflow (exactly at GUI_DIAL_CAPACITY)', !!dialR.guiMenu && dialR.guiMenu.drivable === true && dialR.guiMenu.options.length === 8 && dialR.guiMenu.overflow === false, 'guiMenu=' + JSON.stringify(dialR.guiMenu));
+check('phase3 (N=8): right dial guiMode is "ap" for the fabricated menu', dialR.guiMode === 'ap', 'guiMode=' + dialR.guiMode);
+
+// Sector i's centre is at i*45deg (N=8, wedge=360/8=45, all clean multiples
+// -- see updateDialStick's doc comment). Each dispatches options[i]'s OWN
+// hotkey, not a fixed table.
+await resetKeys(page3);
+await selectSector(page3, 0);
+let keys3 = await readKeys(page3);
+check('phase3 (N=8): sector 0 (up, 0deg) dispatches Digit1 (options[0], "1...Break and Attack")', keys3.includes('down:Digit1') && keys3.includes('up:Digit1'), 'keys=' + JSON.stringify(keys3));
+
+await resetKeys(page3);
+await selectSector(page3, 90);
+keys3 = await readKeys(page3);
+check('phase3 (N=8): sector 2 (right, 90deg) dispatches Digit3 (options[2], "3...Cover Me")', keys3.includes('down:Digit3') && keys3.includes('up:Digit3'), 'keys=' + JSON.stringify(keys3));
+
+await resetKeys(page3);
+await selectSector(page3, 180);
+keys3 = await readKeys(page3);
+check('phase3 (N=8): sector 4 (down, 180deg) dispatches Digit5 (options[4], "5...Return to Base")', keys3.includes('down:Digit5') && keys3.includes('up:Digit5'), 'keys=' + JSON.stringify(keys3));
+
+await resetKeys(page3);
+await selectSector(page3, 270);
+keys3 = await readKeys(page3);
+check('phase3 (N=8): sector 6 (left, 270deg) dispatches Digit7 (options[6], "7...Land, Refuel and Take Off")', keys3.includes('down:Digit7') && keys3.includes('up:Digit7'), 'keys=' + JSON.stringify(keys3));
+
+await resetKeys(page3);
+await selectSector(page3, 315);
+keys3 = await readKeys(page3);
+check("phase3 (N=8): sector 7 (315deg) dispatches Digit0 (options[7], \"0...Don't Send\")", keys3.includes('down:Digit0') && keys3.includes('up:Digit0'), 'keys=' + JSON.stringify(keys3));
+
+let guiData3 = await page3.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
+check('phase3 (N=8): an exactly-at-cap 8-option menu never forces the on-quad panel (guiData[0]==0)', guiData3[0] === 0, 'guiData=' + JSON.stringify(guiData3));
+
+await closeFabricatedMenu(page3);
+
+// ---- 7-option menu: also fully drivable, no forced panel ------------------
+const MENU7 = MENU8.slice(0, 7); // drop the trailing "0...Don't Send" line.
+await openFabricatedMenu(page3, MENU7);
+dialR = await page3.evaluate(() => ({ guiMenu: globalThis.Module.ysfwVr.ctl.dial.right.guiMenu }));
+check('phase3 (N=7): 7-option fabricated menu is drivable with no overflow', !!dialR.guiMenu && dialR.guiMenu.drivable === true && dialR.guiMenu.options.length === 7 && dialR.guiMenu.overflow === false, 'guiMenu=' + JSON.stringify(dialR.guiMenu));
+
+// N=7, wedge=360/7≈51.4286deg. Sector 0 (up) is an exact multiple (0/wedge=0)
+// so it is unambiguous for any N; 90deg is round(90/(360/7))=round(1.75)=2 --
+// also unambiguous (not a .5 tie) -- see updateDialStick's round()-based pick.
+await resetKeys(page3);
+await selectSector(page3, 0);
+keys3 = await readKeys(page3);
+check('phase3 (N=7): sector 0 (up) dispatches Digit1 (options[0])', keys3.includes('down:Digit1') && keys3.includes('up:Digit1'), 'keys=' + JSON.stringify(keys3));
+
+await resetKeys(page3);
+await selectSector(page3, 90);
+keys3 = await readKeys(page3);
+check('phase3 (N=7): sector round(90/(360/7))=2 dispatches Digit3 (options[2])', keys3.includes('down:Digit3') && keys3.includes('up:Digit3'), 'keys=' + JSON.stringify(keys3));
+
+guiData3 = await page3.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
+check('phase3 (N=7): a 7-option menu does NOT force the on-quad panel (guiData[0]==0 -- the raised >8 threshold, not the old >6)', guiData3[0] === 0, 'guiData=' + JSON.stringify(guiData3));
+
+// Dump the 7-option guide for a human to eyeball legibility at 256px.
+const nwayDump = await page3.evaluate(() => globalThis.Module.ysfwVr.dumpDialLayer('right'));
+if (nwayDump) {
+  const b64 = nwayDump.replace(/^data:image\/png;base64,/, '');
+  fs.writeFileSync(outDir + '/nway-guide.png', Buffer.from(b64, 'base64'));
+  console.log('wrote ' + outDir + '/nway-guide.png');
+}
+check('phase3: dumpDialLayer("right") returned a PNG data URL for the 7-option N-way guide', typeof nwayDump === 'string' && nwayDump.startsWith('data:image/png'), 'nwayDump=' + (nwayDump ? nwayDump.slice(0, 30) + '...' : nwayDump));
+
+await closeFabricatedMenu(page3);
+
+// ---- 9-option menu (one past the cap): still drivable up to 8, but -------
+// ---- overflow forces the on-quad panel on. --------------------------------
+const MENU9 = MENU8.concat(['9...Extra Command Past The Cap']);
+await openFabricatedMenu(page3, MENU9);
+dialR = await page3.evaluate(() => ({ guiMenu: globalThis.Module.ysfwVr.ctl.dial.right.guiMenu }));
+check('phase3 (N=9): fabricated 9-option menu is capped to 8 shown sectors with overflow=true', !!dialR.guiMenu && dialR.guiMenu.options.length === 8 && dialR.guiMenu.overflow === true && dialR.guiMenu.drivable === true, 'guiMenu=' + JSON.stringify(dialR.guiMenu));
+
+guiData3 = await page3.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
+check('phase3 (N=9): overflowing past the cap DOES force the on-quad panel on (guiData[0]==1)', guiData3[0] === 1, 'guiData=' + JSON.stringify(guiData3));
+
+await closeFabricatedMenu(page3);
+await page3.close();
 
 await browser.close();
 

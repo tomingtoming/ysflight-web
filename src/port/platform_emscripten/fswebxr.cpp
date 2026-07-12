@@ -82,23 +82,24 @@ that owns the session and fills that state every frame:
     computeGuiMenuLayout reading the engine's real option labels -- fsvr.h's
     FsVrGuiMenuPointer, written every VR frame by
     FsSimulation::SimComputeVrGuiState regardless of the composite below) is
-    SELF-SUFFICIENT to operate any in-flight dialog that fits its 6 slots and
-    is hotkey-driven (guiMenu.drivable), which covers the autopilot family
-    plus the radio-comm/ATC/approach menus (see fsvr.h's apMenu doc comment
-    for the exact list) -- so the on-quad rendering of the dialog itself is
-    now OPT-IN, default OFF (see guiPanelWanted/Module.ysfwVrOptions.guiPanel,
-    ?vrpanel=1). setupGui/teardownGui allocate a second off-screen two-layer
-    multiview framebuffer (640x360x2, see fsvr.h's FsVrGuiDataPointer --
-    shrunk from an earlier 1024x640 so the SAME absolute-pixel dialog layout
-    covers a bigger fraction of the texture, ~1.6x bigger on the composited
-    quad) that the engine (FsSimulation::SimDrawVrGui) renders whichever
-    dialog is currently open into every frame, composited onto a second,
-    GUI-anchored quad (closer/lower than the HUD glass) -- see
-    guiDialogState/vr.readGuiData. Absolute kill switch:
-    Module.ysfwVrOptions.gui===false. The panel is force-enabled anyway
-    (maybeForceGuiPanel) the instant the guide itself finds a dialog it
-    cannot fully drive -- more real options than its 6 slots (radio-comm
-    menus can have 7+), or not hotkey-driven at all
+    SELF-SUFFICIENT to operate any in-flight dialog that fits its
+    GUI_DIAL_CAPACITY (8) slots and is hotkey-driven (guiMenu.drivable), which
+    covers the autopilot family plus the radio-comm/ATC/approach menus (see
+    fsvr.h's apMenu doc comment for the exact list) -- so the on-quad
+    rendering of the dialog itself is now OPT-IN, default OFF (see
+    guiPanelWanted/Module.ysfwVrOptions.guiPanel, ?vrpanel=1). setupGui/
+    teardownGui allocate a second off-screen two-layer multiview framebuffer
+    (640x360x2, see fsvr.h's FsVrGuiDataPointer -- shrunk from an earlier
+    1024x640 so the SAME absolute-pixel dialog layout covers a bigger
+    fraction of the texture, ~1.6x bigger on the composited quad) that the
+    engine (FsSimulation::SimDrawVrGui) renders whichever dialog is currently
+    open into every frame, composited onto a second, GUI-anchored quad
+    (closer/lower than the HUD glass) -- see guiDialogState/vr.readGuiData.
+    Absolute kill switch: Module.ysfwVrOptions.gui===false. The panel is
+    force-enabled anyway (maybeForceGuiPanel) the instant the guide itself
+    finds a dialog it cannot fully drive -- more real options than
+    GUI_DIAL_CAPACITY (radio-comm's wingman-command menu is exactly 8, right
+    at the cap), or not hotkey-driven at all
     (replay/continue/stationary/vehicle-change/chat -- mouse-only) -- so
     nothing becomes unreachable, it just costs the composite only when
     actually needed.
@@ -108,30 +109,40 @@ that owns the session and fills that state every frame:
     guiDialogState().visible transitions false->true, from
     vr.ctl.lastDialTapHand -- see processControllerPlain's doc comment;
     defaults to 'left', where the AP tap lives, if that is stale/unknown).
-    While a dialog is open, processControllerPlain reroutes ONLY the owner
-    hand's 4 stick sectors + A/B to the dialog's own hotkeys (Digit1..5/
-    Digit0, see GUI_DIAL) when guiMenu.drivable, or to a generic
-    Escape/cancel tap otherwise (GUI_ESCAPE_ACTION); the owner hand's
-    thumbstick click is repurposed as a truthful cancel/Escape binding (the
-    one input left spare once 4 sectors + trigger + A + B are spoken for).
-    The OTHER hand is completely untouched -- its dial, trigger, A/B/X/Y all
-    keep their normal flight-control meaning, exactly as if no dialog were
-    open, so the pilot never loses that hand's functions to a dialog they
-    didn't open. Discoverability: the owner hand's quad is FORCED visible for
-    as long as a dialog stays open (regardless of thumbstick engagement) and
-    switches to a dialog-guide face -- sectors numbered 1..4 (+A=5/B=0, or
-    X=5/Y=0 on the left hand, in the centre) labelled with the dialog's REAL
-    option text when drivable, or a uniform "ESC" face (with a "see panel"
-    hint once the panel is forced) otherwise -- see
+    While a dialog is open, processControllerPlain reroutes the owner hand's
+    stick sectors + A/B to the dialog's own hotkeys when guiMenu.drivable, or
+    to a generic Escape/cancel tap otherwise (GUI_ESCAPE_ACTION); the owner
+    hand's thumbstick click is repurposed as a truthful cancel/Escape
+    binding. Unlike the normal RIGHT_DIAL/LEFT_DIAL (always exactly 4
+    sectors), the drivable guide dial is N-WAY: it shows one sector PER REAL
+    OPTION the open dialog reports (N=guiMenu.options.length, up to
+    GUI_DIAL_CAPACITY=8), evenly dividing the circle starting at up (12
+    o'clock) and going clockwise, sector i dispatching guiMenu.options[i]'s
+    OWN real hotkey (read positionally off the engine's label text via
+    parseMenuLabel -- see guiDialEngagedFor/hotkeyCode below) -- NOT a fixed
+    Digit1..4 table, so a 6- or 7-option menu (radio-comm's wingman-command
+    dialog has 7 numbered commands plus an explicit "0...Don't send" option,
+    8 total) is fully dial-selectable without ever needing the on-quad panel.
+    A/B (X/Y on the left hand) remain fixed Digit5/Digit0 taps regardless of
+    N -- redundant once N>=5/N==10-ish covers those positions via a sector
+    already, harmless (a no-op tap) when the open dialog has fewer options,
+    exactly as before this change. The OTHER hand is completely untouched --
+    its dial, trigger, A/B/X/Y all keep their normal flight-control meaning,
+    exactly as if no dialog were open, so the pilot never loses that hand's
+    functions to a dialog they didn't open. Discoverability: the owner hand's
+    quad is FORCED visible for as long as a dialog stays open (regardless of
+    thumbstick engagement) and switches to a dialog-guide face -- N sectors
+    numbered 1..N (+A=5/B=0 in the centre, see above) labelled with the
+    dialog's REAL option text when drivable, or a uniform "ESC" face (with a
+    "see panel" hint once the panel is forced) otherwise -- see
     drawGuiDialGuide/rdial.guiMode/rdial.guiMenu (ldial.* symmetrically);
     falls back to the normal dial the instant the dialog closes. Grip-stick
     (aileron/elevator/rudder) and the throttle grip are NEVER affected, on
-    EITHER hand: the plane keeps flying regardless of any open dialog. See
-    the doc comment on GUI_DIAL for why this stops at a 4-hotkey stick
-    mapping rather than the generic Tab-focus/Arrow-key/Enter scheme a first
-    read of the engine might suggest -- most in-flight dialogs (the autopilot
-    family included) do not actually route keyboard input through that
-    generic path.
+    EITHER hand: the plane keeps flying regardless of any open dialog. A
+    haptic pulse fires on every sector change in guide mode too (same
+    updateDialStick call the normal 4-way pick uses, just quantized to N
+    wedges instead of 4 -- see its doc comment), standing in for the visual
+    feedback a pilot not looking at the guide quad would otherwise miss.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -296,6 +307,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// fully drive on its own, for the rest of the session (see
 		// guiPanelWanted, teardownGui resets it).
 		guiForced:false,
+		// Headless-test-only override for guiDialogState()/readGuiMenu()
+		// below (see vr.pokeGuiMenu/vr.clearGuiOverride, scripts/
+		// smoke-vrgui.mjs): null in every real session (both functions read
+		// the native FsVrGuiDataPointer/FsVrGuiMenuPointer blocks exactly as
+		// before). Exists because reaching a REAL >6-option in-flight dialog
+		// headlessly (radio-comm's wingman-command menu needs a live AI
+		// wingman in formation, non-trivial to script) would cost far more
+		// than it proves about this file's OWN N-way sector-picking/mapping
+		// math (updateDialStick/computeGuiMenuLayout/guiDialEngagedFor),
+		// which is pure JS with no engine dependency once given a menu list
+		// -- so the test fabricates one instead of the real dialog. The
+		// 6-option autopilot menu (a real dialog, reachable the normal way)
+		// still covers one genuine end-to-end N!=4 case.
+		testGuiOverride:null,
 		// Head-locked function-dial quad layers (lazily created, layers path
 		// only). viewerSpace: the session's 'viewer' reference space the
 		// quads are anchored to. dialRes[hand]: undefined = not yet
@@ -359,14 +384,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 			leftTrigger:false,
 			keys:{},
 			// Radial function-dial state per hand (see RIGHT_DIAL/LEFT_DIAL).
-			// sel: sticky selected sector ('up'|'right'|'down'|'left').
+			// sel: sticky selected sector ('up'|'right'|'down'|'left') for
+			//   the NORMAL 4-way flight-function dial (and the generic/ESC
+			//   GUI-guide face, which is also uniform 4-way -- see
+			//   updateDialStick). guiSel: sticky selected sector INDEX
+			//   (0..N-1, numeric) for the N-way GUI-guide dial ONLY, reset to
+			//   0 every time a dialog freshly opens (see
+			//   processControllerPlain's guiOwner-assignment block) --
+			//   entirely separate state from sel so the normal dial can never
+			//   be left holding a stale numeric value once a dialog closes.
 			// engaged: the function snapshot captured at the trigger's press
 			//   edge (see processControllerPlain) -- kept for the whole press
 			//   so a mid-press dial flick can't retarget an already-firing
 			//   trigger. visible/hideAt drive the quad layer's on/off fade.
 			dial:{
-				right:{sel:'up',engaged:null,visible:false,hideAt:0},
-				left:{sel:'up',engaged:null,visible:false,hideAt:0}
+				right:{sel:'up',guiSel:0,engaged:null,visible:false,hideAt:0},
+				left:{sel:'up',guiSel:0,engaged:null,visible:false,hideAt:0}
 			},
 			// Last known grip pose per hand, plain-copied out of this frame's
 			// XRPose each frame in updateControllers (real XR path only --
@@ -430,39 +463,80 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// GUI-dialog stick mapping (see SimDrawVrGui's doc comment / fsvr.h's
 	// FsVrGuiDataPointer): while a modal in-flight dialog is open (guiData[5]
 	// dialogVisible), this REPLACES RIGHT_DIAL/LEFT_DIAL for the OWNER hand's
-	// thumbstick 4 sectors (see vr.ctl.guiOwner / processControllerPlain's
+	// thumbstick sectors (see vr.ctl.guiOwner / processControllerPlain's
 	// rActive/lActive -- whichever hand's dial tap plausibly opened the
 	// dialog), so that hand's trigger sector-tap dispatches the dialog's own
 	// direct hotkeys instead of its normal flight functions. The OTHER hand
-	// never consults this table at all -- see the class doc comment's
-	// "Ownership" paragraph. Digit1..4 only: this table is only consulted
-	// when computeGuiMenuLayout says the menu is "drivable" (see
-	// processControllerPlain) -- the engine reports apMenu (the open dialog
-	// is one of the hotkey-driven in-flight dialogs: the autopilot family
-	// plus radio-comm/ATC/approach menus, see fsvr.h's apMenu doc comment for
-	// the full list) AND has at least one real option. Those dialogs'
-	// ProcessRawKeyInput (fsguiinfltdlg.cpp) all consume
-	// Digit1..Digit9/Digit0/Escape directly and POSITIONALLY (the Nth option
-	// added is the Nth digit, regardless of what FsGuiDialogItem::fsKey the
-	// button itself carries -- see fsvr.h's FsVrGuiMenuPointer doc comment),
-	// independent of the generic FsGuiDialog Tab-focus/mouse-click machinery
-	// that the remaining, mouse-only in-flight dialogs rely on instead (see
-	// updateControllers' doc comment below for why this table stops at 4:
-	// Digit5/Digit0 are reached through the owner hand's A/B buttons
-	// instead, freeing the 4-sector stick for the first 4 options of
-	// whichever dialog is actually open). The .label fields below are just
-	// internal, descriptive fallback text (the AP menu's own options,
-	// historically the only dialog wired up here) -- NOT what is drawn
-	// in-headset any more; the actual on-canvas guide (drawGuiDialGuide)
-	// reads the CURRENT dialog's real option text from the owner hand's
-	// dial.guiMenu (computeGuiMenuLayout), so it stays correct for whichever
-	// of the drivable dialogs is open.
-	var GUI_DIAL={
-		up:   {label:'1', code:'Digit1', mode:'tap'},
-		right:{label:'2', code:'Digit2', mode:'tap'},
-		down: {label:'3', code:'Digit3', mode:'tap'},
-		left: {label:'4', code:'Digit4', mode:'tap'}
-	};
+	// never consults any of this at all -- see the class doc comment's
+	// "Ownership" paragraph. Only consulted when computeGuiMenuLayout says
+	// the menu is "drivable" (see processControllerPlain) -- the engine
+	// reports apMenu (the open dialog is one of the hotkey-driven in-flight
+	// dialogs: the autopilot family plus radio-comm/ATC/approach menus, see
+	// fsvr.h's apMenu doc comment for the full list) AND has at least one
+	// real option. Those dialogs' ProcessRawKeyInput (fsguiinfltdlg.cpp) all
+	// consume Digit1..Digit9/Digit0/Escape directly and POSITIONALLY (the Nth
+	// option added is the Nth digit, regardless of what
+	// FsGuiDialogItem::fsKey the button itself carries -- see fsvr.h's
+	// FsVrGuiMenuPointer doc comment), independent of the generic
+	// FsGuiDialog Tab-focus/mouse-click machinery that the remaining,
+	// mouse-only in-flight dialogs rely on instead.
+	//
+	// Unlike RIGHT_DIAL/LEFT_DIAL (a fixed table, always exactly 4 sectors),
+	// there is no fixed GUI_DIAL table any more: the dial guide is N-WAY,
+	// one sector per REAL option the currently-open dialog reports
+	// (guiMenu.options.length, up to GUI_DIAL_CAPACITY -- see
+	// computeGuiMenuLayout), and sector i dispatches guiMenu.options[i]'s OWN
+	// hotkey, read positionally off the engine's label text (parseMenuLabel
+	// already extracted it into .hotkey) -- see hotkeyCode/
+	// guiDialEngagedFor below. This is what lets a 6- or 7-option dialog
+	// (the autopilot menu; radio-comm's wingman-command menu) be fully
+	// dial-selectable without the on-quad panel, where the old fixed-4
+	// table needed the owner hand's A/B buttons to reach options 5/6 (see
+	// GUI_DIAL_CAPACITY's doc comment) and forced the panel on above that.
+	// A/B (X/Y on the left hand) still tap the fixed Digit5/Digit0 keys
+	// unconditionally when apMenu (processControllerPlain, unchanged by this)
+	// -- redundant once a sector already covers that position, a harmless
+	// no-op when the open dialog has fewer options, exactly as before.
+	//
+	// hotkeyCode(opt,idx): the DOM KeyboardEvent code for one parsed option
+	// (see parseMenuLabel) -- opt.hotkey ('1'..'9' or '0') when the engine's
+	// own label prefix parsed cleanly, else a positional fallback (idx+1,
+	// 1-based, wrapping 10->'0') for the rare item whose label has no
+	// recognized digit prefix (a pagination "<<Prev"/"Next>>" button, kept in
+	// options[] since it isn't the 'ESC' cancel entry) -- so the guide can
+	// still offer a best-effort key rather than silently dropping that
+	// sector's dispatch.
+	function hotkeyCode(opt,idx)
+	{
+		var h=(opt && opt.hotkey) || String((idx+1)%10);
+		return ('0'===h) ? 'Digit0' : ('Digit'+h);
+	}
+	// The dial-confirm action for the owner hand's currently-selected sector
+	// (rdial.guiSel/ldial.guiSel, an N-way index -- see updateDialStick),
+	// given that hand's current guiMenu (computeGuiMenuLayout). Mirrors the
+	// old GUI_DIAL[dial.sel]/GUI_ESCAPE_ACTION ternary in shape (an
+	// {label,code,mode:'tap'} action, or GUI_ESCAPE_ACTION), just reading the
+	// engine's REAL per-option hotkey instead of a fixed table -- so it can
+	// never promise a Digit code the currently-open dialog does not actually
+	// have a button for. Falls back to GUI_ESCAPE_ACTION whenever the guide
+	// isn't in drivable ('ap') mode at all, or (should not happen given
+	// guiSel is always kept in [0,guiMenu.options.length) -- see
+	// processControllerPlain's dialog-open reset and updateDialStick's modulo
+	// pick -- but checked anyway, fail-safe) the selected index has no
+	// backing option.
+	function guiDialEngagedFor(guiMenu,sel)
+	{
+		if(!guiMenu || !guiMenu.drivable)
+		{
+			return GUI_ESCAPE_ACTION;
+		}
+		var opt=guiMenu.options[sel];
+		if(!opt)
+		{
+			return GUI_ESCAPE_ACTION;
+		}
+		return {label:(opt.hotkey||String(sel+1)), code:hotkeyCode(opt,sel), mode:'tap'};
+	}
 	// Generic "close/cancel" action for any OTHER in-flight dialog
 	// (dialogVisible but not apMenu -- radio-comm menus, replay/continue
 	// dialogs, etc.): every in-flight dialog in the engine either consumes
@@ -628,9 +702,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// window-size-independent absolute-pixel layouts (see SimDrawVrGui's doc
 	// comment) cover a much bigger FRACTION of the texture than the previous
 	// 1024x640 did, while still (checked against the autopilot menu, the
-	// widest in-flight dialog that matters for GUI_DIAL's hotkey guide --
-	// see scripts/smoke-vrgui.mjs) fitting inside it uncropped. Composited
-	// onto the SAME physical quad size (FsVrDrawGuiQuad, fssimulation.cpp),
+	// widest in-flight dialog that matters for the dial guide's hotkey
+	// dispatch -- see scripts/smoke-vrgui.mjs) fitting inside it uncropped.
+	// Composited onto the SAME physical quad size (FsVrDrawGuiQuad, fssimulation.cpp),
 	// this makes the dialog appear roughly 1024/640 = 1.6x bigger to the
 	// pilot without touching the quad's world-space placement.
 	// Whether the in-flight-dialog quad should actually be allocated/composited
@@ -760,6 +834,18 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// frame unconditionally -- see fsvr.h's FsVrGuiDataPointer doc comment.
 	function guiDialogState()
 	{
+		// Headless-test override (vr.testGuiOverride, see its doc comment on
+		// the vr state block above) takes priority when set -- lets
+		// scripts/smoke-vrgui.mjs fabricate a >6-option menu's
+		// dialogVisible/apMenu without a live engine dialog, which would
+		// otherwise stomp any direct write to the native block on the very
+		// next real engine tick (FsSimulation::SimComputeVrGuiState runs
+		// unconditionally and would see no C++ dialog open). Never set in a
+		// real session.
+		if(vr.testGuiOverride)
+		{
+			return {visible:!!vr.testGuiOverride.visible,apMenu:!!vr.testGuiOverride.apMenu};
+		}
 		var p=_YsfwVrGuiDataPointer()>>2;
 		return {visible:0!==HEAPF32[p+5],apMenu:0!==HEAPF32[p+6]};
 	}
@@ -772,6 +858,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 	var guiMenuCache={version:-1,items:[]};
 	function readGuiMenu()
 	{
+		// Headless-test override, see guiDialogState's identical check
+		// above: returns the fabricated list directly, bypassing the
+		// version-cache/native read entirely (cheap enough either way, and
+		// only ever taken when a test has explicitly opted in).
+		if(vr.testGuiOverride)
+		{
+			return vr.testGuiOverride.menu||[];
+		}
 		var ver=_YsfwVrGuiMenuVersion();
 		if(ver===guiMenuCache.version)
 		{
@@ -815,21 +909,31 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		return {hotkey:null,text:label};
 	}
-	// How many of the dial's fixed slots (4 sectors + right-A + right-B) a
-	// menu can use.
-	var GUI_DIAL_CAPACITY=6;
+	// How many sectors the N-way dial guide can show at once -- one per real
+	// option, so this is also the max menu size the guide alone can fully
+	// drive (see the class doc comment's GUI-in-VR section). 8 covers every
+	// currently-known hotkey-driven in-flight dialog: the autopilot family
+	// tops out at 6 real options, radio-comm's wingman-command menu (the
+	// widest, see FsGuiRadioCommCommandDialog) at exactly 8 (7 numbered
+	// commands plus an explicit "0...Don't send"); Digit1..Digit9/Digit0 give
+	// headroom to 10 if a future dialog ever needs it, but a 256px quad
+	// showing 8 short-text wedges is already tight (see drawGuiDialGuide) so
+	// this stays at the honest, currently-sufficient 8 rather than the raw
+	// keyboard ceiling.
+	var GUI_DIAL_CAPACITY=8;
 	// Turns the engine's raw option-label list into what the dial guide can
 	// actually show: the non-cancel options (up to GUI_DIAL_CAPACITY of
 	// them), the cancel line separately, an overflow flag when there were
-	// MORE real options than that, and "drivable" -- whether GUI_DIAL's
-	// fixed Digit1../Digit0 dispatch (below) is trustworthy to promise via a
-	// numbered face at all, which requires BOTH that the engine says this
-	// dialog accepts direct positional hotkeys (hotkeyMenu, fsvr.h's apMenu)
-	// AND that there is at least one real option to show. Overflow does NOT
-	// affect drivable/dispatch: sectors 1-4 and A(5)/B(0) still fire the
-	// exact same real actions whether or not a 7th+ option exists out of the
-	// dial's reach -- overflow only means the guide must ALSO point at the
-	// on-quad panel (forced on, see maybeForceGuiPanel) for the rest.
+	// MORE real options than that, and "drivable" -- whether the per-option
+	// positional Digit dispatch (guiDialEngagedFor/hotkeyCode above) is
+	// trustworthy to promise via a numbered face at all, which requires BOTH
+	// that the engine says this dialog accepts direct positional hotkeys
+	// (hotkeyMenu, fsvr.h's apMenu) AND that there is at least one real
+	// option to show. Overflow does NOT affect drivable/dispatch: every
+	// sector within GUI_DIAL_CAPACITY still fires the exact same real action
+	// whether or not a 9th+ option exists out of the dial's reach --
+	// overflow only means the guide must ALSO point at the on-quad panel
+	// (forced on, see maybeForceGuiPanel) for the rest.
 	function computeGuiMenuLayout(hotkeyMenu)
 	{
 		var raw=readGuiMenu();
@@ -1167,7 +1271,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 	var DIAL_SELECT_THRESHOLD=0.5;  // magnitude to (re)pick a sector.
 	var DIAL_VISIBLE_THRESHOLD=0.3; // magnitude to fade the dial layer in.
 	var DIAL_HIDE_DELAY_MS=1200;    // time after re-centring before it hides.
-	function updateDialStick(dial,thumb,rawSrc)
+	// guiSectorN: 0/undefined runs the NORMAL 4-way pick (dial.sel, a
+	// direction string -- RIGHT_DIAL/LEFT_DIAL and the generic/ESC GUI-guide
+	// face both key off this, unchanged from before this dial was made
+	// N-way-aware). A positive integer instead runs the GUI-guide's N-way
+	// pick (dial.guiSel, a numeric 0..N-1 sector index -- see
+	// guiDialEngagedFor/drawGuiDialGuide) using the SAME underlying stick
+	// reading, just quantized to N even wedges instead of a fixed 4. Kept as
+	// two entirely separate fields (not one field that changes type) so a
+	// dialog closing can never leave the normal dial holding a stale numeric
+	// value -- see vr.ctl.dial's doc comment.
+	function updateDialStick(dial,thumb,rawSrc,guiSectorN)
 	{
 		var x=(thumb ? thumb[0] : 0)||0;
 		var upY=(thumb ? -thumb[1] : 0)||0;
@@ -1175,14 +1289,37 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
 		if(DIAL_SELECT_THRESHOLD<mag)
 		{
-			// Canvas/atan2 convention: 0deg=up (x=0,upY=1), 90deg=right,
-			// +-180deg=down, -90deg=left.
-			var deg=Math.atan2(x,upY)*180/Math.PI;
-			var sector=(-45<=deg && deg<45) ? 'up' : (45<=deg && deg<135) ? 'right' : (-135<=deg && deg<-45) ? 'left' : 'down';
-			if(sector!==dial.sel)
+			if(guiSectorN)
 			{
-				dial.sel=sector;
-				vrHapticPulse(rawSrc);
+				// N-way GUI-guide pick: same atan2 convention as the 4-way
+				// pick below (0deg=up, clockwise), normalized to [0,360) and
+				// quantized to guiSectorN even wedges -- sector i's centre is
+				// at i*(360/guiSectorN) degrees, matching drawGuiDialGuide's
+				// wedge layout exactly so the visible wedge under the stick
+				// is always the one that actually gets selected.
+				var deg2=Math.atan2(x,upY)*180/Math.PI;
+				if(deg2<0)
+				{
+					deg2+=360;
+				}
+				var idx=Math.round(deg2/(360/guiSectorN))%guiSectorN;
+				if(idx!==dial.guiSel)
+				{
+					dial.guiSel=idx;
+					vrHapticPulse(rawSrc);
+				}
+			}
+			else
+			{
+				// Canvas/atan2 convention: 0deg=up (x=0,upY=1), 90deg=right,
+				// +-180deg=down, -90deg=left.
+				var deg=Math.atan2(x,upY)*180/Math.PI;
+				var sector=(-45<=deg && deg<45) ? 'up' : (45<=deg && deg<135) ? 'right' : (-135<=deg && deg<-45) ? 'left' : 'down';
+				if(sector!==dial.sel)
+				{
+					dial.sel=sector;
+					vrHapticPulse(rawSrc);
+				}
 			}
 		}
 		if(DIAL_VISIBLE_THRESHOLD<mag)
@@ -1284,6 +1421,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var nowOwner=(typeof performance!=='undefined' ? performance.now() : Date.now());
 			var tapRecent=(null!==vr.ctl.lastDialTapHand && (nowOwner-vr.ctl.lastDialTapAt)<=OWNER_RECENCY_MS);
 			vr.ctl.guiOwner=(tapRecent ? vr.ctl.lastDialTapHand : 'left');
+			// Fresh dialog: always start the N-way guide pointed at sector 0
+			// (the first real option) regardless of whichever sector a
+			// PREVIOUS, differently-sized dialog last left guiSel on -- a
+			// smaller menu closing and a bigger one opening right after must
+			// not silently inherit an out-of-range or misleading index.
+			vr.ctl.dial.right.guiSel=0;
+			vr.ctl.dial.left.guiSel=0;
 		}
 		vr.ctl.guiWasVisible=guiState.visible;
 		// Per-hand "is this dialog actually rerouting THIS hand's inputs
@@ -1330,11 +1474,27 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 
 			var rdial=vr.ctl.dial.right;
+			// guiMenu (computeGuiMenuLayout) reads the engine's REAL
+			// option-label list (fsvr.h's FsVrGuiMenuPointer) and is exposed
+			// on rdial.guiMenu for the guide to draw from and for
+			// inspection/tests, so the guide can never promise a mapping
+			// that either doesn't exist or the router doesn't actually
+			// implement: guiMode is 'ap' when guiMenu.drivable (the
+			// per-option positional Digit hotkeys are live AND there is at
+			// least one real option to label them with), 'generic' otherwise
+			// (only the Escape reroutes are trustworthy). Computed BEFORE
+			// updateDialStick below (not after, as it once was) because the
+			// N-way GUI-guide pick needs to know N=guiMenu.options.length
+			// this same call.
+			var guiMenu=(rActive ? computeGuiMenuLayout(guiState.apMenu) : null);
+			var guiSectorN=(guiMenu && guiMenu.drivable) ? guiMenu.options.length : 0;
 			// Sector-selection bookkeeping (haptic-on-change, visibility/fade
 			// timer) runs unconditionally -- it is harmless bystander state
-			// when the OTHER hand owns an open dialog, and this is also the
-			// exact stick geometry the GUI_DIAL mapping below reuses.
-			updateDialStick(rdial,entry.thumb,rawSrc);
+			// when the OTHER hand owns an open dialog. guiSectorN>0 routes
+			// this call to the N-way GUI-guide pick (rdial.guiSel) instead of
+			// the normal 4-way one (rdial.sel) -- see updateDialStick's doc
+			// comment; the SAME underlying stick geometry drives both.
+			updateDialStick(rdial,entry.thumb,rawSrc,guiSectorN);
 
 			// Dialog-guide takeover: ONLY while this hand is the dialog's
 			// owner (rActive -- see vr.ctl.guiOwner above) does this dial
@@ -1348,24 +1508,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// none is open), rActive is false and this dial is left
 			// completely alone -- normal RIGHT_DIAL face, normal
 			// thumbstick-engagement visibility rule, exactly as if no
-			// dialog existed. guiMenu (computeGuiMenuLayout) reads the
-			// engine's REAL option-label list (fsvr.h's FsVrGuiMenuPointer)
-			// and is exposed on rdial.guiMenu for the guide to draw from and
-			// for inspection/tests, so the guide can never promise a mapping
-			// that either doesn't exist or the router doesn't actually
-			// implement: guiMode is 'ap' when guiMenu.drivable (GUI_DIAL's
-			// Digit1..4/A=5/B=0 hotkeys are live AND there is at least one
-			// real option to label them with), 'generic' otherwise (only the
-			// Escape reroutes are trustworthy).
-			var guiMenu=(rActive ? computeGuiMenuLayout(guiState.apMenu) : null);
+			// dialog existed.
 			rdial.guiMenu=guiMenu;
 			rdial.guiMode=(!guiMenu ? null : (guiMenu.drivable ? 'ap' : 'generic'));
 			if(rActive)
 			{
 				rdial.visible=true;
-				// The dial's 6 slots cannot reach every option (radio-comm
-				// menus can have 7+, see FsGuiRadioCommCommandDialog), and
-				// some in-flight dialogs are not hotkey-driven at all
+				// GUI_DIAL_CAPACITY sectors cannot reach every option
+				// (radio-comm's wingman-command menu is exactly at the cap,
+				// see FsGuiRadioCommCommandDialog), and some in-flight
+				// dialogs are not hotkey-driven at all
 				// (replay/continue/stationary/vehicle-change/chat -- mouse-
 				// only). Either way, force the on-quad panel on so the full
 				// dialog stays readable/reachable (a real physical keyboard,
@@ -1386,7 +1538,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				// snapshot: dial flicks mid-press don't retarget it.
 				if(rActive)
 				{
-					rdial.engaged=(guiState.apMenu ? GUI_DIAL[rdial.sel] : GUI_ESCAPE_ACTION);
+					rdial.engaged=guiDialEngagedFor(guiMenu,rdial.guiSel);
 				}
 				else
 				{
@@ -1426,10 +1578,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// nor long enough) intentionally does nothing. While THIS hand
 			// owns an open dialog (rActive), the short tap's target key is
 			// rerouted instead: Digit5 (the AP menu's 5th option, "Fly
-			// Heading Bug", out of stick-sector reach -- see GUI_DIAL's doc
-			// comment) when apMenu, else Escape (generic close). Recenter is
-			// left enabled either way -- it is a view-only action, not a
-			// flight or dialog control.
+			// Heading Bug") when apMenu, else Escape (generic close). Fixed
+			// regardless of N -- redundant with sector 5 of the N-way guide
+			// once the open dialog has that many options (see
+			// guiDialEngagedFor), a harmless no-op otherwise, kept for
+			// muscle-memory continuity with dialogs that predate the N-way
+			// guide. Recenter is left enabled either way -- it is a
+			// view-only action, not a flight or dialog control.
 			var aPressed=!!(entry.buttons && entry.buttons.a);
 			var aBtn=vr.ctl.aBtn;
 			var aNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -1482,11 +1637,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// help placards on the press edge, either hand (see toggleHelp).
 			// While THIS hand owns an open dialog, it is repurposed instead
 			// as the dialog's truthful cancel/Escape binding -- the ONE
-			// input the owner hand has spare after the 4 sectors + trigger +
-			// A + B are spoken for by GUI_DIAL's 6 positional slots, so a
-			// pilot can always back out of a dialog without touching the
-			// other (fully normal) hand at all. See drawGuiDialGuide's
-			// on-quad label for this.
+			// input the owner hand has spare regardless of how many of the
+			// N sectors + trigger + A + B the currently-open dialog's real
+			// options occupy, so a pilot can always back out of a dialog
+			// without touching the other (fully normal) hand at all. See
+			// drawGuiDialGuide's on-quad label for this.
 			var rStickBtn=!!(entry.buttons && entry.buttons.stick);
 			if(rActive)
 			{
@@ -1628,11 +1783,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// hand is NOT the dialog owner (including no dialog at all) --
 			// fully normal, sticky-sector semantics as always. When lActive,
 			// this becomes the dialog's own confirm input instead, exactly
-			// mirroring the right dial's GUI_DIAL routing (see rActive's
-			// branch above) so the dialog is drivable from WHICHEVER hand
-			// opened it.
+			// mirroring the right dial's N-way GUI-guide routing (see
+			// rActive's branch above) so the dialog is drivable from
+			// WHICHEVER hand opened it.
 			var ldial=vr.ctl.dial.left;
-			updateDialStick(ldial,entry.thumb,rawSrc);
+			// Symmetric to the right dial's guiMenu/guiSectorN computation
+			// above: computed BEFORE updateDialStick so the N-way GUI-guide
+			// pick (ldial.guiSel) knows N=guiMenuL.options.length this call.
+			var guiMenuL=(lActive ? computeGuiMenuLayout(guiState.apMenu) : null);
+			var guiSectorNL=(guiMenuL && guiMenuL.drivable) ? guiMenuL.options.length : 0;
+			updateDialStick(ldial,entry.thumb,rawSrc,guiSectorNL);
 			// Dialog-guide takeover on the left dial, symmetric to the right
 			// dial's rActive branch above: only while lActive, this dial
 			// becomes the dialog's selection guide (forced visible,
@@ -1642,7 +1802,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// thumbstick-engagement visibility, exactly as if no dialog
 			// existed (matches the brief: "the other hand fully reverts to
 			// its normal functions").
-			var guiMenuL=(lActive ? computeGuiMenuLayout(guiState.apMenu) : null);
 			ldial.guiMenu=guiMenuL;
 			ldial.guiMode=(!guiMenuL ? null : (guiMenuL.drivable ? 'ap' : 'generic'));
 			if(lActive)
@@ -1660,7 +1819,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				vrHapticPulse(rawSrc);
 				if(lActive)
 				{
-					ldial.engaged=(guiState.apMenu ? GUI_DIAL[ldial.sel] : GUI_ESCAPE_ACTION);
+					ldial.engaged=guiDialEngagedFor(guiMenuL,ldial.guiSel);
 				}
 				else
 				{
@@ -1952,38 +2111,56 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//                positional hotkeys (fsvr.h's apMenu -- the autopilot
 	//                family, radio-comm/ATC/approach menus, see
 	//                FsSimulation::SimComputeVrGuiState) AND has at least one
-	//                real option. The owner hand's 4 stick sectors dispatch
-	//                GUI_DIAL's Digit1..4 against guiMenu.options[0..3]; the
-	//                two options out of the 4-sector stick's reach (see
-	//                GUI_DIAL's doc comment) are on the owner hand's A button
-	//                (Digit5, options[4]) and B button (Digit0, options[5])
-	//                -- shown in the centre (labelled A/B on the right hand,
-	//                X/Y on the left, matching each hand's real Touch
-	//                controller silkscreen). If the dialog has MORE real
-	//                options than the dial's 6 slots (guiMenu.overflow --
-	//                e.g. the wingman-command radio-comm menu has 7), the
-	//                second centre line becomes a pointer at the on-quad
-	//                panel (forced on, see maybeForceGuiPanel) instead of the
-	//                cancel-binding reminder, since both don't fit -- the
-	//                cancel binding (the owner hand's thumbstick click,
-	//                unconditional on rActive/lActive) still works either
-	//                way, it is just not re-stated on-canvas that frame.
+	//                real option. UNLIKE the normal RIGHT_DIAL/LEFT_DIAL face
+	//                (always exactly 4 sectors), this is N-WAY: one wedge per
+	//                real option (N=guiMenu.options.length, up to
+	//                GUI_DIAL_CAPACITY=8), evenly dividing the circle
+	//                starting at up (12 o'clock) and going clockwise --
+	//                sector i is guiMenu.options[i], labelled with its own
+	//                parsed hotkey digit and option text (see
+	//                guiDialEngagedFor/hotkeyCode for the matching dispatch
+	//                math in processControllerPlain, and updateDialStick for
+	//                the matching stick-angle pick). The currently
+	//                stick-selected sector (dial.guiSel) is highlighted so
+	//                the pilot can confirm a pick before pulling the
+	//                trigger, mirroring the normal dial's own
+	//                (dir===sel)-highlight (see drawDial below). A/B (X/Y on
+	//                the left hand) still show the fixed Digit5/Digit0
+	//                shortcut reminder in the centre (labelled A/B on the
+	//                right hand, X/Y on the left, matching each hand's real
+	//                Touch controller silkscreen) -- redundant with a sector
+	//                once N covers that position, but still a truthful
+	//                description of what those buttons do. If the dialog has
+	//                MORE real options than GUI_DIAL_CAPACITY (guiMenu.overflow
+	//                -- e.g. radio-comm's wingman-command menu sits exactly
+	//                at the 8-option cap, so only a 9th+ option would ever
+	//                overflow), the second centre line becomes a pointer at
+	//                the on-quad panel (forced on, see maybeForceGuiPanel)
+	//                instead of the cancel-binding reminder, since both
+	//                don't fit -- the cancel binding (the owner hand's
+	//                thumbstick click, unconditional on rActive/lActive)
+	//                still works either way, it is just not re-stated
+	//                on-canvas that frame. Label legibility at 256px
+	//                honestly degrades as N grows past ~6 (shrinking font,
+	//                see numFontPx/textFontPx/clipLen below) -- that is a
+	//                real tradeoff of staying dial-first up to 8 rather than
+	//                a bug; scripts/smoke-vrgui.mjs dumps a PNG of an N>4
+	//                guide for a human to judge.
 	//   'generic' -- !guiMenu.drivable: either the open dialog is not
 	//                hotkey-driven at all (replay/continue/stationary/
 	//                vehicle-change/chat dialogs -- mouse-only), or (rare)
 	//                the engine reported apMenu but zero parseable options.
-	//                ALL of the owner hand's 4 sectors, A, and B dispatch the
-	//                exact same GUI_ESCAPE_ACTION tap (see rdial/ldial's
-	//                engaged ternary above) -- so every sector is labelled
-	//                identically instead of implying 4 distinct functions
-	//                that don't exist. The on-quad panel is forced on here
-	//                too, so the dialog's real content (however many options
-	//                it has) is still readable even though the dial can't
-	//                drive it.
+	//                This face stays the ORIGINAL fixed 4-sector uniform
+	//                "ESC" look (not N-way -- there is no per-option content
+	//                to divide sectors by), matching that every sector, A,
+	//                and B all dispatch the exact same GUI_ESCAPE_ACTION tap
+	//                (see rdial/ldial's engaged assignment above). The
+	//                on-quad panel is forced on here too, so the dialog's
+	//                real content (however many options it has) is still
+	//                readable even though the dial can't drive it.
 	// The OTHER (non-owner) hand never reaches this function at all -- its
 	// guiMode stays null and it keeps drawing its own normal dial face, see
 	// drawDial below.
-	var GUI_GUIDE_SECTOR_NUM={up:'1',right:'2',down:'3',left:'4'};
 	var GUI_GUIDE_SECTORS=['up','right','down','left'];
 	function drawGuiDialGuide(ctx,guiMode,hand)
 	{
@@ -2000,49 +2177,80 @@ EM_JS(void,YsfwInstallWebXR,(),
 		ctx.beginPath();
 		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
 		ctx.fill();
-		for(var i=0; i<GUI_GUIDE_SECTORS.length; ++i)
+		if('ap'===guiMode && 0<options.length)
 		{
-			var dir=GUI_GUIDE_SECTORS[i];
-			var centerRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
-			var a0=centerRad-Math.PI/4, a1=centerRad+Math.PI/4;
-			ctx.beginPath();
-			ctx.moveTo(cx,cy);
-			ctx.arc(cx,cy,rOuter,a0,a1);
-			ctx.closePath();
-			// Blue for a live, drivable hotkey menu, amber/red for the
-			// generic mode where every sector is just "cancel" -- a
-			// different hue makes the "this isn't the usual dial" state
-			// obvious at a glance, before reading any text.
-			ctx.fillStyle=('ap'===guiMode) ? 'rgba(77,163,255,0.55)' : 'rgba(214,96,64,0.55)';
-			ctx.fill();
-			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2;
-			ctx.stroke();
-			var labelR=rOuter*0.62;
-			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
-			ctx.textAlign='center';
-			ctx.fillStyle='#fff';
-			if('ap'===guiMode)
+			// N-way: one wedge per real option, N<=GUI_DIAL_CAPACITY (8).
+			// Sector i's centre is at canvas angle -90deg (up) + i*wedge,
+			// clockwise -- the SAME convention updateDialStick's N-way pick
+			// quantizes the stick angle to, so the highlighted/selected
+			// wedge here always matches what a trigger pull would actually
+			// confirm.
+			var n=options.length;
+			var wedge=2*Math.PI/n;
+			var selIdx=vr.ctl.dial[hand].guiSel;
+			// Font sizes/clip length shrink as N grows so labels keep
+			// clearing the wedge at 256px -- honestly tight above ~6 (see
+			// this function's doc comment above).
+			var numFontPx=(4>=n ? 26 : (6>=n ? 20 : 16));
+			var textFontPx=(4>=n ? 12 : (6>=n ? 11 : 10));
+			var clipLen=(4>=n ? 9 : (6>=n ? 7 : 5));
+			for(var i=0; i<n; ++i)
 			{
+				var centerRad=-Math.PI/2+i*wedge;
+				var a0=centerRad-wedge/2, a1=centerRad+wedge/2;
+				ctx.beginPath();
+				ctx.moveTo(cx,cy);
+				ctx.arc(cx,cy,rOuter,a0,a1);
+				ctx.closePath();
+				// Brighter fill for the currently stick-selected sector --
+				// same idea as drawDial's (dir===sel) highlight on the
+				// normal face, generalized to an index compare.
+				ctx.fillStyle=(i===selIdx) ? 'rgba(120,196,255,0.75)' : 'rgba(77,163,255,0.45)';
+				ctx.fill();
+				ctx.strokeStyle='rgba(230,237,243,0.6)';
+				ctx.lineWidth=2;
+				ctx.stroke();
+				var labelR=rOuter*0.62;
+				var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
+				ctx.textAlign='center';
 				var opt=options[i];
-				if(opt)
-				{
-					ctx.font='bold 28px sans-serif';
-					ctx.textBaseline='middle';
-					ctx.fillText(GUI_GUIDE_SECTOR_NUM[dir],lx,ly-10);
-					ctx.font='bold 12px sans-serif';
-					ctx.fillText(clipGuideText(opt.text),lx,ly+12);
-				}
-				// No option at this position (e.g. a 2-option dialog like
-				// the "spread/tighten formation" radio-comm menu leaves
-				// down/left empty) -- draw nothing rather than imply a
-				// function that does not exist.
+				ctx.fillStyle='#fff';
+				ctx.font='bold '+numFontPx+'px sans-serif';
+				ctx.textBaseline='middle';
+				ctx.fillText(opt.hotkey||String(i+1),lx,ly-numFontPx*0.4);
+				ctx.font='bold '+textFontPx+'px sans-serif';
+				ctx.fillText(clipGuideText(opt.text,clipLen),lx,ly+numFontPx*0.42);
 			}
-			else
+		}
+		else
+		{
+			// Generic/ESC face: unchanged fixed 4-sector uniform look (see
+			// this function's doc comment above -- there is no per-option
+			// content to divide N ways here).
+			for(var gi=0; gi<GUI_GUIDE_SECTORS.length; ++gi)
 			{
+				var dir=GUI_GUIDE_SECTORS[gi];
+				var gCenterRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
+				var ga0=gCenterRad-Math.PI/4, ga1=gCenterRad+Math.PI/4;
+				ctx.beginPath();
+				ctx.moveTo(cx,cy);
+				ctx.arc(cx,cy,rOuter,ga0,ga1);
+				ctx.closePath();
+				// Amber/red -- a different hue from the 'ap' N-way face
+				// makes the "this isn't the usual dial" state obvious at a
+				// glance, before reading any text.
+				ctx.fillStyle='rgba(214,96,64,0.55)';
+				ctx.fill();
+				ctx.strokeStyle='rgba(230,237,243,0.6)';
+				ctx.lineWidth=2;
+				ctx.stroke();
+				var gLabelR=rOuter*0.62;
+				var glx=cx+Math.cos(gCenterRad)*gLabelR, gly=cy+Math.sin(gCenterRad)*gLabelR;
+				ctx.textAlign='center';
+				ctx.fillStyle='#fff';
 				ctx.font='bold 20px sans-serif';
 				ctx.textBaseline='middle';
-				ctx.fillText('ESC',lx,ly);
+				ctx.fillText('ESC',glx,gly);
 			}
 		}
 		ctx.beginPath();
@@ -3041,6 +3249,38 @@ EM_JS(void,YsfwInstallWebXR,(),
 			},vq,null);
 		}
 	};
+	// Headless test hooks for the N-way GUI dial guide (scripts/
+	// smoke-vrgui.mjs), fabricating a dialog the real engine has no easy
+	// headless path to (radio-comm's wingman-command menu needs a live AI
+	// wingman in formation) -- see vr.testGuiOverride's doc comment on the vr
+	// state block for why this is a deliberate, test-only shortcut rather
+	// than faking the native FsVrGuiDataPointer/FsVrGuiMenuPointer blocks
+	// directly (the real engine tick would immediately overwrite those).
+	//   lines: array of raw option-label strings, SAME format the engine
+	//     serializes (FsSimulation::SimSerializeVrGuiMenu) -- e.g.
+	//     '1...Break and Attack', '0...Don't send' -- parsed the exact same
+	//     way a real menu is (parseMenuLabel/computeGuiMenuLayout), so this
+	//     exercises the real parsing/sector-mapping code, not a re-implementation.
+	//   opts: {visible, apMenu} -- both default true (a visible, hotkey-driven
+	//     dialog); pass apMenu:false to fabricate a non-hotkey (generic/ESC)
+	//     dialog instead.
+	// After this call, guiDialogState()/readGuiMenu() return the fabricated
+	// state until vr.clearGuiOverride() -- processControllerPlain then drives
+	// the owner hand's dial exactly as it would for a real dialog.
+	vr.pokeGuiMenu=function(lines,opts)
+	{
+		opts=opts||{};
+		vr.testGuiOverride={
+			visible:(false!==opts.visible),
+			apMenu:(false!==opts.apMenu),
+			menu:lines||[]
+		};
+	};
+	vr.clearGuiOverride=function()
+	{
+		vr.testGuiOverride=null;
+	};
+
 	// Debug/test hook: read the 16-float control block back as a plain array
 	// (see fsvr.h for the layout).  The hosting page has no HEAPF32 access
 	// (this build does not export it), so scripts/smoke-vrctl.mjs uses this
