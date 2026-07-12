@@ -20,7 +20,7 @@
 // The scripts/dnm2gltf.mjs and scripts/gltf2dnm.mjs CLIs are thin wrappers
 // around this module.
 
-import { parseDnm } from './dnm-preview.js';
+import { parseDnm, faceNormal, smoothVertexNormals } from './dnm-preview.js';
 
 const A2R = Math.PI / 32768;
 
@@ -151,17 +151,19 @@ export function dnmToGlb(dnmBytes) {
   };
 
   const meshFromSrf = (srf, name) => {
+    const vtxNom = smoothVertexNormals(srf); // 'R' vertices -> averaged normals
     const byColor = new Map();
     for (const f of srf.faces) {
       if (f.idx.length < 3) continue;
       const alpha = f.alpha === undefined ? 1 : f.alpha;
       const key = (f.color || [128, 128, 128]).join(',') + (f.unlit ? '|B' : '') + (alpha < 1 ? '|A' + alpha : '');
       let bucket = byColor.get(key);
-      if (!bucket) { bucket = { color: f.color || [128, 128, 128], unlit: !!f.unlit, alpha, pos: [] }; byColor.set(key, bucket); }
+      if (!bucket) { bucket = { color: f.color || [128, 128, 128], unlit: !!f.unlit, alpha, pos: [], nrm: [] }; byColor.set(key, bucket); }
       // Orient by the assigned 'N' normal when present: the engine lights by
       // N and flips winding to match it (FixOrientationBasedOnAssignedNormal),
       // so a face whose winding disagrees with its N must be reversed here or
       // the glTF (winding-derived) normal comes out inverted.
+      const fn = faceNormal(srf, f);
       let idx = f.idx;
       if (f.nom) {
         let nx = 0, ny = 0, nz = 0;
@@ -177,22 +179,16 @@ export function dnmToGlb(dnmBytes) {
       for (let i = 1; i + 1 < idx.length; i++) {
         for (const vi of [idx[0], idx[i], idx[i + 1]]) {
           const v = srf.vertices[vi];
-          if (v) bucket.pos.push(v[0], v[1], v[2]);
+          if (!v) continue;
+          bucket.pos.push(v[0], v[1], v[2]);
+          const n = (srf.smooth && srf.smooth[vi] && vtxNom.get(vi)) || fn;
+          bucket.nrm.push(n[0], n[1], n[2]);
         }
       }
     }
     const primitives = [];
-    for (const { color, unlit, alpha, pos } of byColor.values()) {
+    for (const { color, unlit, alpha, pos, nrm } of byColor.values()) {
       if (!pos.length) continue;
-      const nrm = new Array(pos.length);
-      for (let t = 0; t < pos.length; t += 9) {
-        const ax = pos[t + 3] - pos[t], ay = pos[t + 4] - pos[t + 1], az = pos[t + 5] - pos[t + 2];
-        const bx = pos[t + 6] - pos[t], by = pos[t + 7] - pos[t + 1], bz = pos[t + 8] - pos[t + 2];
-        let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
-        const l = Math.hypot(nx, ny, nz) || 1;
-        nx /= l; ny /= l; nz /= l;
-        for (let k = 0; k < 3; k++) { nrm[t + k * 3] = nx; nrm[t + k * 3 + 1] = ny; nrm[t + k * 3 + 2] = nz; }
-      }
       const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
       for (let i = 0; i < pos.length; i += 3) {
         for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], pos[i + k]); max[k] = Math.max(max[k], pos[i + k]); }
@@ -515,13 +511,30 @@ export function glbToDnm(glbBytes) {
 
   const f6 = (v) => (Math.abs(v) < 5e-7 ? '0' : String(Math.round(v * 1e6) / 1e6));
 
+  // Rotate a direction by a bake matrix (no translation) and renormalize —
+  // good enough for the rigid/near-uniform node transforms we bake.
+  const applyDir = (M, n) => {
+    const v = [
+      M[0] * n[0] + M[1] * n[1] + M[2] * n[2],
+      M[4] * n[0] + M[5] * n[1] + M[6] * n[2],
+      M[8] * n[0] + M[9] * n[1] + M[10] * n[2],
+    ];
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+  };
+
   const srfText = (mesh, bake) => {
-    const verts = [], vmap = new Map(), faces = [];
+    const verts = [], vmap = new Map(), faces = [], smoothV = new Set();
     for (const prim of mesh.primitives || []) {
       if (prim.mode !== undefined && prim.mode !== 4) continue;
       if (prim.attributes.POSITION === undefined) continue;
       let pos = readAccessor(prim.attributes.POSITION);
       if (bake) pos = pos.map((v) => apply(bake, v));
+      // Vertex normals mark the 'R' (round) vertices on the way back: where a
+      // corner's normal deviates from its flat face normal, the modeler meant
+      // smooth shading there (Blender's shade-smooth exports averaged normals).
+      let nrms = prim.attributes.NORMAL !== undefined ? readAccessor(prim.attributes.NORMAL) : null;
+      if (bake && nrms) nrms = nrms.map((n) => applyDir(bake, n));
       const idx = prim.indices !== undefined ? readAccessor(prim.indices) : pos.map((_, i) => i);
       const mat = prim.material !== undefined ? json.materials[prim.material] : null;
       const bc = (mat && mat.pbrMetallicRoughness && mat.pbrMetallicRoughness.baseColorFactor) || [0.8, 0.8, 0.8, 1];
@@ -545,11 +558,24 @@ export function glbToDnm(glbBytes) {
       for (let t = 0; t + 2 < idx.length; t += 3) {
         const tri = [pos[idx[t]], pos[idx[t + 1]], pos[idx[t + 2]]];
         if (tri.some((p) => !p)) continue;
-        faces.push({ idx: tri.map(vix), color, unlit, alpha, tri });
+        const ids = tri.map(vix);
+        if (nrms) {
+          const [a, b, c] = tri;
+          let fx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
+          let fy = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+          let fz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+          const fl = Math.hypot(fx, fy, fz) || 1;
+          fx /= fl; fy /= fl; fz /= fl;
+          for (let k = 0; k < 3; k++) {
+            const n = nrms[idx[t + k]];
+            if (n && Math.abs(n[0] * fx + n[1] * fy + n[2] * fz) < 0.9995) smoothV.add(ids[k]);
+          }
+        }
+        faces.push({ idx: ids, color, unlit, alpha, tri });
       }
     }
     const lines = ['SURF'];
-    for (const v of verts) lines.push('V ' + v.map(f6).join(' '));
+    verts.forEach((v, i) => lines.push('V ' + v.map(f6).join(' ') + (smoothV.has(i) ? ' R' : '')));
     for (const f of faces) {
       const [a, b, c] = f.tri;
       const cx = (a[0] + b[0] + c[0]) / 3, cy = (a[1] + b[1] + c[1]) / 3, cz = (a[2] + b[2] + c[2]) / 3;

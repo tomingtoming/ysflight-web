@@ -47,13 +47,18 @@ export function decodeSrfColor(tok) {
 // { vertices: [[x,y,z],...], faces: [{idx:[...], color:[r,g,b], unlit}] }.
 function parseSrf(lines) {
   const vertices = [];
+  const smooth = [];   // per-vertex 'R' flag: engine shades these with the
+                       // averaged normal of adjacent polygons (round vertex)
   const faces = [];
   let rawFace = 0;
   const byRaw = new Map(); // raw polygon index (what ZA refers to) -> faces[] index
   let i = 0;
   for (; i < lines.length; i++) {
     const t = lines[i].trim().split(/\s+/);
-    if (t[0] === 'V') vertices.push([parseFloat(t[1]), parseFloat(t[2]), parseFloat(t[3])]);
+    if (t[0] === 'V') {
+      vertices.push([parseFloat(t[1]), parseFloat(t[2]), parseFloat(t[3])]);
+      smooth.push(t.length >= 5 && (t[4] === 'R' || t[4] === 'r'));
+    }
     else if (t[0] === 'F') {
       const face = { idx: [], color: [200, 200, 200], unlit: false, alpha: 1 };
       for (i++; i < lines.length; i++) {
@@ -83,7 +88,48 @@ function parseSrf(lines) {
       }
     }
   }
-  return { vertices, faces };
+  return { vertices, smooth, faces };
+}
+
+// Oriented face normal: Newell over the polygon, flipped to agree with the
+// assigned 'N' normal when one is present (the engine's authoritative side).
+export function faceNormal(srf, face) {
+  let nx = 0, ny = 0, nz = 0;
+  const idx = face.idx;
+  for (let i = 0; i < idx.length; i++) {
+    const a = srf.vertices[idx[i]], b = srf.vertices[idx[(i + 1) % idx.length]];
+    if (!a || !b) continue;
+    nx += (a[1] - b[1]) * (a[2] + b[2]);
+    ny += (a[2] - b[2]) * (a[0] + b[0]);
+    nz += (a[0] - b[0]) * (a[1] + b[1]);
+  }
+  if (face.nom && nx * face.nom[0] + ny * face.nom[1] + nz * face.nom[2] < 0) {
+    nx = -nx; ny = -ny; nz = -nz;
+  }
+  const l = Math.hypot(nx, ny, nz) || 1;
+  return [nx / l, ny / l, nz / l];
+}
+
+// Per-vertex averaged normals for the 'R' (round) vertices: the engine shades
+// an R vertex with the mean of its adjacent polygon normals (Gouraud), so both
+// the preview and the glTF conversion bake the same thing.
+export function smoothVertexNormals(srf) {
+  const acc = new Map(); // vertex index -> [nx, ny, nz] accumulator
+  if (!(srf.smooth || []).some(Boolean)) return acc;
+  for (const f of srf.faces) {
+    const n = faceNormal(srf, f);
+    for (const vi of f.idx) {
+      if (!srf.smooth[vi]) continue;
+      const a = acc.get(vi) || [0, 0, 0];
+      a[0] += n[0]; a[1] += n[1]; a[2] += n[2];
+      acc.set(vi, a);
+    }
+  }
+  for (const a of acc.values()) {
+    const l = Math.hypot(a[0], a[1], a[2]) || 1;
+    a[0] /= l; a[1] /= l; a[2] /= l;
+  }
+  return acc;
 }
 
 // Parse a whole DNM: PCK-embedded SRFs + the node tree.  Returns
@@ -233,14 +279,20 @@ export function buildObject(parsed) {
 // own basic material so nav/beacon colors stay flat; the rest are lambert-lit.
 function srfToMesh(srf) {
   if (!srf.vertices.length || !srf.faces.length) return null;
-  const pos = [], col = [], litFlag = [];
-  const push = (v, c) => { pos.push(v[0], v[1], v[2]); col.push(c[0], c[1], c[2]); };
+  const vtxNom = smoothVertexNormals(srf); // 'R' vertices -> averaged normals
+  const pos = [], col = [], nrm = [], litFlag = [];
   for (const f of srf.faces) {
     const c = faceColor(f);
+    const fn = faceNormal(srf, f);
+    const push = (vi) => {
+      const v = srf.vertices[vi];
+      pos.push(v[0], v[1], v[2]); col.push(c[0], c[1], c[2]);
+      const n = (srf.smooth && srf.smooth[vi] && vtxNom.get(vi)) || fn;
+      nrm.push(n[0], n[1], n[2]);
+    };
     for (let k = 1; k + 1 < f.idx.length; k++) {
-      const a = srf.vertices[f.idx[0]], b = srf.vertices[f.idx[k]], d = srf.vertices[f.idx[k + 1]];
-      if (!a || !b || !d) continue;
-      push(a, c); push(b, c); push(d, c);
+      if (!srf.vertices[f.idx[0]] || !srf.vertices[f.idx[k]] || !srf.vertices[f.idx[k + 1]]) continue;
+      push(f.idx[0]); push(f.idx[k]); push(f.idx[k + 1]);
       litFlag.push(f.unlit ? 0 : 1, f.unlit ? 0 : 1, f.unlit ? 0 : 1);
     }
   }
@@ -248,7 +300,7 @@ function srfToMesh(srf) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-  geo.computeVertexNormals();
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   // A single mesh with a lambert material reads well enough for a preview; unlit
   // faces would ideally be flat, but mixing materials per-face needs groups —
   // preview keeps it one material (the game is the source of truth for shading).

@@ -53,20 +53,24 @@ const COL = {
 
 // --- geometry buckets ---------------------------------------------------------------
 
-const mkGeo = () => ({ v: [], faces: [] });
+const mkGeo = () => ({ v: [], r: [], faces: [] });
 const addFace = (g, idx, color, opts) => g.faces.push({ idx, color, ...(opts || {}) });
-const addV = (g, x, y, z) => (g.v.push([x, y, z]) - 1);
+// smooth=true marks the vertex 'R' (round): the engine shades it with the
+// averaged normal of adjacent polygons — free curvature on low-poly lofts.
+const addV = (g, x, y, z, smooth) => (g.r.push(!!smooth), g.v.push([x, y, z]) - 1);
 const merge = (...gs) => {
   const out = mkGeo();
   for (const g of gs) {
     const base = out.v.length;
     out.v.push(...g.v);
+    out.r.push(...g.r);
     out.faces.push(...g.faces.map((f) => ({ ...f, idx: f.idx.map((i) => i + base) })));
   }
   return out;
 };
 const mirrorX = (g) => ({
   v: g.v.map(([x, y, z]) => [-x, y, z]),
+  r: g.r.slice(),
   faces: g.faces.map((f) => ({ ...f, idx: f.idx.slice().reverse() })),
 });
 
@@ -133,7 +137,7 @@ function fuselage() {
       const sy = Math.sin(th);
       const y = yc + (sy >= 0 ? aUp : aDn) * sy;
       const x = s.w * Math.cos(th) * (sy > 0 ? 1 - nar * sy * sy : 1);
-      ring.push({ i: addV(g, x, y, zys(zn)), y });
+      ring.push({ i: addV(g, x, y, zys(zn), true), y });
     }
     return ring;
   });
@@ -219,8 +223,8 @@ function foilLoft(sections, thickness, colorT, colorB, spanAxis) {
     const up = [], dn = [];
     for (const [cf, uT, uB] of PROF) {
       const z = zys(s.znLE + s.chord * cf);
-      up.push(addV(g, ...pt(s.span, off + uT * t, z)));
-      dn.push(addV(g, ...pt(s.span, off + uB * t, z)));
+      up.push(addV(g, ...pt(s.span, off + uT * t, z), true));
+      dn.push(addV(g, ...pt(s.span, off + uB * t, z), true));
     }
     return { up, dn };
   });
@@ -329,7 +333,7 @@ function fairings(wingSecs) {
       const ring = [];
       for (let i = 0; i < N; i++) {
         const th = (i / N) * Math.PI * 2;
-        ring.push(addV(g, sp + R * rr * Math.cos(th) * 0.85, y + R * rr * Math.sin(th), zys(zn0 + len * f)));
+        ring.push(addV(g, sp + R * rr * Math.cos(th) * 0.85, y + R * rr * Math.sin(th), zys(zn0 + len * f), true));
       }
       return ring;
     });
@@ -354,7 +358,7 @@ function engine(p, wingSecs) {
     const out = [];
     for (let i = 0; i < N; i++) {
       const th = (i / N) * Math.PI * 2;
-      out.push(addV(g, p.x + R * rf * Math.cos(th), p.y + R * rf * Math.sin(th), zys(p.zn + EL * zf)));
+      out.push(addV(g, p.x + R * rf * Math.cos(th), p.y + R * rf * Math.sin(th), zys(p.zn + EL * zf), true));
     }
     return out;
   };
@@ -395,8 +399,8 @@ function wheel(g, cx, cy, cz, r, w) {
   const N = 12, a = [], b = [];
   for (let i = 0; i < N; i++) {
     const th = (i / N) * Math.PI * 2;
-    a.push(addV(g, cx - w / 2, cy + r * Math.sin(th), cz + r * Math.cos(th)));
-    b.push(addV(g, cx + w / 2, cy + r * Math.sin(th), cz + r * Math.cos(th)));
+    a.push(addV(g, cx - w / 2, cy + r * Math.sin(th), cz + r * Math.cos(th), true));
+    b.push(addV(g, cx + w / 2, cy + r * Math.sin(th), cz + r * Math.cos(th), true));
   }
   for (let i = 0; i < N; i++) {
     const j = (i + 1) % N;
@@ -544,7 +548,7 @@ const f6 = (v) => (Math.abs(v) < 5e-7 ? '0' : String(Math.round(v * 1e6) / 1e6))
 const out = ['DYNAMODEL', 'DNMVER 2'];
 for (const p of parts) {
   const lines = ['SURF'];
-  for (const v of p.geo.v) lines.push('V ' + v.map(f6).join(' '));
+  p.geo.v.forEach((v, i) => lines.push('V ' + v.map(f6).join(' ') + (p.geo.r[i] ? ' R' : '')));
   for (const f of p.geo.faces) {
     lines.push('F');
     if (f.bright) lines.push('B');
