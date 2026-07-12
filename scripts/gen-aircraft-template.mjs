@@ -19,8 +19,7 @@
 // the ysflight custom properties are what matter) and export with
 // Include > Data > Custom Properties checked.
 
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,7 +33,8 @@ function box([x0, x1], [y0, y1], [z0, z1], color) {
     [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],
     [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1],
   ];
-  const quads = [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]];
+  // outward winding (each quad CCW seen from outside the box)
+  const quads = [[3, 2, 1, 0], [6, 7, 4, 5], [7, 3, 0, 4], [2, 6, 5, 1], [7, 6, 2, 3], [0, 1, 5, 4]];
   return { v, faces: quads.map((idx) => ({ idx, color })) };
 }
 const merge = (...gs) => {
@@ -158,6 +158,20 @@ for (const p of parts) {
     lines.push('F');
     if (p.bright) lines.push('B'); // glowing part (AB flame, lights)
     lines.push('V ' + f.idx.join(' '));
+    // explicit N (center + Newell normal): YSFLIGHT lights by the ASSIGNED
+    // normal (and flips winding to match it); a face without N keeps a zero
+    // normal and falls back to two-sided camera-facing shading.
+    const vs = f.idx.map((i) => p.geo.v[i]);
+    let cx = 0, cy = 0, cz = 0, nx = 0, ny = 0, nz = 0;
+    for (let i = 0; i < vs.length; i++) {
+      const [ax, ay, az] = vs[i], [bx, by, bz] = vs[(i + 1) % vs.length];
+      cx += ax; cy += ay; cz += az;
+      nx += (ay - by) * (az + bz);
+      ny += (az - bz) * (ax + bx);
+      nz += (ax - bx) * (ay + by);
+    }
+    const nl = Math.hypot(nx, ny, nz) || 1, m = vs.length;
+    lines.push('N ' + [cx / m, cy / m, cz / m, nx / nl, ny / nl, nz / nl].map(f6).join(' '));
     lines.push('C ' + f.color.join(' '));
     lines.push('E');
   }
@@ -190,6 +204,9 @@ const dnmPath = join(root, 'templates', 'aircraft-starter.dnm');
 writeFileSync(dnmPath, out.join('\n') + '\n');
 console.log('wrote ' + dnmPath);
 
-// The .glb Blender users actually open: run the standard converter on it.
+// The .glb Blender users actually open: run the standard converter directly
+// (imported, not shelled out — works under both node and deno).
+const { dnmToGlb } = await import('../web/dnm-gltf.js');
 const glbPath = join(root, 'templates', 'aircraft-starter.glb');
-execFileSync(process.execPath, [join(root, 'scripts', 'dnm2gltf.mjs'), dnmPath, glbPath], { stdio: 'inherit' });
+writeFileSync(glbPath, dnmToGlb(readFileSync(dnmPath)).glb);
+console.log('wrote ' + glbPath);

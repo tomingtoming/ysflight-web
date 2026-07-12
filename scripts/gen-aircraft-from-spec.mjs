@@ -1,18 +1,31 @@
 // The aircraft COMPILER: three-view measurements (a spec JSON, see
-// specs/b747-8.json) -> a complete YSFLIGHT DNM with the movable parts cut out
-// and wired at generation time.
+// specs/b747-8i.json) -> a complete YSFLIGHT DNM with the movable parts cut
+// out and wired at generation time.
 //
 //   node scripts/gen-aircraft-from-spec.mjs <spec.json> <output.dnm>
 //
-// The methodology ("silhouette loft"): a low-poly airliner reduces to
-//   - fuselage: ellipse-ish rings lofted along Z (top/bottom/halfwidth per
-//     station straight off the side + top views; the 747 hump is just a
-//     raised 'top' for a few stations)
-//   - wings/stabs/fin: ruled plates between span sections (LE + chord + y per
-//     section from the top/front views), with the trailing-edge control
-//     surfaces SPLIT OFF into their own nodes — the compiler knows exactly
-//     where the flap is, so unlike name-guessing this wiring is authoritative
-//   - engines: tapered tubes; gear: template-style strut+wheel posts
+// The methodology ("silhouette loft"), v2 — classic hand-built DNM richness,
+// everything driven by the spec so a new airliner is a JSON file, not code:
+//   fuselage  : Catmull-Rom densified stations x N-point rings, upper-lobe
+//               narrowing where a hump rises above the aft crown, two-tone
+//               belly, nose/tail caps
+//   decals    : cheatline / individual windows / doors / cockpit glass
+//               (spec.decals, optional) — thin quads floated 4cm off the skin
+//   wing/tails: airfoil-section lofts; control surfaces split off as wedge
+//               lofts with a 5cm hinge gap (coplanar hinge faces z-fight)
+//   engines   : shaped nacelles (lip/cowl/core/exhaust) + fan disc + pylons
+//               that follow the wing dihedral
+//   gear      : spec.gear.posts (nose / 4-wheel bogie, mirrored), or the
+//               classic 3-post fallback from the old {nose, mains} schema
+//   lights    : beacon (spec.beacon) + auto wingtip nav + tail strobe,
+//               B (self-lit) faces
+//
+// Every face gets an explicit 'N <center> <normal>' line: YSFLIGHT lights by
+// the ASSIGNED normal and flips the winding to match it (ysvisual.cpp,
+// FixOrientationBasedOnAssignedNormal) — a face without N keeps a zero
+// normal and falls back to two-sided camera-facing shading.  Winding is kept
+// outward anyway so the glTF preview path (which derives normals from
+// winding) agrees.
 // Coordinates: aircraft coords (nose +Z, y up); spec distances are "zn" =
 // meters from the nose tip, converted here via zys = length/2 - zn.
 
@@ -26,8 +39,17 @@ if (!specPath || !outPath) {
 const spec = JSON.parse(readFileSync(specPath, 'utf8'));
 const L = spec.length;
 const zys = (zn) => L / 2 - zn;
-const COL = spec.colors;
 const DEG = (d) => Math.round(d * 32768 / 180);
+
+const COL = {
+  body: [237, 238, 238], belly: [186, 190, 196], stripe: [25, 70, 140],
+  win: [35, 40, 52], glass: [22, 28, 40], door: [215, 217, 219],
+  wing: [204, 207, 212], wingB: [178, 183, 190], fair: [196, 200, 206],
+  engine: [156, 160, 168], engDark: [55, 60, 70], pylon: [172, 176, 182],
+  dark: [70, 74, 82], tire: [40, 42, 46], strut: [128, 132, 138],
+  red: [225, 30, 30], green: [30, 205, 60], white: [255, 255, 255],
+  ...(spec.colors || {}),
+};
 
 // --- geometry buckets ---------------------------------------------------------------
 
@@ -43,67 +65,183 @@ const merge = (...gs) => {
   }
   return out;
 };
+const mirrorX = (g) => ({
+  v: g.v.map(([x, y, z]) => [-x, y, z]),
+  faces: g.faces.map((f) => ({ ...f, idx: f.idx.slice().reverse() })),
+});
+
+// --- fuselage stations (clamped Catmull-Rom over zn) ---------------------------------
+
+const ST = spec.fuselage.stations;
+function crSample(knots, key, zn) {
+  let i = 0;
+  while (i + 1 < knots.length && knots[i + 1].zn < zn) i++;
+  if (i + 1 >= knots.length) return knots[knots.length - 1][key];
+  const p1 = knots[i], p2 = knots[i + 1];
+  const p0 = knots[Math.max(0, i - 1)], p3 = knots[Math.min(knots.length - 1, i + 2)];
+  const t = (zn - p1.zn) / (p2.zn - p1.zn);
+  const m1 = (p2[key] - p0[key]) / (p2.zn - p0.zn) * (p2.zn - p1.zn);
+  const m2 = (p3[key] - p1[key]) / (p3.zn - p1.zn) * (p2.zn - p1.zn);
+  const t2 = t * t, t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * p1[key] + (t3 - 2 * t2 + t) * m1 +
+         (-2 * t3 + 3 * t2) * p2[key] + (t3 - t2) * m2;
+}
+const stationAt = (zn) => ({
+  zn,
+  top: crSample(ST, 'top', zn),
+  bottom: crSample(ST, 'bottom', zn),
+  w: Math.max(0.02, crSample(ST, 'w', zn)),
+});
+const denseZn = [];
+for (let i = 0; i + 1 < ST.length; i++) {
+  denseZn.push(ST[i].zn);
+  const gap = ST[i + 1].zn - ST[i].zn, n = Math.floor(gap / 1.6);
+  for (let k = 1; k <= n; k++) denseZn.push(ST[i].zn + (gap * k) / (n + 1));
+}
+denseZn.push(ST[ST.length - 1].zn);
+
+// Hump detection: the baseline crown is the lowest 'top' over the aft half;
+// stations rising above it (in the front half) get their upper lobe narrowed
+// — the 747 upper deck is slimmer than the main deck.
+const aftCrown = Math.min(...ST.filter((s) => s.zn > L * 0.45 && s.zn < L * 0.8).map((s) => s.top));
+const humpNarrow = (st) =>
+  (st.zn < L * 0.5 ? Math.min(1, Math.max(0, (st.top - (aftCrown + 0.15)) / 1.0)) * 0.24 : 0);
+
+// Skin half-width at (zn, y) — used to place decals just off the skin.
+function skinX(zn, y) {
+  const s = stationAt(zn);
+  const yc = (s.top + s.bottom) / 2, aUp = s.top - yc, aDn = yc - s.bottom;
+  const a = y >= yc ? aUp : aDn;
+  const sy = Math.min(1, Math.abs((y - yc) / Math.max(a, 1e-6)));
+  const cx = Math.sqrt(Math.max(0, 1 - sy * sy));
+  const nar = y > yc ? 1 - humpNarrow(s) * sy * sy : 1;
+  return s.w * cx * nar;
+}
 
 // --- fuselage loft -------------------------------------------------------------------
 
 function fuselage() {
   const g = mkGeo();
-  const N = spec.fuselage.ringPoints;
-  const rings = spec.fuselage.stations.map((s) => {
+  const N = spec.fuselage.ringPoints || 32;
+  const rings = denseZn.map((zn) => {
+    const s = stationAt(zn);
     const yc = (s.top + s.bottom) / 2, aUp = s.top - yc, aDn = yc - s.bottom;
+    const nar = humpNarrow(s);
     const ring = [];
     for (let i = 0; i < N; i++) {
       const th = (i / N) * Math.PI * 2;
       const sy = Math.sin(th);
       const y = yc + (sy >= 0 ? aUp : aDn) * sy;
-      ring.push(addV(g, s.w * Math.cos(th), y, zys(s.zn)));
+      const x = s.w * Math.cos(th) * (sy > 0 ? 1 - nar * sy * sy : 1);
+      ring.push({ i: addV(g, x, y, zys(zn)), y });
     }
     return ring;
   });
+  const bellyY = spec.fuselage.bellyY ?? -2.5;
   for (let r = 0; r + 1 < rings.length; r++) {
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
-      addFace(g, [rings[r][i], rings[r][j], rings[r + 1][j], rings[r + 1][i]], COL.body);
+      const quad = [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]];
+      const avgY = quad.reduce((s_, q) => s_ + q.y, 0) / 4;
+      addFace(g, quad.map((q) => q.i), avgY < bellyY ? COL.belly : COL.body);
     }
   }
-  addFace(g, rings[0].slice().reverse(), COL.body);          // nose cap
-  addFace(g, rings[rings.length - 1], COL.body);             // tail cap
+  addFace(g, rings[0].map((q) => q.i), COL.body);                          // nose cap (+z)
+  addFace(g, rings[rings.length - 1].map((q) => q.i).reverse(), COL.dark); // APU exhaust (-z)
   return g;
 }
 
-// --- ruled plates (wing / stab / fin) ------------------------------------------------
-// sections: [{span, znLE, chord, off}]  span = position along the span axis,
-// off = offset along the third axis (dihedral for wings, 0 for the fin).
-// spanAxis 'x': plate in the x/z plane, thickness along y (wings, h-stab).
-// spanAxis 'y': plate in the y/z plane, thickness along x (the fin).
+// --- decals (spec.decals: cheatline / windows / doors / cockpit) ---------------------
 
-function plate(sections, thickness, color, spanAxis) {
+function decals() {
+  const g = mkGeo();
+  const D = spec.decals;
+  if (!D) return g;
+  const strip = (zn0, zn1, y0, y1, color, step) => {
+    const n = Math.max(1, Math.round((zn1 - zn0) / step));
+    for (let k = 0; k < n; k++) {
+      const a = zn0 + ((zn1 - zn0) * k) / n, b = zn0 + ((zn1 - zn0) * (k + 1)) / n;
+      for (const sgn of [1, -1]) {
+        const q = [
+          addV(g, sgn * (skinX(a, y0) + 0.04), y0, zys(a)),
+          addV(g, sgn * (skinX(b, y0) + 0.04), y0, zys(b)),
+          addV(g, sgn * (skinX(b, y1) + 0.04), y1, zys(b)),
+          addV(g, sgn * (skinX(a, y1) + 0.04), y1, zys(a)),
+        ];
+        addFace(g, sgn > 0 ? q : q.slice().reverse(), color);
+      }
+    }
+  };
+  const doors = D.doors ? D.doors.zn : [];
+  if (D.cheatline) {
+    const c = D.cheatline;
+    strip(c.znFrom, c.znTo, c.y0, c.y1, COL.stripe, 2.2);
+  }
+  for (const row of D.windowRows || []) {
+    for (let zn = row.znFrom; zn < row.znTo; zn += row.pitch || 1.15) {
+      if (row.skipDoors && doors.some((d) => Math.abs(zn - d) < 1.0)) continue;
+      strip(zn, zn + 0.55, row.y0, row.y1, COL.win, 1);
+    }
+  }
+  if (D.doors) {
+    for (const d of doors) strip(d - D.doors.halfW, d + D.doors.halfW, D.doors.y0, D.doors.y1, COL.door, 2);
+  }
+  if (D.cockpit) {
+    const c = D.cockpit;
+    strip(c.znFrom, c.znTo, c.y0, c.y1, COL.glass, 1);       // side glass
+    if (c.front) {
+      const f = c.front, xw = skinX((c.znFrom + c.znTo) / 2, (c.y0 + c.y1) / 2);
+      const q = [
+        addV(g, -xw * 0.55, f.y0, zys(f.zn)), addV(g, xw * 0.55, f.y0, zys(f.zn)),
+        addV(g, xw * 0.42, f.y1, zys(f.zn + f.dz)), addV(g, -xw * 0.42, f.y1, zys(f.zn + f.dz)),
+      ];
+      addFace(g, q, COL.glass);
+    }
+  }
+  return g;
+}
+
+// --- airfoil lofts --------------------------------------------------------------------
+// chord fraction / upper / lower (fractions of half-thickness)
+
+const PROF = [
+  [0.0, 0.0, 0.0], [0.03, 0.55, -0.38], [0.10, 0.82, -0.48], [0.30, 1.0, -0.5],
+  [0.60, 0.74, -0.3], [0.85, 0.34, -0.1], [1.0, 0.05, -0.02],
+];
+// sections: [{span, znLE, chord, off}]; spanAxis 'x' (wing/h-stab) or 'y' (fin)
+function foilLoft(sections, thickness, colorT, colorB, spanAxis) {
   const g = mkGeo();
   const rootChord = sections[0].chord;
-  const pt = (span, off, z) => (spanAxis === 'x' ? [span, off, z] : [off, span, z]);
-  const rows = sections.map((s) => {
-    const t = (thickness * Math.max(0.35, s.chord / rootChord)) / 2;
-    const zLE = zys(s.znLE), zTE = zys(s.znLE + s.chord);
+  const pt = (sp, off, z) => (spanAxis === 'x' ? [sp, off, z] : [off, sp, z]);
+  const rings = sections.map((s) => {
+    const t = (thickness * Math.max(0.3, s.chord / rootChord)) / 2;
     const off = s.off || 0;
-    return {
-      leT: addV(g, ...pt(s.span, off + t, zLE)), leB: addV(g, ...pt(s.span, off - t, zLE)),
-      teT: addV(g, ...pt(s.span, off + t * 0.35, zTE)), teB: addV(g, ...pt(s.span, off - t * 0.35, zTE)),
-    };
+    const up = [], dn = [];
+    for (const [cf, uT, uB] of PROF) {
+      const z = zys(s.znLE + s.chord * cf);
+      up.push(addV(g, ...pt(s.span, off + uT * t, z)));
+      dn.push(addV(g, ...pt(s.span, off + uB * t, z)));
+    }
+    return { up, dn };
   });
-  for (let r = 0; r + 1 < rows.length; r++) {
-    const a = rows[r], b = rows[r + 1];
-    addFace(g, [a.leT, b.leT, b.teT, a.teT], color); // top
-    addFace(g, [a.teB, b.teB, b.leB, a.leB], color); // bottom
-    addFace(g, [a.leB, b.leB, b.leT, a.leT], color); // leading edge
-    addFace(g, [a.teT, b.teT, b.teB, a.teB], color); // trailing edge
+  const flipped = spanAxis === 'x';
+  const F = (idx, c) => addFace(g, flipped ? idx : idx.slice().reverse(), c);
+  for (let r = 0; r + 1 < rings.length; r++) {
+    const A = rings[r], B = rings[r + 1];
+    for (let i = 0; i + 1 < PROF.length; i++) {
+      F([A.up[i], B.up[i], B.up[i + 1], A.up[i + 1]], colorT);          // upper
+      F([A.dn[i + 1], B.dn[i + 1], B.dn[i], A.dn[i]], colorB);          // lower
+    }
+    const last = PROF.length - 1;
+    F([A.up[last], B.up[last], B.dn[last], A.dn[last]], colorB);        // TE close
   }
-  const rt = rows[0], tp = rows[rows.length - 1];
-  addFace(g, [rt.leT, rt.teT, rt.teB, rt.leB], color); // root cap
-  addFace(g, [tp.leB, tp.teB, tp.teT, tp.leT], color); // tip cap
+  // root cap omitted — it sits inside the fuselage and z-fights the skin
+  const tp = rings[rings.length - 1];
+  const capIdx = (ring) => [...ring.up, ...ring.dn.slice().reverse()];
+  addFace(g, flipped ? capIdx(tp) : capIdx(tp).reverse(), colorB);      // tip cap
   return g;
 }
 
-// Interpolate a section at a given span position.
 function sectionAt(sections, span) {
   for (let i = 0; i + 1 < sections.length; i++) {
     const a = sections[i], b = sections[i + 1];
@@ -120,94 +258,198 @@ function sectionAt(sections, span) {
   return null;
 }
 
-// Split a surface into FIXED plate + MOVABLE trailing plate over a span range.
-// Returns { fixed, movable, hinge } — hinge = [x,y,z] mid-span on the cut line.
-function splitMovable(sections, cut, thickness, colorFixed, colorMov, spanAxis) {
-  const clamp = (arr) => arr.filter((s) => s);
+// Movable control surface: wedge loft over the cut region.  +0.05 hinge gap:
+// a wedge LE face exactly coplanar with the fixed TE face z-fights (sawtooth
+// flicker at distance — found by bisection render).
+function wedge(sections, cut, thickness, color, spanAxis) {
   const inner = sectionAt(sections, cut.spanFrom), outer = sectionAt(sections, cut.spanTo);
   const inRange = sections.filter((s) => s.span > cut.spanFrom && s.span < cut.spanTo);
-  // fixed: full chord outside the cut, shortened chord inside it
-  const fixedSecs = [];
-  for (const s of sections) {
-    if (s.span < cut.spanFrom || s.span > cut.spanTo) fixedSecs.push(s);
-  }
-  const shorten = (s) => ({ ...s, chord: s.chord * (1 - cut.chordFrac) });
-  const insInner = fixedSecs.filter((s) => s.span < cut.spanFrom);
-  const insOuter = fixedSecs.filter((s) => s.span > cut.spanTo);
-  const fixedAll = clamp([...insInner, inner && shorten(inner), ...inRange.map(shorten), outer && shorten(outer), ...insOuter]);
-  const movSecs = clamp([inner, ...inRange, outer]).map((s) => ({
+  const secs = [inner, ...inRange, outer].filter(Boolean).map((s) => ({
     ...s,
-    znLE: s.znLE + s.chord * (1 - cut.chordFrac),
-    chord: s.chord * cut.chordFrac,
+    znLE: s.znLE + s.chord * (1 - cut.chordFrac) + 0.05,
+    chord: s.chord * cut.chordFrac - 0.05,
   }));
-  const fixed = plate(fixedAll, thickness, colorFixed, spanAxis);
-  const movable = plate(movSecs, thickness * 0.8, colorMov, spanAxis);
-  const mid = sectionAt(movSecs.map((s) => ({ ...s })), (cut.spanFrom + cut.spanTo) / 2) || movSecs[0];
-  const hingeSpan = (cut.spanFrom + cut.spanTo) / 2;
+  const g = mkGeo();
+  const pt = (sp, off, z) => (spanAxis === 'x' ? [sp, off, z] : [off, sp, z]);
+  const rows = secs.map((s) => {
+    const t = (thickness * 0.55) / 2, off = s.off || 0;
+    return [
+      addV(g, ...pt(s.span, off + t, zys(s.znLE))),
+      addV(g, ...pt(s.span, off - t, zys(s.znLE))),
+      addV(g, ...pt(s.span, off, zys(s.znLE + s.chord))),
+    ];
+  });
+  const flipped = spanAxis === 'x';
+  const F = (idx, c) => addFace(g, flipped ? idx : idx.slice().reverse(), c);
+  for (let r = 0; r + 1 < rows.length; r++) {
+    const [a0, a1, a2] = rows[r], [b0, b1, b2] = rows[r + 1];
+    F([a0, b0, b2, a2], color); F([a2, b2, b1, a1], color); F([a1, b1, b0, a0], color);
+  }
+  addFace(g, flipped ? rows[0].slice().reverse() : rows[0], color);
+  addFace(g, flipped ? rows[rows.length - 1] : rows[rows.length - 1].slice().reverse(), color);
+  const mid = sectionAt(secs, (cut.spanFrom + cut.spanTo) / 2) || secs[0];
   const hinge = spanAxis === 'x'
-    ? [hingeSpan, mid.off || 0, zys(mid.znLE)]
-    : [0, hingeSpan, zys(mid.znLE)];
-  return { fixed, movable, hinge };
+    ? [(cut.spanFrom + cut.spanTo) / 2, mid.off || 0, zys(mid.znLE)]
+    : [0, (cut.spanFrom + cut.spanTo) / 2, zys(mid.znLE)];
+  return { geo: g, hinge };
 }
 
-const mirrorX = (g) => ({
-  v: g.v.map(([x, y, z]) => [-x, y, z]),
-  faces: g.faces.map((f) => ({ ...f, idx: f.idx.slice().reverse() })),
-});
+// Fixed surface with the cut regions' chords shortened.  Epsilon-doubled
+// boundary sections make crisp chord steps instead of long diagonals.
+function fixedWithCuts(sections, cuts, thickness, colorT, colorB, spanAxis) {
+  const marks = cuts.flatMap((c) => [c.spanFrom - 0.02, c.spanFrom, c.spanTo, c.spanTo + 0.02]);
+  const all = [...sections];
+  for (const m of marks) {
+    const s = sectionAt(sections, m);
+    if (s && !all.some((q) => Math.abs(q.span - m) < 1e-6)) all.push(s);
+  }
+  all.sort((p, q) => p.span - q.span);
+  const out = all.map((s) => {
+    const c = cuts.find((c_) => s.span >= c_.spanFrom - 1e-9 && s.span <= c_.spanTo + 1e-9);
+    return c ? { ...s, chord: s.chord * (1 - c.chordFrac) } : s;
+  });
+  return foilLoft(out, thickness, colorT, colorB, spanAxis);
+}
 
-// --- engines -------------------------------------------------------------------------
+// --- flap track fairings (spec.wing.fairings, optional) -------------------------------
 
-function engine(p) {
+function fairings(wingSecs) {
   const g = mkGeo();
-  const N = 10, r = spec.engines.diameter / 2;
-  const ringAt = (zn, rr) => {
-    const ring = [];
+  const FA = spec.wing.fairings;
+  if (!FA) return g;
+  const R = FA.radius || 0.36, len = FA.length || 4.5, drop = FA.drop || 0.52;
+  for (const sp of FA.spans) {
+    const s = sectionAt(wingSecs, sp);
+    if (!s) continue;
+    const te = s.znLE + s.chord, y = (s.off || 0) - drop;
+    const zn0 = te - len * 0.69;
+    const prof = [[0, 0.28], [0.16, 0.75], [0.42, 1.0], [0.7, 0.83], [0.9, 0.44], [1, 0.08]];
+    const N = 8;
+    const rings = prof.map(([f, rr]) => {
+      const ring = [];
+      for (let i = 0; i < N; i++) {
+        const th = (i / N) * Math.PI * 2;
+        ring.push(addV(g, sp + R * rr * Math.cos(th) * 0.85, y + R * rr * Math.sin(th), zys(zn0 + len * f)));
+      }
+      return ring;
+    });
+    for (let r = 0; r + 1 < rings.length; r++) {
+      for (let i = 0; i < N; i++) {
+        const j = (i + 1) % N;
+        addFace(g, [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]], COL.fair);
+      }
+    }
+    addFace(g, rings[0], COL.fair);                                  // front cap (+z)
+    addFace(g, rings[rings.length - 1].slice().reverse(), COL.fair); // rear cap (-z)
+  }
+  return g;
+}
+
+// --- engines ---------------------------------------------------------------------------
+
+function engine(p, wingSecs) {
+  const g = mkGeo();
+  const N = 18, R = spec.engines.diameter / 2, EL = spec.engines.length;
+  const ring = (zf, rf) => {
+    const out = [];
     for (let i = 0; i < N; i++) {
       const th = (i / N) * Math.PI * 2;
-      ring.push(addV(g, p.x + rr * Math.cos(th), p.y + rr * Math.sin(th), zys(zn)));
+      out.push(addV(g, p.x + R * rf * Math.cos(th), p.y + R * rf * Math.sin(th), zys(p.zn + EL * zf)));
     }
-    return ring;
+    return out;
   };
-  const front = ringAt(p.zn, r), back = ringAt(p.zn + spec.engines.length, r * 0.75);
+  const shape = [[0, 0.86], [0.1, 1.0], [0.5, 0.97], [0.7, 0.84], [0.71, 0.52], [0.93, 0.33], [1.0, 0.15], [1.1, 0.02]];
+  const rings = shape.map(([zf, rf]) => ring(zf, rf));
+  for (let r = 0; r + 1 < rings.length; r++) {
+    for (let i = 0; i < N; i++) {
+      const j = (i + 1) % N;
+      addFace(g, [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]],
+        r >= 4 ? COL.engDark : COL.engine);
+    }
+  }
+  // intake: inner lip ring + fan disc (both face forward, +z)
+  const lipIn = ring(0.04, 0.72);
   for (let i = 0; i < N; i++) {
     const j = (i + 1) % N;
-    addFace(g, [front[i], front[j], back[j], back[i]], COL.engine);
+    addFace(g, [lipIn[j], lipIn[i], rings[0][i], rings[0][j]], COL.engine);
   }
-  addFace(g, front.slice().reverse(), COL.dark); // intake
-  addFace(g, back, COL.dark);                    // exhaust
-  // pylon: a slim box from the nacelle top up into the wing
-  const px = 0.28, z0 = zys(p.zn + 0.8), z1 = zys(p.zn + spec.engines.length * 0.8);
-  const y0 = p.y + r * 0.7, y1 = p.y + r + 2.2;
-  const b = [
-    addV(g, p.x - px, y0, z0), addV(g, p.x + px, y0, z0), addV(g, p.x + px, y1, z0), addV(g, p.x - px, y1, z0),
-    addV(g, p.x - px, y0, z1), addV(g, p.x + px, y0, z1), addV(g, p.x + px, y1, z1), addV(g, p.x - px, y1, z1),
+  addFace(g, lipIn, COL.engDark); // fan
+  // pylon: shaped plate nacelle top -> wing underside (follow the dihedral)
+  const px = 0.22, zA = p.zn + EL * 0.18, zB = p.zn + EL * 0.95, zC = p.zn + EL * 0.55;
+  const wsec = sectionAt(wingSecs, Math.abs(p.x));
+  const y0 = p.y + R * 0.8, y1 = (wsec ? wsec.off : p.y + R + 2.4) + 0.25;
+  const side = (sgn) => [
+    addV(g, p.x + sgn * px, y0, zys(zA)), addV(g, p.x + sgn * px, y0, zys(zB)),
+    addV(g, p.x + sgn * px, y1, zys(zB + 1.6)), addV(g, p.x + sgn * px, y1, zys(zC)),
   ];
-  for (const q of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7]]) {
-    addFace(g, q.map((i) => b[i]), COL.engine);
+  const Lp = side(1), Rp = side(-1);
+  addFace(g, Lp, COL.pylon); addFace(g, Rp.slice().reverse(), COL.pylon);
+  addFace(g, [Lp[3], Lp[0], Rp[0], Rp[3]], COL.pylon);                    // leading edge
+  addFace(g, [Rp[2], Rp[1], Lp[1], Lp[2]], COL.pylon);                    // trailing edge
+  return g;
+}
+
+// --- gear (outward-wound boxes / wheels) -----------------------------------------------
+
+function wheel(g, cx, cy, cz, r, w) {
+  const N = 12, a = [], b = [];
+  for (let i = 0; i < N; i++) {
+    const th = (i / N) * Math.PI * 2;
+    a.push(addV(g, cx - w / 2, cy + r * Math.sin(th), cz + r * Math.cos(th)));
+    b.push(addV(g, cx + w / 2, cy + r * Math.sin(th), cz + r * Math.cos(th)));
+  }
+  for (let i = 0; i < N; i++) {
+    const j = (i + 1) % N;
+    addFace(g, [b[i], b[j], a[j], a[i]], COL.tire);
+  }
+  addFace(g, a, COL.dark);                   // left cap (-x)
+  addFace(g, b.slice().reverse(), COL.dark); // right cap (+x)
+}
+function box(g, x0, x1, y0, y1, z0, z1, color) {
+  const b = [
+    addV(g, x0, y0, z0), addV(g, x1, y0, z0), addV(g, x1, y1, z0), addV(g, x0, y1, z0),
+    addV(g, x0, y0, z1), addV(g, x1, y0, z1), addV(g, x1, y1, z1), addV(g, x0, y1, z1),
+  ];
+  // outward winding (each quad CCW seen from outside the box)
+  for (const q of [[3, 2, 1, 0], [6, 7, 4, 5], [7, 3, 0, 4], [2, 6, 5, 1], [7, 6, 2, 3], [0, 1, 5, 4]]) {
+    addFace(g, q.map((i) => b[i]), color);
+  }
+}
+function bogie(x, zn, topY, axleY) {
+  const g = mkGeo();
+  const z = zys(zn);
+  box(g, x - 0.16, x + 0.16, axleY + 0.35, topY, z - 0.16, z + 0.16, COL.strut);         // strut
+  box(g, x - 0.14, x + 0.14, axleY + 0.15, axleY + 0.55, z - 1.85, z + 1.85, COL.strut); // beam
+  for (const dz of [-1.35, 1.35]) {
+    wheel(g, x - 0.56, axleY, z + dz, 0.58, 0.46);
+    wheel(g, x + 0.56, axleY, z + dz, 0.58, 0.46);
   }
   return g;
 }
-
-// --- gear (template idiom: POS=CNT=hinge, STA0 retracted+hidden) ---------------------
-
-function gearPost(x, zn, topY, bottomY) {
+function noseGear(x, zn, topY, axleY) {
   const g = mkGeo();
-  const z = zys(zn), w = 0.28;
-  const box = (x0, x1, y0, y1, z0, z1, color) => {
-    const b = [
-      addV(g, x0, y0, z0), addV(g, x1, y0, z0), addV(g, x1, y1, z0), addV(g, x0, y1, z0),
-      addV(g, x0, y0, z1), addV(g, x1, y0, z1), addV(g, x1, y1, z1), addV(g, x0, y1, z1),
-    ];
-    for (const q of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]) {
-      addFace(g, q.map((i) => b[i]), color);
-    }
-  };
-  box(x - w, x + w, bottomY + 0.7, topY, z - w, z + w, COL.dark);            // strut
-  box(x - 0.45, x + 0.45, bottomY, bottomY + 0.9, z - 0.75, z + 0.75, COL.dark); // wheel block
+  const z = zys(zn);
+  box(g, x - 0.14, x + 0.14, axleY, topY, z - 0.14, z + 0.14, COL.strut);
+  wheel(g, x - 0.42, axleY, z, 0.5, 0.4);
+  wheel(g, x + 0.42, axleY, z, 0.5, 0.4);
+  return g;
+}
+// spec.gear.posts, or synthesize the classic 3-post layout from {nose, mains}
+const gearPosts = spec.gear.posts || [
+  { type: 'nose', label: 'NoseGear', x: 0, zn: spec.gear.nose.zn, topY: spec.gear.nose.topY, axleY: spec.gear.nose.bottomY + 0.5 },
+  { type: 'bogie', label: 'MainGear', mirror: true, x: spec.gear.mains.x, zn: spec.gear.mains.zn, topY: spec.gear.mains.topY, axleY: spec.gear.mains.bottomY + 0.58 },
+];
+
+// --- lights ------------------------------------------------------------------------------
+
+function lightBox(x, y, z, s, color) {
+  const g = mkGeo();
+  box(g, x - s, x + s, y - s, y + s, z - s, z + s, color);
+  g.faces.forEach((f) => (f.bright = true));
   return g;
 }
 
-// --- assemble the parts list ---------------------------------------------------------
+// --- assemble ----------------------------------------------------------------------------
 
 const zero = [0, 0, 0, 0, 0, 0, 1];
 const rot = (h, p, b, vis = 1) => [0, 0, 0, h, p, b, vis];
@@ -215,77 +457,88 @@ const parts = [];
 const P = (label, cla, geo, hinge, sta, children) =>
   parts.push({ label, cla, geo, hinge: hinge || [0, 0, 0], sta: sta || [zero, zero], children: children || [] });
 
-const wingSecs = spec.wing.sections.map((s) => ({ span: s.x, znLE: s.znLE, chord: s.chord, off: s.y }));
-// Two cuts on one wing (flaps + ailerons): the FIXED plate shortens its chord
-// over BOTH span ranges; each movable comes from its own single cut.
-function doubleCut(sections, cutA, cutB, thickness, color, spanAxis) {
-  const a = splitMovable(sections, cutA, thickness, color, color, spanAxis);
-  const secsBoth = [];
-  const marks = [cutA.spanFrom, cutA.spanTo, cutB.spanFrom, cutB.spanTo];
-  const all = [...sections];
-  for (const m of marks) {
-    const s = sectionAt(sections, m);
-    if (s && !all.some((q) => Math.abs(q.span - m) < 1e-6)) all.push(s);
+const wingSecs = [];
+{ // densify wing sections (midpoints between the measured ones -> smoother loft)
+  const src = spec.wing.sections.map((s) => ({ span: s.x, znLE: s.znLE, chord: s.chord, off: s.y }));
+  for (let i = 0; i < src.length; i++) {
+    wingSecs.push(src[i]);
+    if (i + 1 < src.length) {
+      const m = sectionAt(src, (src[i].span + src[i + 1].span) / 2);
+      if (m) wingSecs.push(m);
+    }
   }
-  all.sort((p, q) => p.span - q.span);
-  for (const s of all) {
-    const inA = s.span >= cutA.spanFrom - 1e-9 && s.span <= cutA.spanTo + 1e-9;
-    const inB = s.span >= cutB.spanFrom - 1e-9 && s.span <= cutB.spanTo + 1e-9;
-    const frac = inA ? cutA.chordFrac : inB ? cutB.chordFrac : 0;
-    secsBoth.push(frac ? { ...s, chord: s.chord * (1 - frac) } : s);
-  }
-  const fixed = plate(secsBoth, thickness, color, spanAxis);
-  const b = splitMovable(sections, cutB, thickness, color, color, spanAxis);
-  return { fixed, movA: a.movable, hingeA: a.hinge, movB: b.movable, hingeB: b.hinge };
 }
+const wingFixed = fixedWithCuts(wingSecs, [spec.wing.flaps, spec.wing.ailerons], spec.wing.thickness, COL[spec.wing.color] || COL.wing, COL.wingB, 'x');
+const flap = wedge(wingSecs, spec.wing.flaps, spec.wing.thickness, COL.wingB, 'x');
+const ail = wedge(wingSecs, spec.wing.ailerons, spec.wing.thickness, COL[spec.wing.color] || COL.wing, 'x');
 
-const wing = doubleCut(wingSecs, spec.wing.flaps, spec.wing.ailerons, spec.wing.thickness, COL[spec.wing.color], 'x');
 const hsSecs = spec.hstab.sections.map((s) => ({ span: s.x, znLE: s.znLE, chord: s.chord, off: s.y }));
-const hs = splitMovable(hsSecs, spec.hstab.elevator, spec.hstab.thickness, COL[spec.hstab.color], COL[spec.hstab.color], 'x');
+const hsFixed = fixedWithCuts(hsSecs, [spec.hstab.elevator], spec.hstab.thickness, COL[spec.hstab.color] || COL.wing, COL.wingB, 'x');
+const elev = wedge(hsSecs, spec.hstab.elevator, spec.hstab.thickness, COL[spec.hstab.color] || COL.wing, 'x');
+
 const finSecs = spec.fin.sections.map((s) => ({ span: s.y, znLE: s.znLE, chord: s.chord, off: 0 }));
-const fin = splitMovable(finSecs, spec.fin.rudder, spec.fin.thickness, COL[spec.fin.color], COL[spec.fin.color], 'y');
+const finFixed = fixedWithCuts(finSecs, [spec.fin.rudder], spec.fin.thickness, COL[spec.fin.color] || COL.body, COL[spec.fin.color] || COL.body, 'y');
+const rud = wedge(finSecs, spec.fin.rudder, spec.fin.thickness, COL[spec.fin.color] || COL.body, 'y');
 
-const staticGeo = merge(
-  fuselage(),
-  wing.fixed, mirrorX(wing.fixed),
-  hs.fixed, mirrorX(hs.fixed),
-  fin.fixed,
-  ...spec.engines.positions.map(engine),
-);
-
-const topStation = spec.fuselage.stations.reduce((m, s) => Math.max(m, s.top), 0);
-const beaconGeo = (() => {
+// dorsal fillet: thin triangle prism crown -> fin LE (spec.fin.dorsal, optional)
+const dorsal = (() => {
   const g = mkGeo();
-  const z = zys(spec.beacon.zn), y = topStation;
-  const b = [
-    addV(g, -0.12, y, z - 0.15), addV(g, 0.12, y, z - 0.15), addV(g, 0.12, y, z + 0.15), addV(g, -0.12, y, z + 0.15),
-    addV(g, -0.12, y + 0.22, z - 0.15), addV(g, 0.12, y + 0.22, z - 0.15), addV(g, 0.12, y + 0.22, z + 0.15), addV(g, -0.12, y + 0.22, z + 0.15),
-  ];
-  for (const q of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [7, 6, 5, 4].reverse(), [4, 5, 1, 0]]) {
-    addFace(g, q.map((i) => b[i]), [220, 30, 30], { bright: true });
+  const D = spec.fin.dorsal;
+  if (!D) return g;
+  const t = 0.18;
+  const a = { z: zys(D.znFrom), y: D.yBase }, b = { z: zys(D.znTo), y: D.yBase - 0.03 }, c = { z: zys(D.znTo + 0.4), y: D.yTop };
+  for (const sgn of [1, -1]) {
+    const q = [addV(g, sgn * t, a.y, a.z), addV(g, sgn * t, b.y, b.z), addV(g, sgn * t, c.y, c.z)];
+    addFace(g, sgn > 0 ? q : q.slice().reverse(), COL[spec.fin.color] || COL.body);
   }
+  const l0 = addV(g, t, a.y, a.z), l1 = addV(g, t, c.y, c.z), r0 = addV(g, -t, a.y, a.z), r1 = addV(g, -t, c.y, c.z);
+  addFace(g, [l0, l1, r1, r0], COL[spec.fin.color] || COL.body); // leading face (up-forward)
   return g;
 })();
 
+const tipSec = spec.wing.sections[spec.wing.sections.length - 1];
+const lastSt = ST[ST.length - 1];
+const staticGeo = merge(
+  fuselage(), decals(),
+  wingFixed, mirrorX(wingFixed),
+  fairings(wingSecs), mirrorX(fairings(wingSecs)),
+  hsFixed, mirrorX(hsFixed),
+  finFixed, dorsal,
+  ...spec.engines.positions.map((p) => engine(p, wingSecs)),
+  // nav lights: wingtips (red left / green right) + tail strobe
+  lightBox(-tipSec.x + 0.1, tipSec.y, zys(tipSec.znLE + 0.4), 0.14, COL.red),
+  lightBox(tipSec.x - 0.1, tipSec.y, zys(tipSec.znLE + 0.4), 0.14, COL.green),
+  lightBox(0, (lastSt.top + lastSt.bottom) / 2, zys(lastSt.zn + 0.1), 0.12, COL.white),
+);
+
+const beaconGeo = lightBox(0, stationAt(spec.beacon.zn).top + 0.1, zys(spec.beacon.zn), 0.13, COL.red);
+
+const gearLabels = gearPosts.flatMap((p) => (p.mirror ? [p.label + 'L', p.label + 'R'] : [p.label]));
 P('Fuselage', 0, staticGeo, null, null, [
   'FlapL', 'FlapR', 'AileronL', 'AileronR', 'ElevatorL', 'ElevatorR', 'Rudder',
-  'NoseGear', 'MainGearL', 'MainGearR', 'Beacon',
+  ...gearLabels, 'Beacon',
 ]);
-P('FlapL', 5, wing.movA, wing.hingeA, [zero, rot(0, DEG(22), 0)]);
-P('FlapR', 5, mirrorX(wing.movA), [-wing.hingeA[0], wing.hingeA[1], wing.hingeA[2]], [zero, rot(0, DEG(22), 0)]);
-P('AileronL', 7, wing.movB, wing.hingeB, [zero, rot(0, DEG(-12), 0), rot(0, DEG(12), 0)]);
-P('AileronR', 7, mirrorX(wing.movB), [-wing.hingeB[0], wing.hingeB[1], wing.hingeB[2]], [zero, rot(0, DEG(12), 0), rot(0, DEG(-12), 0)]);
-P('ElevatorL', 6, hs.movable, hs.hinge, [zero, rot(0, DEG(-18), 0), rot(0, DEG(18), 0)]);
-P('ElevatorR', 6, mirrorX(hs.movable), [-hs.hinge[0], hs.hinge[1], hs.hinge[2]], [zero, rot(0, DEG(-18), 0), rot(0, DEG(18), 0)]);
-P('Rudder', 8, fin.movable, fin.hinge, [zero, rot(DEG(-18), 0, 0), rot(DEG(18), 0, 0)]);
+P('FlapL', 5, flap.geo, flap.hinge, [zero, rot(0, DEG(22), 0)]);
+P('FlapR', 5, mirrorX(flap.geo), [-flap.hinge[0], flap.hinge[1], flap.hinge[2]], [zero, rot(0, DEG(22), 0)]);
+P('AileronL', 7, ail.geo, ail.hinge, [zero, rot(0, DEG(-12), 0), rot(0, DEG(12), 0)]);
+P('AileronR', 7, mirrorX(ail.geo), [-ail.hinge[0], ail.hinge[1], ail.hinge[2]], [zero, rot(0, DEG(12), 0), rot(0, DEG(-12), 0)]);
+P('ElevatorL', 6, elev.geo, elev.hinge, [zero, rot(0, DEG(-18), 0), rot(0, DEG(18), 0)]);
+P('ElevatorR', 6, mirrorX(elev.geo), [-elev.hinge[0], elev.hinge[1], elev.hinge[2]], [zero, rot(0, DEG(-18), 0), rot(0, DEG(18), 0)]);
+P('Rudder', 8, rud.geo, rud.hinge, [zero, rot(DEG(-18), 0, 0), rot(DEG(18), 0, 0)]);
+
 const gearRetract = rot(0, DEG(-100), 0, 0);
-const gs = spec.gear;
-P('NoseGear', 0, gearPost(gs.nose.x, gs.nose.zn, gs.nose.topY, gs.nose.bottomY), [gs.nose.x, gs.nose.topY, zys(gs.nose.zn)], [gearRetract, zero]);
-P('MainGearL', 0, gearPost(-gs.mains.x, gs.mains.zn, gs.mains.topY, gs.mains.bottomY), [-gs.mains.x, gs.mains.topY, zys(gs.mains.zn)], [gearRetract, zero]);
-P('MainGearR', 0, gearPost(gs.mains.x, gs.mains.zn, gs.mains.topY, gs.mains.bottomY), [gs.mains.x, gs.mains.topY, zys(gs.mains.zn)], [gearRetract, zero]);
+for (const post of gearPosts) {
+  const mk = (x) => (post.type === 'nose' ? noseGear(x, post.zn, post.topY, post.axleY) : bogie(x, post.zn, post.topY, post.axleY));
+  if (post.mirror) {
+    P(post.label + 'L', 0, mk(-post.x), [-post.x, post.topY, zys(post.zn)], [gearRetract, zero]);
+    P(post.label + 'R', 0, mk(post.x), [post.x, post.topY, zys(post.zn)], [gearRetract, zero]);
+  } else {
+    P(post.label, 0, mk(post.x), [post.x, post.topY, zys(post.zn)], [gearRetract, zero]);
+  }
+}
 P('Beacon', 30, beaconGeo, null, [zero, zero]);
 
-// --- DNM writer (the gen-aircraft-template idiom) ------------------------------------
+// --- DNM writer -------------------------------------------------------------------------
 
 const f6 = (v) => (Math.abs(v) < 5e-7 ? '0' : String(Math.round(v * 1e6) / 1e6));
 const out = ['DYNAMODEL', 'DNMVER 2'];
@@ -296,6 +549,18 @@ for (const p of parts) {
     lines.push('F');
     if (f.bright) lines.push('B');
     lines.push('V ' + f.idx.join(' '));
+    // explicit N (center + Newell normal) — see the header note
+    const vs = f.idx.map((i) => p.geo.v[i]);
+    let cx = 0, cy = 0, cz = 0, nx = 0, ny = 0, nz = 0;
+    for (let i = 0; i < vs.length; i++) {
+      const [x0, y0, z0] = vs[i], [x1, y1, z1] = vs[(i + 1) % vs.length];
+      cx += x0; cy += y0; cz += z0;
+      nx += (y0 - y1) * (z0 + z1);
+      ny += (z0 - z1) * (x0 + x1);
+      nz += (x0 - x1) * (y0 + y1);
+    }
+    const nl = Math.hypot(nx, ny, nz) || 1, m = vs.length;
+    lines.push('N ' + [cx / m, cy / m, cz / m, nx / nl, ny / nl, nz / nl].map(f6).join(' '));
     lines.push('C ' + f.color.join(' '));
     lines.push('E');
   }

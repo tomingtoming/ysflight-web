@@ -62,6 +62,13 @@ function parseSrf(lines) {
         if (f[0] === 'V') face.idx = f.slice(1).map(Number);
         else if (f[0] === 'C') face.color = decodeSrfColor(f.slice(1));
         else if (f[0] === 'B') face.unlit = true;
+        else if (f[0] === 'N') {
+          // 'N cx cy cz nx ny nz' (or bare 'N nx ny nz'): the ASSIGNED normal.
+          // The engine lights by this and flips winding to match it, so keep
+          // it — converters orient their triangles by it.
+          const n = f.length >= 7 ? f.slice(4, 7).map(Number) : f.slice(1, 4).map(Number);
+          if (n[0] || n[1] || n[2]) face.nom = n;
+        }
       }
       if (face.idx.length >= 3) { byRaw.set(rawFace, faces.length); faces.push(face); }
       rawFace++;

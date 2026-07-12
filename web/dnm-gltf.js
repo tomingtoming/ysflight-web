@@ -158,8 +158,24 @@ export function dnmToGlb(dnmBytes) {
       const key = (f.color || [128, 128, 128]).join(',') + (f.unlit ? '|B' : '') + (alpha < 1 ? '|A' + alpha : '');
       let bucket = byColor.get(key);
       if (!bucket) { bucket = { color: f.color || [128, 128, 128], unlit: !!f.unlit, alpha, pos: [] }; byColor.set(key, bucket); }
-      for (let i = 1; i + 1 < f.idx.length; i++) {
-        for (const vi of [f.idx[0], f.idx[i], f.idx[i + 1]]) {
+      // Orient by the assigned 'N' normal when present: the engine lights by
+      // N and flips winding to match it (FixOrientationBasedOnAssignedNormal),
+      // so a face whose winding disagrees with its N must be reversed here or
+      // the glTF (winding-derived) normal comes out inverted.
+      let idx = f.idx;
+      if (f.nom) {
+        let nx = 0, ny = 0, nz = 0;
+        for (let i = 0; i < idx.length; i++) {
+          const a = srf.vertices[idx[i]], b = srf.vertices[idx[(i + 1) % idx.length]];
+          if (!a || !b) continue;
+          nx += (a[1] - b[1]) * (a[2] + b[2]);
+          ny += (a[2] - b[2]) * (a[0] + b[0]);
+          nz += (a[0] - b[0]) * (a[1] + b[1]);
+        }
+        if (nx * f.nom[0] + ny * f.nom[1] + nz * f.nom[2] < 0) idx = idx.slice().reverse();
+      }
+      for (let i = 1; i + 1 < idx.length; i++) {
+        for (const vi of [idx[0], idx[i], idx[i + 1]]) {
           const v = srf.vertices[vi];
           if (v) bucket.pos.push(v[0], v[1], v[2]);
         }

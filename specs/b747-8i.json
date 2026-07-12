@@ -1,0 +1,106 @@
+{
+  "name": "B747-8I",
+  "comment": "Transcribed from the official Boeing 747-8I vector three-view ('Minor corrections 20 June 2010', DWG->DXF): scale calibrated from the drawing's own DIMENSION entities (250ft2in = 76.25m over 4.288729 units, cross-checked against the 68.4m span dim to 0.04%), nose datum x=0.2580 shared by the side and top views, ground at the main-gear contact.  DXF layer map: L2 side outline, L11 wing planform, L1 top fuselage, L21 h-stab, L32 fin, L3 face view.  The wing LE is the L11 polyline verbatim: root (3.24, 24.55) -> kink (21.03, 40.93) at slope 0.921 (42.5deg LE sweep — the earlier 0.77 came from misapplying the 37.5deg QUARTER-CHORD sweep to the LE), then the raked-tip curve to (34.26, 54.45).  Aircraft coords: nose +Z, y up, meters; ground sits at y=-5.7.",
+  "length": 76.25,
+  "colors": {
+    "body": [237, 238, 238],
+    "wing": [204, 207, 212],
+    "engine": [156, 160, 168],
+    "stripe": [25, 70, 140]
+  },
+  "fuselage": {
+    "comment": "stations traced from the DXF L2 side outline + L1 top widths: hump crown 4.36 flat zn8-24 (1.05m over the 3.31 aft crown; the compiler narrows the upper lobe there automatically), belly eases -3.4..-3.6 through the wing, tailcone tip ~zn75.5 (the fin TE tip owns the 76.25m length datum).",
+    "ringPoints": 32,
+    "stations": [
+      { "zn": 0.0,  "top": 0.08,  "bottom": -0.2,  "w": 0.12 },
+      { "zn": 1.0,  "top": 1.06,  "bottom": -1.1,  "w": 1.05 },
+      { "zn": 2.5,  "top": 1.88,  "bottom": -1.82, "w": 1.65 },
+      { "zn": 4.0,  "top": 2.61,  "bottom": -2.32, "w": 2.06 },
+      { "zn": 5.5,  "top": 3.76,  "bottom": -2.68, "w": 2.37 },
+      { "zn": 8.0,  "top": 4.3,   "bottom": -3.08, "w": 2.76 },
+      { "zn": 12.0, "top": 4.36,  "bottom": -3.41, "w": 3.14 },
+      { "zn": 20.0, "top": 4.36,  "bottom": -3.49, "w": 3.25 },
+      { "zn": 26.0, "top": 4.23,  "bottom": -3.55, "w": 3.25 },
+      { "zn": 31.0, "top": 3.74,  "bottom": -3.55, "w": 3.25 },
+      { "zn": 36.0, "top": 3.31,  "bottom": -3.6,  "w": 3.25 },
+      { "zn": 50.0, "top": 3.31,  "bottom": -3.44, "w": 3.25 },
+      { "zn": 54.0, "top": 3.31,  "bottom": -3.03, "w": 3.22 },
+      { "zn": 58.0, "top": 3.38,  "bottom": -2.25, "w": 3.06 },
+      { "zn": 61.0, "top": 3.46,  "bottom": -1.62, "w": 2.7 },
+      { "zn": 64.0, "top": 3.33,  "bottom": -0.98, "w": 2.2 },
+      { "zn": 67.0, "top": 3.33,  "bottom": -0.34, "w": 1.7 },
+      { "zn": 70.0, "top": 3.5,   "bottom": 0.3,   "w": 1.14 },
+      { "zn": 73.0, "top": 2.93,  "bottom": 0.93,  "w": 0.58 },
+      { "zn": 75.4, "top": 2.9,   "bottom": 2.75,  "w": 0.1 }
+    ]
+  },
+  "decals": {
+    "comment": "window bands and door stations read off the drawing's detail layers (main deck y 0.06-0.42, upper deck y 2.72-3.06).",
+    "cheatline": { "znFrom": 2.4, "znTo": 70.0, "y0": 0.52, "y1": 0.96 },
+    "windowRows": [
+      { "znFrom": 6.2, "znTo": 59.5, "y0": 0.06, "y1": 0.42, "pitch": 1.15, "skipDoors": true },
+      { "znFrom": 7.6, "znTo": 25.6, "y0": 2.72, "y1": 3.06, "pitch": 1.15 }
+    ],
+    "doors": { "zn": [9.2, 17.8, 27.0, 44.5, 57.5], "y0": -0.15, "y1": 1.75, "halfW": 0.55 },
+    "cockpit": { "znFrom": 4.35, "znTo": 5.35, "y0": 3.05, "y1": 3.6, "front": { "zn": 4.15, "y0": 3.02, "y1": 3.58, "dz": 0.75 } }
+  },
+  "wing": {
+    "comment": "L11 planform vertices verbatim; TE from scanlines 39.2@3.3 .. 54.4@33.  Dihedral linear root -2.4 -> tip 1.55 (face view).",
+    "color": "wing",
+    "thickness": 1.1,
+    "sections": [
+      { "x": 3.24,  "znLE": 24.55, "chord": 14.65, "y": -2.4 },
+      { "x": 12.0,  "znLE": 32.62, "chord": 9.5,   "y": -1.35 },
+      { "x": 21.03, "znLE": 40.93, "chord": 6.19,  "y": -0.15 },
+      { "x": 29.0,  "znLE": 47.61, "chord": 4.21,  "y": 0.88 },
+      { "x": 34.26, "znLE": 54.45, "chord": 0.55,  "y": 1.55 }
+    ],
+    "flaps":    { "spanFrom": 4.5,  "spanTo": 20.5, "chordFrac": 0.28 },
+    "ailerons": { "spanFrom": 23.5, "spanTo": 31.5, "chordFrac": 0.26 },
+    "fairings": { "spans": [6.8, 11.2, 15.8, 19.9], "radius": 0.36, "length": 4.5, "drop": 0.52 }
+  },
+  "hstab": {
+    "comment": "L21 top view: half-span grows 3.66@zn66 -> 11.01@zn72.9, tips run to the tailcone end; side view puts the root at y~0.4 rising to ~1.5.",
+    "color": "wing",
+    "thickness": 0.55,
+    "sections": [
+      { "x": 0.9,   "znLE": 63.3, "chord": 9.8, "y": 0.4 },
+      { "x": 11.01, "znLE": 72.9, "chord": 2.4, "y": 1.5 }
+    ],
+    "elevator": { "spanFrom": 1.8, "spanTo": 10.2, "chordFrac": 0.32 }
+  },
+  "fin": {
+    "comment": "L32 side view: LE 4.11@zn61 -> 13.10@zn72 (dz/dy 1.22), tip chord zn72.3..76.3 = the aftmost point of the aircraft.",
+    "color": "body",
+    "thickness": 0.6,
+    "sections": [
+      { "y": 3.0,   "znLE": 60.15, "chord": 13.05 },
+      { "y": 13.32, "znLE": 72.3,  "chord": 4.0 }
+    ],
+    "rudder": { "spanFrom": 4.4, "spanTo": 12.8, "chordFrac": 0.30 },
+    "dorsal": { "znFrom": 56.5, "znTo": 63.5, "yBase": 3.33, "yTop": 5.6 }
+  },
+  "engines": {
+    "comment": "GEnx nacelles, 4 under-wing pods; DXF side outlines: inner fan cowl zn 27.2..30.2 y -4.62..-1.40, outer zn 35.8..38.8 y -3.53..-0.31; x centers 11.9 / 21.3 from the top view.",
+    "color": "engine",
+    "diameter": 3.1,
+    "length": 5.0,
+    "positions": [
+      { "x": -11.9, "y": -3.0, "zn": 27.2 },
+      { "x": 11.9,  "y": -3.0, "zn": 27.2 },
+      { "x": -21.3, "y": -1.9, "zn": 35.8 },
+      { "x": 21.3,  "y": -1.9, "zn": 35.8 }
+    ]
+  },
+  "gear": {
+    "comment": "the drawing's real 5-post layout: nose wheel circle at zn7.75, wing gear x±5.5 zn35.9, body gear x±1.92 zn39.0 (top-view wheel circles).  {nose, mains} kept for the old 3-post schema fallback.",
+    "posts": [
+      { "type": "nose",  "label": "NoseGear", "x": 0,    "zn": 7.75, "topY": -2.8, "axleY": -5.0 },
+      { "type": "bogie", "label": "WingGear", "x": 5.5,  "zn": 35.9, "topY": -3.1, "axleY": -5.14, "mirror": true },
+      { "type": "bogie", "label": "BodyGear", "x": 1.92, "zn": 39.0, "topY": -3.4, "axleY": -5.14, "mirror": true }
+    ],
+    "nose":  { "x": 0.0, "zn": 7.75, "topY": -2.8, "bottomY": -5.5 },
+    "mains": { "x": 5.5, "zn": 37.4, "topY": -3.0, "bottomY": -5.72 }
+  },
+  "beacon": { "y": "top", "zn": 20.0 }
+}
