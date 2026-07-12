@@ -433,12 +433,50 @@ function mountainTer({ radiusM = 1500, heightM = 300, n = 16 }) {
   return lines;
 }
 
+// One runway = flat pavement PLGs (grey base + white threshold bars +
+// centerline dashes, all in the shared .pc2), a PST AREA LAND rectangle so it
+// is landable even when it sticks out over water, and a ground spawn point
+// 60m in from the approach end (alt 0 / speed 0 = the engine starts you
+// parked, gear down, ready to roll).
+function runwayShapes({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45 }) {
+  const h = (headingDeg * Math.PI) / 180;
+  const fx = Math.sin(h), fz = -Math.cos(h);       // forward (heading 0 = north = -Z)
+  const rx = Math.cos(h), rz = Math.sin(h);        // right
+  const rect = (cf, cr, halfL, halfW) => {         // center offsets along f/r (m)
+    const cx = x + fx * cf + rx * cr, cz = z + fz * cf + rz * cr;
+    return [
+      [cx + fx * halfL + rx * halfW, cz + fz * halfL + rz * halfW],
+      [cx + fx * halfL - rx * halfW, cz + fz * halfL - rz * halfW],
+      [cx - fx * halfL - rx * halfW, cz - fz * halfL - rz * halfW],
+      [cx - fx * halfL + rx * halfW, cz - fz * halfL + rz * halfW],
+    ];
+  };
+  const polys = [{ color: [88, 90, 94], points: rect(0, 0, lengthM / 2, widthM / 2) }];
+  const white = [230, 232, 235];
+  for (const end of [1, -1]) {                     // threshold bars
+    polys.push({ color: white, points: rect(end * (lengthM / 2 - 22), 0, 10, widthM * 0.38) });
+  }
+  const dash = 22, gap = 38;                       // centerline dashes
+  for (let s = -lengthM / 2 + 80; s + dash <= lengthM / 2 - 80; s += dash + gap) {
+    polys.push({ color: white, points: rect(s + dash / 2, 0, dash / 2, 0.9) });
+  }
+  return {
+    polys,
+    landPad: rect(0, 0, lengthM / 2 + 10, widthM / 2 + 10),
+    start: {
+      x: x - fx * (lengthM / 2 - 60), z: z - fz * (lengthM / 2 - 60),
+      altM: 0, speedMS: 0, headingDeg,
+    },
+  };
+}
+
 export function assembleSceneryZip({
   name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80],
   startAltM = 1000, startSpeedMS = 100, islands = [],
   objects = [],    // [{nam, x, z, headingDeg?, tag?}] stock ground-object placements
   mountains = [],  // [{x, z, radiusM?, heightM?}] cosine-falloff TER hills
   starts = [],     // [{name?, x, z, altM?, speedMS?, headingDeg?}] extra spawn points
+  runways = [],    // [{x, z, headingDeg?, lengthM?, widthM?}] flat pavement runways
   recipe,
 }) {
   const ident = sanitizeIdentify(name);
@@ -447,6 +485,7 @@ export function assembleSceneryZip({
   const fileStem = packName;
 
   const polys = (islands || []).filter((i) => i && Array.isArray(i.points) && i.points.length >= 3);
+  const rws = (runways || []).map(runwayShapes);
   const fldLines = [
     'FIELD',
     'GND ' + rgb(ground),
@@ -457,11 +496,16 @@ export function assembleSceneryZip({
     'MAGVAR 0.00deg',
     'CANRESUME TRUE',
   ];
-  if (polys.length > 0) {
-    // One .pc2 holding every island polygon; referenced once below.
+  if (polys.length > 0 || rws.length > 0) {
+    // One .pc2 holding every island polygon + runway pavement (PLG paint order
+    // = list order, so pavement then markings draw over the islands).
     const pc2 = ['Pict2'];
-    for (const p of polys) {
-      pc2.push('PLG', 'COL ' + rgb(p.color || land));
+    const pc2Polys = [
+      ...polys.map((p) => ({ color: p.color || land, points: p.points })),
+      ...rws.flatMap((r) => r.polys),
+    ];
+    for (const p of pc2Polys) {
+      pc2.push('PLG', 'COL ' + rgb(p.color));
       for (const [x, z] of p.points) pc2.push('VER ' + num(x, 2) + ' ' + num(z, 2));
       pc2.push('SPEC FALSE', 'ENDO');
     }
@@ -470,9 +514,10 @@ export function assembleSceneryZip({
     fldLines.push(...pc2);
     fldLines.push('', ''); // saver-style trailing blanks (ignored OUTSIDE the PCK count)
     fldLines.push('PC2', 'FIL "00000000.pc2"', 'POS 0.00 0.00 0.00 0.00 0.00 0.00', 'ID 0', 'END');
-    for (const p of polys) {
+    const landLoops = [...polys.map((p) => p.points), ...rws.map((r) => r.landPad)];
+    for (const points of landLoops) {
       fldLines.push('PST', 'ISLOOP TRUE', 'AREA LAND');
-      for (const [x, z] of p.points) fldLines.push('PNT ' + num(x, 2) + ' 0.00 ' + num(z, 2));
+      for (const [x, z] of points) fldLines.push('PNT ' + num(x, 2) + ' 0.00 ' + num(z, 2));
       fldLines.push('FIL ""', 'POS 0.00 0.00 0.00 0.00 0.00 0.00', 'ID 0', 'END');
     }
   }
@@ -516,13 +561,17 @@ export function assembleSceneryZip({
   // front of the nose (heading 0 = north = -Z); user-placed starts follow.
   const stpBlocks = [[
     'N ' + SCENERY_START,
-    'C POSITION 0.00m ' + num(startAltM, 2) + 'm ' + num(polys.length || objects.length || mountains.length ? 6000 : 0, 2) + 'm',
+    'C POSITION 0.00m ' + num(startAltM, 2) + 'm ' + num(polys.length || objects.length || mountains.length || rws.length ? 6000 : 0, 2) + 'm',
     'C ATTITUDE 0.00deg 0.00deg 0.00deg',
     'C INITSPED ' + num(startSpeedMS, 2) + 'm/s',
     'C CTLTHROT 0.80',
     'C CTLLDGEA FALSE',
   ]];
-  (starts || []).forEach((s, i) => {
+  const allStarts = [
+    ...rws.map((r, i) => ({ name: 'RUNWAY' + String(i + 1).padStart(2, '0'), ...r.start })),
+    ...(starts || []),
+  ];
+  allStarts.forEach((s, i) => {
     const speed = s.speedMS === undefined ? 100 : s.speedMS;
     stpBlocks.push([
       'N ' + sanitizeIdentify(s.name || 'START' + String(i + 2).padStart(2, '0')),
