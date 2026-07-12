@@ -196,6 +196,108 @@ const delCheck = await page.evaluate(async () => {
 if (!delCheck.gone || delCheck.count !== 3) die('delete failed: ' + JSON.stringify(delCheck));
 console.log('library: delete works (back to 3 creations)');
 
+// ---- studio pages: boot + ?edit= restore ----------------------------------------
+
+// Each dedicated studio page must boot engine-less and expose its hook; the
+// aircraft and scenery studios must restore a creation from ?edit=<record id>.
+{
+  const creations = await page.evaluate(() => window.ysfwWorkbench.listCreations());
+  const air = creations.find((c) => c.kind === 'aircraft');
+  const isl = creations.find((c) => c.kind === 'scenery');
+  if (!air || !isl) die('expected an aircraft and a scenery creation before the studio checks');
+
+  const bootStudio = async (pageName, params) => {
+    const u = new URL(url);
+    u.pathname = u.pathname.replace(/index\.html$/, pageName);
+    for (const [k, v] of Object.entries(params || {})) u.searchParams.set(k, v);
+    await page.goto(u.toString());
+    await page
+      .waitForFunction(() => window.ysfwStudio && window.ysfwStudio.ready === true, { timeout: 30000 })
+      .catch(() => die(pageName + ' never became ready (window.ysfwStudio)'));
+    return page.evaluate(() => window.ysfwStudio.page);
+  };
+
+  if ((await bootStudio('studio-aircraft.html', { edit: air.id })) !== 'aircraft') die('aircraft studio wrong page id');
+  const acEntries = await page.evaluate(() => window.ysfwStudio.getEntries());
+  if (!Array.isArray(acEntries) || acEntries.length < 2) die('aircraft studio did not restore entries from ?edit: ' + JSON.stringify(acEntries));
+
+  // Blender bridge in the browser: the staged template .glb converts to a DNM
+  // whose movable wiring survives, and converts back out with animations.
+  const glbCheck = await page.evaluate(async () => {
+    const { glbToDnm, dnmToGlb } = await import('./dnm-gltf.js');
+    const { parseDnm } = await import('./dnm-preview.js');
+    const glb = new Uint8Array(await (await fetch('./aircraft-starter.glb')).arrayBuffer());
+    const res = glbToDnm(glb);
+    const p = parseDnm(res.dnm);
+    const gear = p.nodes.get('NoseGear');
+    const fwd = dnmToGlb(res.dnm);
+    return { nodes: p.nodes.size, tris: res.triangles, gearCla: gear && gear.cla, anims: fwd.animations.length };
+  });
+  if (!(glbCheck.nodes >= 18) || glbCheck.gearCla !== 0 || !(glbCheck.anims >= 5)) {
+    die('browser glb<->dnm conversion failed: ' + JSON.stringify(glbCheck));
+  }
+  console.log('blender bridge: template .glb -> DNM -> .glb in-browser ' + JSON.stringify(glbCheck));
+
+  if ((await bootStudio('studio-scenery.html', { edit: isl.id })) !== 'scenery') die('scenery studio wrong page id');
+  const scCounts = await page.evaluate(() => window.ysfwStudio.counts());
+  if (!scCounts || !(scCounts.islands >= 1)) die('scenery studio did not restore islands from ?edit: ' + JSON.stringify(scCounts));
+
+  // Pack studio: curate every creation into a pack-as-a-work, then re-open it.
+  if ((await bootStudio('studio-pack.html')) !== 'pack') die('pack studio wrong page id');
+  const packRes = await page.evaluate(() => window.ysfwStudio.composeAll('WB_PACKWORK'));
+  if (!packRes || !(packRes.members >= 2)) die('pack compose failed: ' + JSON.stringify(packRes));
+  // The library/recipe API lives on the hub page — hop back there to inspect.
+  const backToHub = async () => {
+    await page.goto(wbUrl.toString());
+    await page
+      .waitForFunction(() => window.ysfwWorkbench && window.ysfwWorkbench.ready === true, { timeout: 30000 })
+      .catch(() => die('hub page never became ready after the pack compose'));
+  };
+  await backToHub();
+  const packLib = await page.evaluate(async () => {
+    const lib = await window.ysfwWorkbench.listCreations();
+    const p = lib.find((c) => c.name === 'WB_PACKWORK');
+    if (!p) return null;
+    const recipe = await window.ysfwWorkbench.loadRecipe(p.recipeSha);
+    return { id: p.id, type: recipe.type, members: (recipe.members || []).length };
+  });
+  if (!packLib || packLib.type !== 'pack') die('pack work missing from the library: ' + JSON.stringify(packLib));
+  if ((await bootStudio('studio-pack.html', { edit: packLib.id })) !== 'pack') die('pack studio edit reload failed');
+  const packCounts = await page.evaluate(() => window.ysfwStudio.counts());
+  if (!(packCounts.members === packLib.members && packCounts.members >= 2)) {
+    die('pack edit did not restore members: ' + JSON.stringify({ packCounts, packLib }));
+  }
+  // Delete the pack work (its duplicate identities must not shadow the flight
+  // checks below) — back on the hub, whose API owns deletion.
+  await backToHub();
+  await page.evaluate((id) => window.ysfwWorkbench.deleteCreation(id), packLib.id);
+
+  // Seamless glb aircraft: a bare .glb becomes a COMPLETE aircraft — visual
+  // converted, collision shell baked from the visible rest geometry, flight
+  // model generated — and it must actually fly (checked in the game section).
+  const glbAir = await page.evaluate(async () => {
+    const { glbToDnm, dnmToCollisionSrf } = await import('./dnm-gltf.js');
+    const glb = new Uint8Array(await (await fetch('./aircraft-starter.glb')).arrayBuffer());
+    const conv = glbToDnm(glb);
+    const coll = dnmToCollisionSrf(conv.dnm);
+    const stock = await window.ysfwWorkbench.listStock();
+    const f15 = stock.find((a) => a.identify === 'F-15C_EAGLE') || stock[0];
+    const dat = await window.ysfwWorkbench.makeDat(f15.file, 'WB_GLB1', {}, {});
+    return await window.ysfwWorkbench.assembleInstall({
+      name: 'wbglb',
+      dat: { name: 'wb_glb1.dat', bytes: dat.bytes },
+      visual: { name: 'starter.dnm', bytes: conv.dnm },
+      collision: { name: 'starter_coll.srf', bytes: coll },
+    });
+  }).catch((e) => die('seamless glb aircraft flow threw: ' + e.message));
+  if (glbAir.identify !== 'WB_GLB1') die('glb aircraft: expected WB_GLB1, got ' + JSON.stringify(glbAir));
+  console.log('seamless glb->aircraft installed: ' + JSON.stringify({ id: glbAir.id, identify: glbAir.identify }));
+
+  console.log('studios: aircraft/scenery booted with ?edit restore (' +
+    acEntries.length + ' entries + ' + scCounts.islands + ' island(s)); pack work saved+reopened (' +
+    packCounts.members + ' members)');
+}
+
 // ---- game page: fly what the workbench made (the OPFS bridge) -------------------
 
 // 4. The loose-assembled aircraft flies.
@@ -253,7 +355,35 @@ await page
   if (!airLoaded) die('field loaded but the wizard-made aircraft "WB_CUSTOM1" did not fly');
 }
 if (fatal.length) die('fatal engine output while flying the wizard-made aircraft on the drawn map');
+console.log('workbench->game: wizard-made aircraft flew on the DRAWN island map (real engine)');
+
+// 6. The seamless-glb aircraft (visual+collision+dat all derived from one
+//    .glb) flies: the Blender loop's final proof.
+logs.length = 0;
+fatal.length = 0;
+const ff3 = new URL(url);
+ff3.searchParams.set('freeflight', 'WB_GLB1');
+await page.goto(ff3.toString());
+await page
+  .waitForFunction(
+    () => {
+      const ov = document.getElementById('overlay');
+      return ov && ov.classList.contains('hidden');
+    },
+    { timeout: bootMs },
+  )
+  .catch(() => die('engine did not boot on the glb-aircraft freeflight reload'));
+{
+  const t0 = Date.now();
+  let loaded = false;
+  while (Date.now() - t0 < 30000) {
+    if (logs.some((l) => /Airplane:\s*WB_GLB1/.test(l))) { loaded = true; break; }
+    await page.waitForTimeout(250);
+  }
+  if (!loaded) die('engine never flew the seamless glb-derived aircraft "WB_GLB1"');
+}
+if (fatal.length) die('fatal engine output while flying the glb-derived aircraft');
 
 await browser.close();
-console.log('workbench->game: wizard-made aircraft flew on the DRAWN island map (real engine)');
+console.log('workbench->game: the .glb-born aircraft flew (real engine)');
 console.log('SMOKE-WORKBENCH PASSED');
