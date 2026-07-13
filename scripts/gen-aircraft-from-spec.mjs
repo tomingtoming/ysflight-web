@@ -428,14 +428,29 @@ function decals() {
             poly = clip(poly, (p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
           }
           if (poly.length < 3 || area2(poly) < 0.004) continue;
-          // affine inverse on basis (B0-A0 = ring, A1-A0 = row)
+          // invert the bilinear (u,v) -> (x,y): affine estimate on the A0
+          // basis, then Newton — near the nose tip the ring facets are so
+          // trapezoidal that the affine approximation alone throws pieces
+          // far outside the band (a red pinwheel around the radome tip).
           const rux = B0[0] - A0[0], ruy = B0[1] - A0[1];
           const rvx = A1[0] - A0[0], rvy = A1[1] - A0[1];
           const det = rux * rvy - ruy * rvx || 1e-9;
           pts = poly.map(([x, y]) => {
             const dx = x - A0[0], dy = y - A0[1];
-            const v = (dx * rvy - dy * rvx) / det;       // ring param
-            const u = (rux * dy - ruy * dx) / det;       // row param
+            let v = (dx * rvy - dy * rvx) / det;         // ring param
+            let u = (rux * dy - ruy * dx) / det;         // row param
+            for (let it = 0; it < 6; it++) {
+              const fx = (A0[0] + (A1[0] - A0[0]) * u) * (1 - v) + (B0[0] + (B1[0] - B0[0]) * u) * v - x;
+              const fy = (A0[1] + (A1[1] - A0[1]) * u) * (1 - v) + (B0[1] + (B1[1] - B0[1]) * u) * v - y;
+              const ju = (A1[0] - A0[0]) * (1 - v) + (B1[0] - B0[0]) * v;
+              const jv = (B0[0] - A0[0]) + ((B1[0] - B0[0]) - (A1[0] - A0[0])) * u;
+              const ku = (A1[1] - A0[1]) * (1 - v) + (B1[1] - B0[1]) * v;
+              const kv = (B0[1] - A0[1]) + ((B1[1] - B0[1]) - (A1[1] - A0[1])) * u;
+              const dj = ju * kv - jv * ku;
+              if (Math.abs(dj) < 1e-12) break;
+              u -= (fx * kv - fy * jv) / dj;
+              v -= (fy * ju - fx * ku) / dj;
+            }
             return on3d(u, v);
           });
         }
