@@ -189,7 +189,16 @@ function fuselage() {
       }
     }
   }
-  addFace(g, rings[0].map(V), COL.body);                          // nose cap (+z)
+  // nose cap (+z): when a cheatline wraps the nose cone (znFrom ~0) the cap
+  // must carry the band color — an unpainted button at the very tip would
+  // poke through the painted pieces around it
+  const s0 = stationAt(denseZn[0]);
+  const capY = (s0.top + s0.bottom) / 2;
+  let capCol = capY < bellyY ? COL.belly : COL.body;
+  for (const c of [].concat((spec.decals && spec.decals.cheatline) || [])) {
+    if (c.znFrom <= 0.1 && c.y0 <= capY && capY <= c.y1) capCol = COL[c.color] || COL.stripe;
+  }
+  addFace(g, rings[0].map(V), capCol);
   addFace(g, rings[rings.length - 1].map(V).reverse(), COL.dark); // APU exhaust (-z)
   return g;
 }
@@ -346,6 +355,26 @@ function decals() {
   // cheatline sweeps.
   function paintOnHull(outline, frontBand, color) {
     const N = spec.fuselage.ringPoints || 32;
+    // Smooth skin normals on the ring grid (central differences).  Pieces
+    // offset along the SHARED per-point normal instead of each facet's own
+    // plane normal: on the doubly-curved nose adjacent facets tilt ~20deg,
+    // and per-facet offsets open white sliver cracks along every seam.
+    const ptAt = (r, i) => { const [x, y] = ringPt(denseZn[r], i, N); return [x, y, zys(denseZn[r])]; };
+    const nrmCache = new Map();
+    const nrmAt = (r, i) => {
+      const key = r * 4096 + (((i % N) + N) % N);
+      let n = nrmCache.get(key);
+      if (n) return n;
+      const z1 = ptAt(Math.min(denseZn.length - 1, r + 1), i), z0 = ptAt(Math.max(0, r - 1), i);
+      const i1 = ptAt(r, i + 1), i0 = ptAt(r, i - 1);
+      const tz = [z1[0] - z0[0], z1[1] - z0[1], z1[2] - z0[2]];
+      const tr = [i1[0] - i0[0], i1[1] - i0[1], i1[2] - i0[2]];
+      n = [tz[1] * tr[2] - tz[2] * tr[1], tz[2] * tr[0] - tz[0] * tr[2], tz[0] * tr[1] - tz[1] * tr[0]];
+      const l = Math.hypot(n[0], n[1], n[2]) || 1;
+      n = [n[0] / l, n[1] / l, n[2] / l];
+      nrmCache.set(key, n);
+      return n;
+    };
     const znMin = Math.min(...outline.map((p) => p[0])) - 0.01;
     const znMax = Math.max(...outline.map((p) => p[0])) + 0.01;
     const oy0 = Math.min(...outline.map((p) => p[1]));
@@ -385,12 +414,23 @@ function decals() {
         }
         const nl = Math.hypot(nx, ny, nz) || 1;
         nx /= nl; ny /= nl; nz /= nl;
-        // bilinear map (u = row param, v = ring param) -> 3D on the facet
+        // bilinear map (u = row param, v = ring param) -> 3D on the facet,
+        // floated 2.5cm along the bilinearly-interpolated SMOOTH normal so
+        // pieces on adjacent facets share exact edge points (no seam cracks)
+        const n00 = nrmAt(r, i), n10 = nrmAt(r + 1, i);
+        const n01 = nrmAt(r, i + 1), n11 = nrmAt(r + 1, i + 1);
         const on3d = (u, v) => {
           const x = (A0[0] + (A1[0] - A0[0]) * u) * (1 - v) + (B0[0] + (B1[0] - B0[0]) * u) * v;
           const y = (A0[1] + (A1[1] - A0[1]) * u) * (1 - v) + (B0[1] + (B1[1] - B0[1]) * u) * v;
-          const z = zys(zn0 + (zn1 - zn0) * u);
-          return [x + nx * 0.025, y + ny * 0.025, z + nz * 0.025];
+          const znP = zn0 + (zn1 - zn0) * u;
+          const sn = [0, 1, 2].map((k) =>
+            (n00[k] + (n10[k] - n00[k]) * u) * (1 - v) + (n01[k] + (n11[k] - n01[k]) * u) * v);
+          const sl = Math.hypot(sn[0], sn[1], sn[2]) || 1;
+          // taper the float to ZERO at the hull's very ends: a piece rim
+          // hovering 2.5cm off the tip cap otherwise shows the hull through
+          // the slit as a white ring around the radome cap
+          const off = 0.025 * Math.min(1, (znP - denseZn[0]) / 0.6, (denseZn[denseZn.length - 1] - znP) / 0.6);
+          return [x + (sn[0] / sl) * off, y + (sn[1] / sl) * off, zys(znP) + (sn[2] / sl) * off];
         };
         let pts;
         if (Math.abs(nz) <= Math.abs(nx)) {
@@ -494,10 +534,13 @@ function decals() {
       if (!st) return; // space advances silently
       for (const [u0, v0, u1, v1] of st) {
         for (const sgn of [1, -1]) {
-          // far side: mirror the glyph cell AND reverse the letter order, so
-          // both sides read naturally left-to-right from outside
-          const slot = sgn > 0 ? i : chars.length - 1 - i;
-          const zn = (u) => tt.zn + slot * adv + (sgn > 0 ? u : 1 - u) * cw;
+          // Chirality is set by the ENGINE's view (ground truth — stock nav
+          // lights prove +x is starboard): the starboard side needs mirrored
+          // cells + reversed letter order, port reads direct.  Blender and
+          // three.js are right-handed viewers of this left-handed world, so
+          // text deliberately reads backwards THERE.
+          const slot = sgn < 0 ? i : chars.length - 1 - i;
+          const zn = (u) => tt.zn + slot * adv + (sgn < 0 ? u : 1 - u) * cw;
           const [zA, zB] = [zn(u0), zn(u1)];
           const [yA, yB] = [tt.y + v0 * h, tt.y + v1 * h];
           let px = -(yB - yA), py = zB - zA;
