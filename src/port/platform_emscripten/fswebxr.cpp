@@ -473,22 +473,32 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// press, e.g. cancelled by B on this same hand, and the release
 			// would otherwise leak a spurious gear tap).
 			aBtn:{pressed:false,pressAt:0,recentered:false,owned:false},
-			// Left X button: same tap-vs-long-press shape as aBtn (owned
-			// included), but the long action toggles the help placards
-			// instead of recentering (see toggleHelp,
+			// Left X button: same press/hold/release bookkeeping shape as
+			// aBtn (pressed/pressAt/helped/owned), but X only ever drives ONE
+			// action now -- the long-press help toggle (see toggleHelp,
 			// processControllerPlain's left-hand branch). helped mirrors
-			// aBtn.recentered: fires toggleHelp at most once per hold.
-			xBtn:{pressed:false,pressAt:0,helped:false,owned:false,outside:false},
-			// Right B / left Y previous-press state -- re-added ONLY for the
-			// dialog-owner cancel press-edge (see processControllerPlain's
-			// rActive/lActive branches); the normal, non-owner B/Y dispatch
-			// stays pure level-sensed vrKeyEdge and needs no edge memory of
-			// its own. The *Swallow flags latch a press that overlapped
-			// dialog ownership (the cancel press itself, or a brake/flap-up
-			// press held from before the dialog opened): a successful
-			// Escape closes the dialog out from under the still-held
-			// button, and without the latch the very next frame's non-owner
-			// path would fire the normal air-brake/flaps-up key. Swallowed
+			// aBtn.recentered: fires toggleHelp at most once per hold. (X
+			// used to also have a quick-tap view-toggle action, tracked in a
+			// now-removed `outside` field -- that control moved to left Y,
+			// see leftY/leftYSwallow below, since a bare tap is easier to
+			// reach one-handed than a tap-vs-hold face button shared with
+			// help.) owned/helped are otherwise unused by X today but kept
+			// for structural symmetry with aBtn.
+			xBtn:{pressed:false,pressAt:0,helped:false,owned:false},
+			// Right B / left Y previous-press state: doubles as (1) the
+			// dialog-owner cancel press-edge memory (see
+			// processControllerPlain's rActive/lActive branches) and, for Y
+			// only, (2) the press-edge memory for the outside-dialog
+			// view-cycle tap (F1/F2, see the left-hand branch below) -- both
+			// uses need "was this already pressed last frame" to fire
+			// exactly once per physical press, so the fields are shared
+			// rather than duplicated. The *Swallow flags latch a press that
+			// overlapped dialog ownership (the cancel press itself, or a
+			// view-cycle/air-brake press held from before the dialog
+			// opened): a successful Escape closes the dialog out from under
+			// the still-held button, and without the latch the very next
+			// frame's non-owner path could fire the normal air-brake/
+			// view-cycle action off the same still-held press. Swallowed
 			// until physical release.
 			rightB:false,
 			rightBSwallow:false,
@@ -1488,6 +1498,28 @@ EM_JS(void,YsfwInstallWebXR,(),
 			vrHapticPulse(rawSrc);
 		}
 	}
+	// Which sticky-selection FIELD a dial's own highlight actually depends on
+	// right now: dial.guiSel while a GUI-guide face is showing (guiMode
+	// truthy -- drawGuiDialGuide reads dial.guiSel directly, see its own
+	// doc comment), dial.sel for the normal fixed-function face otherwise
+	// (drawDial's own 'sel' parameter). Used by updateDialLayers's redraw
+	// gate below so the per-hand quad canvas actually re-uploads when the
+	// GUI-guide's pointed sector changes -- bug fix: the gate used to
+	// compare dial.sel unconditionally even while guiMode was set, but
+	// updateDialStick never touches dial.sel while routing picks into
+	// dial.guiSel (see its own doc comment) -- so dial.sel sat frozen at
+	// whatever it was before the dialog opened, the gate's inequality check
+	// never tripped again after the guiMode-change redraw that opened the
+	// dialog, and the on-quad highlight silently stopped tracking the stick
+	// for the rest of that dialog session (the AP-menu field report this
+	// fixes: "no pointing highlight at all"). Exposed as vr.dialRedrawKey
+	// purely for scripts/smoke-vrgui.mjs, which cannot reach the real
+	// quad-layer path headless (vr.mvBinding requires a genuine WebXR
+	// session) but can still assert this exact decision tracks guiSel.
+	function dialRedrawKey(dial,guiMode)
+	{
+		return (guiMode ? dial.guiSel : dial.sel);
+	}
 	// sectorN: this hand's NORMAL flight-function dial's sector count
 	// (RIGHT_DIAL.length/LEFT_DIAL.length, 6 today -- the caller passes the
 	// table length; see processControllerPlain's call sites), quantized via
@@ -1509,8 +1541,36 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var upY=(thumb ? -thumb[1] : 0)||0;
 		var mag=Math.sqrt(x*x+upY*upY);
 		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
+		// Bug fix (stale highlight on re-activation): captured BEFORE this
+		// call can flip dial.visible below, so a deflection that crosses
+		// BOTH thresholds in the same frame (a swift flick, not a slow
+		// ramp-up) still sees the pre-activation state here.  If the dial
+		// was fully at rest (hidden) the instant before this deflection,
+		// clear BOTH remembered sectors so the very first pick this
+		// activation starts fresh from the CURRENT stick angle, with no
+		// hysteresis bias toward wherever the stick pointed last time the
+		// dial was active (see pickDialSector: cur===null skips the
+		// hysteresis branch entirely and just takes the freshly computed
+		// idx). Without this, a confirmed pick (e.g. GUN on the right dial)
+		// stuck around in dial.sel across a return-to-rest, and the NEXT
+		// activation's first pickDialSector call still measured the new
+		// stick angle against that stale sector's hysteresis band -- so the
+		// highlight only caught up once the stick escaped the OLD sector's
+		// band, reading as "the highlight didn't move". Both dial.sel and
+		// dial.guiSel are cleared (not just whichever field this call is
+		// about to use) since the SAME dial object's visible flag is shared
+		// across the normal-dial and GUI-guide faces (a dialog can open
+		// after the dial already went to rest in normal-dial mode, or vice
+		// versa), so either field could be the stale one by the time this
+		// dial next reactivates.
+		var wasVisible=dial.visible;
 		if(DIAL_SELECT_THRESHOLD<mag)
 		{
+			if(!wasVisible)
+			{
+				dial.sel=null;
+				dial.guiSel=null;
+			}
 			if(guiSectorN)
 			{
 				pickDialSector(dial,'guiSel',x,upY,guiSectorN,rawSrc);
@@ -1933,27 +1993,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 				}
 			}
 
-			// Left X: mirrors the right hand's A tap-vs-long-press pattern
-			// (see A_TAP_MAX_MS/A_RECENTER_MS above, vr.ctl.xBtn), but the
-			// LONG action here is toggleHelp, not recenter: a quick
-			// press+release (<A_TAP_MAX_MS) toggles the VIEW -- alternating
-			// taps dispatch F2 (FSBTF_OUTSIDEPLAYERVIEW, external/chase)
-			// and F1 (FSBTF_COCKPITVIEW), tracked in xBtn.outside.
-			// Flaps-down, this tap's previous meaning, still lives on the
-			// left dial's Flap- sector, so no function is lost -- the face
-			// button goes to an action a pilot wants at a moment's notice
-			// instead of one that already has a home. (If the pilot changes
-			// view some other way the toggle can desync by one press --
-			// harmless, the next tap resyncs it.) Held >=A_RECENTER_MS
-			// instead toggles the help placards once per hold and
-			// suppresses the view tap on the eventual release. While THIS
-			// hand owns an open dialog (lActive), the quick-tap view
-			// dispatch is parked (same reasoning as the right hand's A
-			// above -- no face-button fumble mid-dialog), but the
-			// long-press help toggle stays live regardless -- it is a
-			// view-only action, not a flight or dialog control (same
-			// reasoning as the right hand's A long-press recenter staying
-			// live during dialogs).
+			// Left X: same press/hold/release bookkeeping as the right
+			// hand's A (see A_TAP_MAX_MS/A_RECENTER_MS above, vr.ctl.xBtn),
+			// but X drives only ONE action now: held >=A_RECENTER_MS toggles
+			// the help placards (toggleHelp), once per hold. X no longer has
+			// a quick-tap action at all -- it used to quick-tap the view
+			// toggle, but that fought the help long-press on the same
+			// button (a quick pilot glance at "which view am I in" could
+			// accidentally eat the start of a help-toggle hold, and vice
+			// versa) and needed a whole separate `outside` toggle-state field
+			// to track F1-vs-F2. View control now lives entirely on left Y
+			// below, a plain single-purpose tap. Flaps-down (X's meaning
+			// before the view toggle ever existed) still lives on the left
+			// dial's Flap- sector, so no function is lost.
 			var xPressed=!!(entry.buttons && entry.buttons.a);
 			var xBtn=vr.ctl.xBtn;
 			var xNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -1965,50 +2017,64 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 			if(xPressed && lActive)
 			{
-				xBtn.owned=true; // see xBtn's doc comment: no tap on release.
+				xBtn.owned=true;
 			}
 			if(xPressed && !xBtn.helped && (xNow-xBtn.pressAt)>=A_RECENTER_MS)
 			{
 				toggleHelp(rawSrc);
 				xBtn.helped=true;
 			}
-			if(!xPressed && xBtn.pressed && !xBtn.helped && (xNow-xBtn.pressAt)<A_TAP_MAX_MS)
-			{
-				if(!lActive && !xBtn.owned)
-				{
-					xBtn.outside=!xBtn.outside;
-					vrHapticPulse(rawSrc);
-					vrKeyTap(xBtn.outside ? 'F2' : 'F1'); // View toggle: external (F2) <-> cockpit (F1).
-				}
-			}
 			xBtn.pressed=xPressed;
 
-			// Left Y: normally a held flaps-up key; while THIS hand owns an
-			// open dialog, Y is instead the truthful cancel/Escape binding,
-			// exactly mirroring the right hand's B above -- fired on the
-			// press edge, plus a release-if-held safety so a flaps-up hold
-			// from before the dialog opened doesn't stay stuck on.
+			// Left Y: view-cycle tap outside dialogs (Fix for the Quest 3S
+			// field report that the OLD X-tap view toggle only ever
+			// alternated cockpit<->ONE external view, when desktop F2
+			// actually cycles through FIVE distinct external views --
+			// FSOUTSIDEPLAYERPLANE/FSFIXEDPOINTPLAYERPLANE/
+			// FSVARIABLEPOINTPLAYERPLANE/FSFROMTOPOFPLAYERPLANE/
+			// FSPLAYERPLANEFROMSIDE, see FsSimulation::ViewingControl's
+			// FSBTF_OUTSIDEPLAYERVIEW case). Fires on the PRESS EDGE only (a
+			// held Y does not repeat-fire): reads the aircraft-state block's
+			// slot [6] (fsvr.h) for where mainWindowViewmode currently sits
+			// along that chain and dispatches F2 to advance it, UNLESS it is
+			// already at the chain's last stop (slot6==5,
+			// FSPLAYERPLANEFROMSIDE) in which case F1 returns straight to
+			// the cockpit -- so N presses from cockpit view walk through
+			// every external view exactly once before returning home,
+			// matching the desktop F2 experience instead of a two-state
+			// toggle. While THIS hand owns an open dialog, Y is instead the
+			// truthful cancel/Escape binding, exactly mirroring the right
+			// hand's B above -- fired on the press edge, plus the same
+			// swallow-until-release latch (vr.ctl.leftYSwallow) Y always
+			// used for its dialog-cancel duty: a successful Escape can close
+			// the dialog out from under the still-held button, and WITHOUT
+			// the latch the very next frame (lActive now false, yPressed
+			// still true, but no longer a fresh edge since vr.ctl.leftY was
+			// already set true by the very press that cancelled the dialog)
+			// would see a non-owner press-edge check -- the latch is the
+			// belt to the edge-check's suspenders, guaranteeing a
+			// dialog-cancelling press can NEVER also advance the view on the
+			// same or a later frame of that same physical press.
 			var yPressed=!!(entry.buttons && entry.buttons.b);
+			var yPressEdge=(yPressed && !vr.ctl.leftY);
 			if(lActive && yPressed)
 			{
-				// Same swallow-until-release rule as the right B above (see
-				// vr.ctl.leftYSwallow's doc comment): without it, the very
-				// cancel press that closes the dialog would fire flaps-up
-				// off the still-held button one frame later.
 				vr.ctl.leftYSwallow=true;
 			}
 			if(!lActive)
 			{
-				vrKeyEdge('KeyR',yPressed && !vr.ctl.leftYSwallow); // Default flaps-up key.
-			}
-			else
-			{
-				vrKeyEdge('KeyR',false);
-				if(yPressed && !vr.ctl.leftY)
+				if(yPressEdge && !vr.ctl.leftYSwallow)
 				{
+					var vsPtr=_YsfwVrAircraftStateDataPointer()>>2;
+					var viewCyclePos=HEAPF32[vsPtr+6];
 					vrHapticPulse(rawSrc);
-					vrKeyTap('Escape');
+					vrKeyTap(5===Math.round(viewCyclePos) ? 'F1' : 'F2'); // Last external view -> cockpit (F1); otherwise advance the chain (F2).
 				}
+			}
+			else if(yPressEdge)
+			{
+				vrHapticPulse(rawSrc);
+				vrKeyTap('Escape');
 			}
 			if(!yPressed)
 			{
@@ -2929,14 +2995,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// change now just re-draws identical pixels) rather than
 			// threading a third redraw condition's removal through this
 			// call, dumpDialLayer, and drawDial's shared signature.
-			if(res.drawnSel!==dial.sel || res.drawnStateSig!==stateSig || res.drawnGuiMode!==guiMode)
+			// "Sticky sector selection" means dial.guiSel while guiMode is
+			// set, dial.sel otherwise -- see dialRedrawKey's doc comment for
+			// why this must NOT simply be dial.sel unconditionally (that was
+			// the AP-menu no-highlight bug: dial.sel never changes while
+			// picks are routed into dial.guiSel by updateDialStick, so the
+			// old unconditional dial.sel comparison could never detect a
+			// guiSel-only change and the quad silently stopped redrawing).
+			var redrawKey=dialRedrawKey(dial,guiMode);
+			if(res.drawnSel!==redrawKey || res.drawnStateSig!==stateSig || res.drawnGuiMode!==guiMode)
 			{
 				try
 				{
 					drawDial(res.ctx,hand,dial.sel,state,guiMode);
 					var sub=vr.mvBinding.getSubImage(res.quad,frame);
 					uploadCanvasToSubImage(res.canvas,sub);
-					res.drawnSel=dial.sel;
+					res.drawnSel=redrawKey;
 					res.drawnStateSig=stateSig;
 					res.drawnGuiMode=guiMode;
 				}
@@ -2992,8 +3066,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		],
 		left:[
 			{cx:80, cy:92,  label:'スティック',label2:'ダイヤル選択'},
-			{cx:64, cy:132, label:'X',        label2:'視点切替(長押し:ヘルプ)'},
-			{cx:96, cy:132, label:'Y',        label2:'フラップ上げ'},
+			{cx:64, cy:132, label:'X',        label2:'長押し:ヘルプ'},
+			{cx:96, cy:132, label:'Y',        label2:'視点切替 / メニュー中:取消'},
 			{cx:80, cy:206, label:'トリガー',  label2:'左ダイヤル機能'},
 			{cx:80, cy:252, label:'グリップ',  label2:'スロットル(押込み過ぎでAB)'}
 		]
@@ -3769,7 +3843,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.lastDialTapHand=null;
 					vr.ctl.lastDialTapAt=0;
 					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false,owned:false};
-					vr.ctl.xBtn={pressed:false,pressAt:0,helped:false,owned:false,outside:false};
+					vr.ctl.xBtn={pressed:false,pressAt:0,helped:false,owned:false};
 					vr.ctl.rightB=false;
 					vr.ctl.rightBSwallow=false;
 					vr.ctl.leftY=false;
@@ -4398,6 +4472,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			return null;
 		}
+	};
+
+	// dialRedrawKey: headless-probe helper for scripts/smoke-vrgui.mjs. The
+	// real per-hand quad's redraw gate (updateDialLayers) lives entirely
+	// behind vr.mvBinding, which requires a genuine WebXR session and so
+	// cannot be driven headless -- but its redraw DECISION (dialRedrawKey
+	// above) is a plain, pure function of vr.ctl.dial[hand]'s own state, so
+	// it can be probed directly: exercises the EXACT SAME function the real
+	// gate calls, proving a guiSel-only change (no dial.sel change) is
+	// actually detected -- the AP-menu no-highlight bug this guards against.
+	vr.dialRedrawKey=function(hand)
+	{
+		var dial=vr.ctl.dial[hand];
+		return dialRedrawKey(dial,dial.guiMode||null);
 	};
 
 	// dumpPerfPlacard: headless-probe helper, the perf-placard counterpart of

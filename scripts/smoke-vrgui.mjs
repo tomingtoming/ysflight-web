@@ -428,6 +428,46 @@ await openApViaLeftDial(page);
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
 check('autopilot menu reopened via the left dial for the remaining checks', guiData[5] === 1 && guiData[6] === 1, 'guiData=' + JSON.stringify(guiData));
 
+// ---- Bug 2 regression: AP-menu pointing highlight must track guiSel -----
+// Field report: deflecting the left stick while the AP menu is open gave NO
+// highlight-following feedback at all. Root cause: the per-hand quad's
+// redraw gate (updateDialLayers, fswebxr.cpp) compared against dial.sel
+// unconditionally, but updateDialStick routes AP-menu picks into
+// dial.guiSel instead (dial.sel is the NORMAL fixed-dial field, left
+// untouched while a guiMode dialog owns this hand) -- so the gate's
+// inequality check could never trip again after the ONE redraw that opened
+// the dialog, and the on-quad highlight silently froze for the rest of
+// that dialog session. This specific regression cannot be reproduced
+// through vr.dumpDialLayer (used by every other assertion in this file)
+// since that helper always redraws fresh, bypassing the gate entirely --
+// which is exactly why the bug shipped uncaught. vr.dialRedrawKey exposes
+// the gate's own decision function (dialRedrawKey in fswebxr.cpp) so this
+// test can assert it tracks guiSel the same way the real per-frame gate
+// does, without needing a real WebXR session (vr.mvBinding). Runs while the
+// AP menu opened just above is still open (dialogVisible/apMenu==1).
+const selBeforeApNav = await page.evaluate(() => globalThis.Module.ysfwVr.ctl.dial.left.sel);
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: SECTOR_THUMB.up, buttons: {} }]); // point at sector 0 ("1...")
+const apDialState1 = await page.evaluate(() => ({
+  guiSel: globalThis.Module.ysfwVr.ctl.dial.left.guiSel,
+  redrawKey: globalThis.Module.ysfwVr.dialRedrawKey('left')
+}));
+check('AP menu: pointing at sector 0 sets guiSel to 0', apDialState1.guiSel === 0, 'state=' + JSON.stringify(apDialState1));
+check('AP menu: the redraw-gate key tracks guiSel (0), not the frozen normal-dial sel', apDialState1.redrawKey === 0, 'state=' + JSON.stringify(apDialState1));
+
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: SECTOR_THUMB.down, buttons: {} }]); // point at sector 3 ("4...Takeoff")
+const apDialState2 = await page.evaluate(() => ({
+  guiSel: globalThis.Module.ysfwVr.ctl.dial.left.guiSel,
+  sel: globalThis.Module.ysfwVr.ctl.dial.left.sel,
+  redrawKey: globalThis.Module.ysfwVr.dialRedrawKey('left')
+}));
+check('AP menu: pointing at a DIFFERENT sector (3) moves guiSel', apDialState2.guiSel === 3, 'state=' + JSON.stringify(apDialState2));
+check('AP menu: the redraw-gate key changed along with guiSel (0 -> 3) -- proves the real quad would actually redraw', apDialState1.redrawKey !== apDialState2.redrawKey && apDialState2.redrawKey === 3, 'before=' + JSON.stringify(apDialState1) + ' after=' + JSON.stringify(apDialState2));
+check('AP menu: dial.sel (the NORMAL dial field) never moved -- exactly why the old dial.sel-only gate stayed frozen', apDialState2.sel === selBeforeApNav, 'before=' + selBeforeApNav + ' after=' + apDialState2.sel);
+guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
+check('AP menu still open after pointing around it (pure navigation, no confirm)', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // back to rest
+
 const HALF_ROLL_30 = [Math.sin(15 * Math.PI / 180), 0, 0, Math.cos(15 * Math.PI / 180)]; // ~30deg about X (pitch axis in controller-local space)
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 1, trigger: 0, thumb: [0, 0], buttons: {} }]); // grab neutral
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: HALF_ROLL_30, squeeze: 1, trigger: 0, thumb: [0, 0], buttons: {} }]); // deflect
@@ -482,14 +522,19 @@ await page.waitForTimeout(300);
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
 check('owner-hand cancel (Y press) closes the dialog (dialogVisible back to 0)', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
 // The cancel press closes the dialog out from under the STILL-HELD Y: the
-// next controller frame sees lActive=false with yPressed=true, and without
-// the swallow-until-release latch (vr.ctl.leftYSwallow, fswebxr.cpp) that
-// frame would fire the normal flaps-up KeyR off the cancel press itself.
+// next controller frame sees lActive=false with yPressed=true. Fix B moved
+// Y's outside-dialog action from a level-sensed flaps-up hold (KeyR) to an
+// edge-triggered view-cycle tap (F1/F2) -- since vr.ctl.leftY was already
+// latched true by the very press that cancelled the dialog, this is not a
+// fresh press edge either, so the non-owner branch's edge check alone would
+// already block a view tap here; the swallow-until-release latch
+// (vr.ctl.leftYSwallow, fswebxr.cpp) is kept as a second, independent guard
+// against the same leak (see the left-hand branch's doc comment).
 await resetKeys(page);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: true } }]); // Y STILL held after the close
 await page.waitForTimeout(120);
 keys = await readKeys(page);
-check('the still-held cancel press does NOT leak into flaps-up (KeyR) after the dialog closes (swallow-until-release)', !keys.includes('down:KeyR'), 'keys=' + JSON.stringify(keys));
+check('the still-held cancel press does NOT leak into a view-cycle tap after the dialog closes (swallow-until-release)', !keys.includes('down:F1') && !keys.includes('down:F2'), 'keys=' + JSON.stringify(keys));
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: false } }]); // physical release ends the swallow
 
 // ---- After close: left dial reverts to normal, guiMode clears -----------
