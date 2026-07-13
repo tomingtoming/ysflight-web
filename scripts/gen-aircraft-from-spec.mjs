@@ -251,14 +251,6 @@ function decals() {
         const A1 = ringPt(zn1, i, N), B1 = ringPt(zn1, i + 1, N);
         if (Math.max(A0[1], B0[1], A1[1], B1[1]) < ck.y0 ||
             Math.min(A0[1], B0[1], A1[1], B1[1]) > ck.y1) continue;
-        const yA = (zn) => A0[1] + ((zn - zn0) / (zn1 - zn0)) * (A1[1] - A0[1]);
-        const yB = (zn) => B0[1] + ((zn - zn0) / (zn1 - zn0)) * (B1[1] - B0[1]);
-        const sgn = Math.sign(B0[1] - A0[1] || B1[1] - A1[1]) || 1;
-        let poly = clip(outline, (p) => p[0] - zn0);
-        poly = clip(poly, (p) => zn1 - p[0]);
-        poly = clip(poly, (p) => sgn * (p[1] - yA(p[0])));
-        poly = clip(poly, (p) => sgn * (yB(p[0]) - p[1]));
-        if (poly.length < 3 || area2(poly) < 0.004) continue;
         // facet plane normal (outward: same winding as the fuselage quad)
         const F = [[A1[0], A1[1], zys(zn1)], [B1[0], B1[1], zys(zn1)],
                    [B0[0], B0[1], zys(zn0)], [A0[0], A0[1], zys(zn0)]];
@@ -269,13 +261,60 @@ function decals() {
         }
         const nl = Math.hypot(nx, ny, nz) || 1;
         nx /= nl; ny /= nl; nz /= nl;
-        const pts = poly.map(([zn, y]) => {
-          const u = (zn - zn0) / (zn1 - zn0);
-          const yl = yA(zn), yh = yB(zn);
-          const v = (y - yl) / ((yh - yl) || 1e-9);
+        // bilinear map (u = row param, v = ring param) -> 3D on the facet
+        const on3d = (u, v) => {
           const x = (A0[0] + (A1[0] - A0[0]) * u) * (1 - v) + (B0[0] + (B1[0] - B0[0]) * u) * v;
-          return [x + nx * 0.025, y + ny * 0.025, zys(zn) + nz * 0.025];
-        });
+          const y = (A0[1] + (A1[1] - A0[1]) * u) * (1 - v) + (B0[1] + (B1[1] - B0[1]) * u) * v;
+          const z = zys(zn0 + (zn1 - zn0) * u);
+          return [x + nx * 0.025, y + ny * 0.025, z + nz * 0.025];
+        };
+        let pts;
+        if (Math.abs(nz) <= Math.abs(nx)) {
+          // SIDE-facing facet: clip the side-view outline in (zn, y)
+          const yA = (zn) => A0[1] + ((zn - zn0) / (zn1 - zn0)) * (A1[1] - A0[1]);
+          const yB = (zn) => B0[1] + ((zn - zn0) / (zn1 - zn0)) * (B1[1] - B0[1]);
+          const sgn = Math.sign(B0[1] - A0[1] || B1[1] - A1[1]) || 1;
+          let poly = clip(outline, (p) => p[0] - zn0);
+          poly = clip(poly, (p) => zn1 - p[0]);
+          poly = clip(poly, (p) => sgn * (p[1] - yA(p[0])));
+          poly = clip(poly, (p) => sgn * (yB(p[0]) - p[1]));
+          if (poly.length < 3 || area2(poly) < 0.004) continue;
+          pts = poly.map(([zn, y]) => {
+            const u = (zn - zn0) / (zn1 - zn0);
+            const yl = yA(zn), yh = yB(zn);
+            return on3d(u, (y - yl) / ((yh - yl) || 1e-9));
+          });
+        } else {
+          // FRONT-facing dome facet: the side view can't see this region (it
+          // ends at the crown silhouette) — the FACE view says the panes run
+          // to ~0.06m off the centerline.  Clip a front rectangle in (x, y)
+          // against the facet's own (x, y) quad, then invert affinely.
+          const fw = ck.frontHalfW || 0;
+          if (!fw) continue;
+          const rect = [[-fw, ck.frontY0 ?? ck.y0], [fw, ck.frontY0 ?? ck.y0], [fw, ck.y1], [-fw, ck.y1]];
+          const Q = [A0, B0, B1, A1];
+          const qa = Q.reduce((s, p, k) => {
+            const q = Q[(k + 1) % 4];
+            return s + p[0] * q[1] - q[0] * p[1];
+          }, 0);
+          if (qa < 0) Q.reverse();
+          let poly = rect;
+          for (let k = 0; k < 4 && poly.length; k++) {
+            const a = Q[k], b = Q[(k + 1) % 4];
+            poly = clip(poly, (p) => (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]));
+          }
+          if (poly.length < 3 || area2(poly) < 0.004) continue;
+          // affine inverse on basis (B0-A0 = ring, A1-A0 = row)
+          const rux = B0[0] - A0[0], ruy = B0[1] - A0[1];
+          const rvx = A1[0] - A0[0], rvy = A1[1] - A0[1];
+          const det = rux * rvy - ruy * rvx || 1e-9;
+          pts = poly.map(([x, y]) => {
+            const dx = x - A0[0], dy = y - A0[1];
+            const v = (dx * rvy - dy * rvx) / det;       // ring param
+            const u = (rux * dy - ruy * dx) / det;       // row param
+            return on3d(u, v);
+          });
+        }
         // wind the piece to face the facet's outward normal
         let px = 0, py = 0, pz = 0;
         for (let k = 0; k < pts.length; k++) {
