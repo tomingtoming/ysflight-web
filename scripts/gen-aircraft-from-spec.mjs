@@ -416,6 +416,76 @@ function decals() {
       }
     }
   }
+  // Block-letter titles (spec.decals.titles: [{text, zn, y, h, color}]): a
+  // tiny stroke font — each stroke becomes a thin quad floated off the skin.
+  // The far side mirrors the glyph cells so both sides read nose-first.
+  const FONT = {
+    U: [[.1, 1, .1, .08], [.1, .08, .9, .08], [.9, .08, .9, 1]],
+    N: [[.1, 0, .1, 1], [.1, 1, .9, 0], [.9, 0, .9, 1]],
+    I: [[.5, 0, .5, 1]],
+    T: [[.05, 1, .95, 1], [.5, 0, .5, 1]],
+    E: [[.1, 0, .1, 1], [.1, 1, .9, 1], [.1, .5, .72, .5], [.1, 0, .9, 0]],
+    D: [[.1, 0, .1, 1], [.1, 1, .68, 1], [.68, 1, .9, .72], [.9, .72, .9, .28], [.9, .28, .68, 0], [.68, 0, .1, 0]],
+    S: [[.9, 1, .1, 1], [.1, 1, .1, .52], [.1, .52, .9, .52], [.9, .52, .9, 0], [.9, 0, .1, 0]],
+    A: [[.1, 0, .5, 1], [.5, 1, .9, 0], [.27, .38, .73, .38]],
+    O: [[.1, 0, .1, 1], [.1, 1, .9, 1], [.9, 1, .9, 0], [.9, 0, .1, 0]],
+    F: [[.1, 0, .1, 1], [.1, 1, .9, 1], [.1, .5, .72, .5]],
+    M: [[.1, 0, .1, 1], [.1, 1, .5, .42], [.5, .42, .9, 1], [.9, 1, .9, 0]],
+    R: [[.1, 0, .1, 1], [.1, 1, .85, 1], [.85, 1, .85, .55], [.85, .55, .1, .55], [.5, .55, .9, 0]],
+    C: [[.9, .95, .1, .95], [.1, .95, .1, .05], [.1, .05, .9, .05]],
+    0: [[.1, 0, .1, 1], [.1, 1, .9, 1], [.9, 1, .9, 0], [.9, 0, .1, 0]],
+    3: [[.1, 1, .9, 1], [.9, 1, .9, 0], [.35, .52, .9, .52], [.1, 0, .9, 0]],
+  };
+  for (const tt of [].concat(D.titles || [])) {
+    const h = tt.h || 0.8, cw = h * 0.62, adv = h * 0.78, t = h * 0.13, toff = tt.off ?? 0.06;
+    const col = COL[tt.color] || COL.win;
+    const chars = [...String(tt.text)];
+    chars.forEach((ch, i) => {
+      const st = FONT[ch.toUpperCase()];
+      if (!st) return; // space advances silently
+      for (const [u0, v0, u1, v1] of st) {
+        for (const sgn of [1, -1]) {
+          // far side: mirror the glyph cell AND reverse the letter order, so
+          // both sides read naturally left-to-right from outside
+          const slot = sgn > 0 ? i : chars.length - 1 - i;
+          const zn = (u) => tt.zn + slot * adv + (sgn > 0 ? u : 1 - u) * cw;
+          const [zA, zB] = [zn(u0), zn(u1)];
+          const [yA, yB] = [tt.y + v0 * h, tt.y + v1 * h];
+          let px = -(yB - yA), py = zB - zA;
+          const pl = Math.hypot(px, py) || 1;
+          px = (px / pl) * (t / 2); py = (py / pl) * (t / 2);
+          const pts = [[zA + px, yA + py], [zB + px, yB + py], [zB - px, yB - py], [zA - px, yA - py]];
+          const q = pts.map(([zz, yy]) => [sgn * (skinX(zz, yy) + toff), yy, zys(zz)]);
+          // wind to face outward (+-x): a stroke drawn "backwards" would
+          // otherwise get an inward Newell normal and light black in-game
+          let nx = 0;
+          for (let k = 0; k < 4; k++) {
+            const [, y0_, z0] = q[k], [, y1_, z1] = q[(k + 1) % 4];
+            nx += (y0_ - y1_) * (z0 + z1);
+          }
+          if (nx * sgn < 0) q.reverse();
+          addFace(g, q.map((p) => addV(g, ...p)), col);
+        }
+      }
+    });
+  }
+  // Fin decals (spec.decals.fin: [{zn, y, w, h, color, off?}]): rectangles
+  // floated off BOTH sides of the fin — enough vocabulary to compose a flag.
+  // Later entries stack 8mm further out so overlaps never z-fight.
+  if (D.fin) {
+    D.fin.forEach((r, i) => {
+      const off = (r.off ?? 0.2) + i * 0.008;
+      for (const sgn of [1, -1]) {
+        const q = [
+          [sgn * off, r.y, zys(r.zn)],
+          [sgn * off, r.y, zys(r.zn + r.w)],
+          [sgn * off, r.y + r.h, zys(r.zn + r.w)],
+          [sgn * off, r.y + r.h, zys(r.zn)],
+        ].map((p) => addV(g, ...p));
+        addFace(g, sgn > 0 ? q : q.slice().reverse(), COL[r.color] || COL.stripe);
+      }
+    });
+  }
   // Cockpit glass: the drawing's side-view window outline (raked LE and all)
   // + the face-view front panes, painted on the hull.
   if (D.cockpit) {
