@@ -1,5 +1,6 @@
 build*/
 dist/
+dist-prof/
 node_modules
 *.log
 tools/

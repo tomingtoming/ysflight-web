@@ -801,6 +801,60 @@
     });
   }
 
+  // ---- WebGL state shadow ---------------------------------------------------
+  // The engine (ysgl) brackets nearly every draw with save/restore state
+  // queries: YsGLSLUse3DRenderer reads GL_CURRENT_PROGRAM on EVERY renderer
+  // activation (1-4 per shell node per frame, ysglsl3ddrawing.c:860) and
+  // YsHasShellExtVboSet::Render reads GL_FRONT_FACE once per node
+  // (ysshellextgl_gl2.cpp:40), plus viewport/blend-func reads elsewhere
+  // (fsopengl2.0.cpp, fsparticlegl2.0.cpp, ysglslplain2ddrawing.c).  In
+  // WebGL, getParameter is a synchronous round trip toward the GPU process
+  // -- profiled at ~78% of ALL engine CPU time in VR (docs/perf-vr-72hz.md).
+  // Shadow the handful of states the engine actually queries: record them in
+  // the setter wrappers, answer those getParameter enums from the shadow.
+  // Every other pname falls through to the real getParameter untouched.
+  // (Correct because ALL writes to these states go through the same wrapped
+  // methods, whoever the caller is; the engine only ever uses sane viewport/
+  // blend arguments, so GL's clamp/invalid-arg edge cases don't diverge.)
+  (function () {
+    function installShadow(gl) {
+      if (gl.__ysfwStateShadow) return;
+      gl.__ysfwStateShadow = true;
+      var st = {
+        program: null,
+        frontFace: 0x0901, // GL_CCW -- the GL default
+        viewport: [0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight], // GL default at creation
+        srcRGB: 1, dstRGB: 0, srcA: 1, dstA: 0 // GL_ONE / GL_ZERO defaults
+      };
+      var useProgram = gl.useProgram, frontFace = gl.frontFace,
+          viewport = gl.viewport, blendFunc = gl.blendFunc,
+          blendFuncSeparate = gl.blendFuncSeparate, getParameter = gl.getParameter;
+      gl.useProgram = function (p) { st.program = p || null; return useProgram.call(this, p); };
+      gl.frontFace = function (m) { st.frontFace = m; return frontFace.call(this, m); };
+      gl.viewport = function (x, y, w, h) { st.viewport = [x | 0, y | 0, w | 0, h | 0]; return viewport.call(this, x, y, w, h); };
+      gl.blendFunc = function (s, d) { st.srcRGB = st.srcA = s; st.dstRGB = st.dstA = d; return blendFunc.call(this, s, d); };
+      gl.blendFuncSeparate = function (sr, dr, sa, da) { st.srcRGB = sr; st.dstRGB = dr; st.srcA = sa; st.dstA = da; return blendFuncSeparate.call(this, sr, dr, sa, da); };
+      gl.getParameter = function (pname) {
+        switch (pname) {
+          case 0x8B8D: return st.program;                 // CURRENT_PROGRAM (emscripten's glue maps the object back to its GL id)
+          case 0x0B46: return st.frontFace;               // FRONT_FACE
+          case 0x0BA2: return new Int32Array(st.viewport); // VIEWPORT -- fresh copy, like the real call
+          case 0x80C9: return st.srcRGB;                  // BLEND_SRC_RGB
+          case 0x80C8: return st.dstRGB;                  // BLEND_DST_RGB
+          case 0x80CB: return st.srcA;                    // BLEND_SRC_ALPHA
+          case 0x80CA: return st.dstA;                    // BLEND_DST_ALPHA
+        }
+        return getParameter.call(this, pname);
+      };
+    }
+    var getCtx = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      var ctx = getCtx.call(this, type, attrs);
+      if (ctx && ('webgl2' === type || 'webgl' === type || 'experimental-webgl' === type)) installShadow(ctx);
+      return ctx;
+    };
+  })();
+
   function loadEngine() {
     var s = document.createElement('script');
     s.async = true;
@@ -1153,6 +1207,9 @@
     // rate, ?vraa=1 re-enables MSAA. Controller-feel knobs: ?vryawdz=<deg>
     // rudder-only deadzone (default 6), ?vrexpo=<n> stick exponent curve
     // (default 1.0 = off) -- see fswebxr.cpp's deflectionFromDeltaQ.
+    // ?vrperf=1 prints a '[vrperf]' phase-breakdown console line every 5s
+    // (engine tick/sim/draw + multiview scene/hud/gui/reticle + JS-side
+    // controller/dial/help-layer EMAs) -- see fswebxr.cpp's printVrPerfLine.
     (function () {
       var q = new URLSearchParams(location.search);
       var o = {};
@@ -1163,6 +1220,7 @@
       if (q.get('vrhud') === '0') o.hud = false; // kill switch for the VR HUD composite
       if (q.get('vrreticle') === '0') o.reticle = false; // kill switch for the collimated gunsight reticle (restores the baked flat-HUD crosshair)
       if (q.get('vrhelp') === '0') o.help = false; // kill switch for the per-hand controller help placards
+      if (q.get('vrperf') === '1') o.perf = true; // print a '[vrperf]' phase-breakdown console line every 5s (see fswebxr.cpp's printVrPerfLine)
       // ?vrpanel=1 forces the in-flight-dialog quad on (default off: the
       // right dial's selection guide alone drives any dialog that fits it,
       // see fswebxr.cpp's guiPanelWanted/maybeForceGuiPanel).
@@ -1202,11 +1260,34 @@
       var st = Module.ysfwVr && Module.ysfwVr.stats;
       if (st && st.avgFps) {
         var n = document.createElement('div');
+        n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(13,20,29,.92);color:#cfe0f5;border:1px solid #2a3647;border-radius:8px;padding:8px 14px;font-size:13px';
         // CPU ms/frame next to fps: if CPU ms ~= the frame period, the frame
         // is CPU-bound (resolution won't help); if far below, it's not.
         var cpu = (st.cpuMs ? ', ' + st.cpuMs.toFixed(0) + 'ms CPU/frame' : '');
-        n.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps (avg, ' + st.seconds.toFixed(0) + 's)' + cpu;
-        n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(13,20,29,.92);color:#cfe0f5;border:1px solid #2a3647;border-radius:8px;padding:8px 14px;font-size:13px';
+        var line1 = document.createElement('div');
+        // grantedHz: the compositor rate the session actually ran at -- avg
+        // fps right below it means clean pacing; well under it means missed
+        // vsyncs (see fswebxr.cpp's updateTargetFrameRate negotiation).
+        var hz = (st.grantedHz ? ' @' + st.grantedHz + 'Hz' : '');
+        line1.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps' + hz + ' (avg, ' + st.seconds.toFixed(0) + 's)' + cpu;
+        n.appendChild(line1);
+        // Phase-breakdown second line (fswebxr.cpp's vr.stats.phases,
+        // snapshotted at session end from the same engine/JS perf numbers
+        // the in-VR placard and '[vrperf]' console line show). A separate
+        // child div (not string concatenation into n.textContent) so the
+        // two lines wrap independently. Shown whenever the snapshot is
+        // nonzero -- not gated behind ?vrperf=1: the snapshot costs
+        // nothing, and this chip is what actually gets read after a
+        // headset A/B run.
+        var ph = st.phases;
+        if (ph && (ph.sim || ph.draw || ph.scene || ph.hud || ph.gui || ph.reticle || ph.ctl || ph.dial || ph.layers)) {
+          var line2 = document.createElement('div');
+          line2.style.cssText = 'font-size:11px;opacity:.85;margin-top:3px';
+          line2.textContent = 'sim ' + ph.sim.toFixed(1) + ' / draw ' + ph.draw.toFixed(1) +
+            ' (scene ' + ph.scene.toFixed(1) + ' hud ' + ph.hud.toFixed(1) + ' gui ' + ph.gui.toFixed(1) + ') / js ' +
+            (ph.ctl + ph.dial + ph.layers).toFixed(1);
+          n.appendChild(line2);
+        }
         n.onclick = function () { if (n.parentNode) n.remove(); };
         document.body.appendChild(n);
         setTimeout(function () { if (n.parentNode) n.remove(); }, 12000);
