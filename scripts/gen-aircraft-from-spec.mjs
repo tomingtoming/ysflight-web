@@ -230,8 +230,11 @@ function decals() {
   // bottom level so the region below stays in the band color).
   for (const c of [].concat(D.cheatline || [])) {
     const nr = c.noseRise;
+    // pow shapes the sweep: ~1.6 = gentle ramp, ~3 = hug the line then kick
+    // up hard at the nose (the AF1 J-curve).  Clamp at 1 so front-dome
+    // facets forward of znFrom don't extrapolate the lift past the crest.
     const lift = (zn, dy) => (nr && dy && zn < nr.znEnd
-      ? dy * Math.pow((nr.znEnd - zn) / (nr.znEnd - c.znFrom), 1.6) : 0);
+      ? dy * Math.pow(Math.min(1, (nr.znEnd - zn) / (nr.znEnd - c.znFrom)), nr.pow || 1.6) : 0);
     const yB = (zn) => c.y0 + lift(zn, nr && nr.dy0);
     const yT = (zn) => c.y1 + lift(zn, nr && nr.dy1);
     if (nr) {
