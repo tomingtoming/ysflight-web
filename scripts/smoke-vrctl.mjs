@@ -204,14 +204,14 @@ const keysAfterButtons = await page.evaluate(() => {
   return window.__vrctlKeys.slice();
 });
 check('buttons: air-brake key ("KeyB") dispatched (right B)', keysAfterButtons.includes('KeyB'), 'keys=' + JSON.stringify(keysAfterButtons));
-// NOTE: left X ("flaps-down") is NOT checked here any more -- it now has
-// tap-vs-long-press semantics (see Group 6b below), same as right A, so a
-// bare press with no release does not immediately dispatch KeyF.
+// NOTE: left X is NOT checked here any more -- it now has tap-vs-long-press
+// semantics (see Group 6b below), same as right A, so a bare press with no
+// release does not immediately dispatch its view-toggle tap.
 check('buttons: flaps-up key ("KeyR") dispatched (left Y)', keysAfterButtons.includes('KeyR'), 'keys=' + JSON.stringify(keysAfterButtons));
 check('buttons: right A press-only does NOT immediately fire gear (tap/recenter semantics, see Group 6)', !keysAfterButtons.includes('KeyG'), 'keys=' + JSON.stringify(keysAfterButtons));
-check('buttons: left X press-only does NOT immediately fire flaps-down (tap/help semantics, see Group 6b)', !keysAfterButtons.includes('KeyF'), 'keys=' + JSON.stringify(keysAfterButtons));
+check('buttons: left X press-only does NOT immediately fire the view toggle (tap/help semantics, see Group 6b)', !keysAfterButtons.includes('F2') && !keysAfterButtons.includes('F1'), 'keys=' + JSON.stringify(keysAfterButtons));
 // Release right A and left X (both quick taps) so neither lingers into
-// Group 6/6b -- each is expected to fire its own delayed KeyG/KeyF tap of
+// Group 6/6b -- each is expected to fire its own delayed KeyG/F2 tap of
 // its own, which is fine, it's not asserted on here.
 await page.evaluate(() => {
   globalThis.Module.ysfwVr.pokeControllerFrame([
@@ -253,7 +253,7 @@ check('right A: long hold (>=1s) attempts recenter (vr.recenterAttempts incremen
 check('right A: long hold does not fire gear while still held', !longHoldResult.keysWhileHeld.includes('KeyG'), 'keys=' + JSON.stringify(longHoldResult.keysWhileHeld));
 check('right A: long hold does not fire gear on release either (suppressed by recenter)', !longHoldResult.keysAfterRelease.includes('KeyG'), 'keys=' + JSON.stringify(longHoldResult.keysAfterRelease));
 
-// ---- Group 6b: left X press/hold/release -> flap tap vs help toggle -----
+// ---- Group 6b: left X press/hold/release -> view toggle vs help toggle --
 // Mirrors Group 6's right-A tap-vs-long-press pattern exactly (same
 // A_TAP_MAX_MS/A_RECENTER_MS constants, see fswebxr.cpp's vr.ctl.xBtn), but
 // the LONG action here toggles the help placards (see toggleHelp) instead
@@ -266,7 +266,21 @@ await page.evaluate(() => {
   vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]);
 });
 let keysAfterXQuickTap = await page.evaluate(() => window.__vrctlKeys.slice());
-check('left X: quick press+release (<400ms) taps flaps-down ("KeyF")', keysAfterXQuickTap.includes('KeyF'), 'keys=' + JSON.stringify(keysAfterXQuickTap));
+// Order-agnostic: an earlier group's X tap may already have advanced the
+// toggle, so assert the PAIR alternates rather than pinning which comes
+// first (xBtn.outside flips per tap; F2=external, F1=cockpit).
+const firstViewKey = keysAfterXQuickTap.includes('F2') ? 'F2' : (keysAfterXQuickTap.includes('F1') ? 'F1' : null);
+check('left X: quick press+release (<400ms) taps a view key (F1 or F2)', firstViewKey !== null, 'keys=' + JSON.stringify(keysAfterXQuickTap));
+// Second quick tap alternates to the OTHER view key -- the xBtn.outside toggle.
+await page.evaluate(() => { window.__vrctlKeys = []; });
+await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]);
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]);
+});
+const keysAfterXSecondTap = await page.evaluate(() => window.__vrctlKeys.slice());
+const otherViewKey = ('F2' === firstViewKey ? 'F1' : 'F2');
+check('left X: second quick tap alternates to the other view key', null !== firstViewKey && keysAfterXSecondTap.includes(otherViewKey), 'first=' + firstViewKey + ' keys=' + JSON.stringify(keysAfterXSecondTap));
 
 // ---- Group 7: rudder-only yaw deadzone (Feature 3) -----------------------
 // Default yawDeadzoneDeg=6 (fswebxr.cpp DEFAULT_YAW_DEADZONE_DEG): a wrist
