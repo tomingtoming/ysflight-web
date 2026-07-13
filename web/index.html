@@ -1260,11 +1260,30 @@
       var st = Module.ysfwVr && Module.ysfwVr.stats;
       if (st && st.avgFps) {
         var n = document.createElement('div');
+        n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(13,20,29,.92);color:#cfe0f5;border:1px solid #2a3647;border-radius:8px;padding:8px 14px;font-size:13px';
         // CPU ms/frame next to fps: if CPU ms ~= the frame period, the frame
         // is CPU-bound (resolution won't help); if far below, it's not.
         var cpu = (st.cpuMs ? ', ' + st.cpuMs.toFixed(0) + 'ms CPU/frame' : '');
-        n.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps (avg, ' + st.seconds.toFixed(0) + 's)' + cpu;
-        n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(13,20,29,.92);color:#cfe0f5;border:1px solid #2a3647;border-radius:8px;padding:8px 14px;font-size:13px';
+        var line1 = document.createElement('div');
+        line1.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps (avg, ' + st.seconds.toFixed(0) + 's)' + cpu;
+        n.appendChild(line1);
+        // Phase-breakdown second line (fswebxr.cpp's vr.stats.phases,
+        // snapshotted at session end from the same engine/JS perf numbers
+        // the in-VR placard and '[vrperf]' console line show). A separate
+        // child div (not string concatenation into n.textContent) so the
+        // two lines wrap independently. Shown whenever the snapshot is
+        // nonzero -- not gated behind ?vrperf=1: the snapshot costs
+        // nothing, and this chip is what actually gets read after a
+        // headset A/B run.
+        var ph = st.phases;
+        if (ph && (ph.sim || ph.draw || ph.scene || ph.hud || ph.gui || ph.reticle || ph.ctl || ph.dial || ph.layers)) {
+          var line2 = document.createElement('div');
+          line2.style.cssText = 'font-size:11px;opacity:.85;margin-top:3px';
+          line2.textContent = 'sim ' + ph.sim.toFixed(1) + ' / draw ' + ph.draw.toFixed(1) +
+            ' (scene ' + ph.scene.toFixed(1) + ' hud ' + ph.hud.toFixed(1) + ' gui ' + ph.gui.toFixed(1) + ') / js ' +
+            (ph.ctl + ph.dial + ph.layers).toFixed(1);
+          n.appendChild(line2);
+        }
         n.onclick = function () { if (n.parentNode) n.remove(); };
         document.body.appendChild(n);
         setTimeout(function () { if (n.parentNode) n.remove(); }, 12000);

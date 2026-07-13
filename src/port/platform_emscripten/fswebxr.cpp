@@ -169,6 +169,21 @@ that owns the session and fills that state every frame:
     dialog's own N wedges instead of the fixed table's N -- see its doc
     comment), standing in for the visual feedback a pilot not looking at
     the guide quad would otherwise miss.
+  - Perf placard: Module.ysfwVrOptions.perf (?vrperf=1) already printed a
+    '[vrperf]' phase-breakdown console line every 5s, but reading the
+    browser console while wearing a headset is impractical. The same
+    numbers (engine tick/sim/draw + scene/HUD/GUI/reticle breakdown, JS-side
+    ctl/dial/layers EMAs, rolling fps) are now ALSO redrawn onto a small
+    head-locked XRQuadLayer (layers path only, same lazy-resource/
+    try-catch discipline as the dial and help quads above -- see
+    ensurePerfResources/drawPerfPlacard/updatePerfLayers), positioned below
+    and centred relative to the two dial quads so it can never overlap
+    them. Redrawn at most once a second (the numbers are themselves ~1s-ish
+    EMAs, so redrawing every frame would just be needless GL upload for no
+    visible benefit). At session end the same numbers are snapshotted into
+    vr.stats.phases so web/index.html's post-session chip can show a phase
+    line too, unconditionally (that snapshot costs nothing, unlike the
+    console line/quad which stay opt-in behind ?vrperf=1).
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -335,9 +350,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		mvDepthSize:null,
 		testMode:false,
 		// JS-side EMA (alpha=0.05, same shape as the engine's fsvr.h
-		// FsVrPerfDataPointer) of the per-frame cost of the three JS-side VR
-		// maintenance calls onXRFrame makes on the multiview path -- see
-		// accumJsPerf/onXRFrame below. Read by the '[vrperf]' console line.
+		// FsVrPerfDataPointer) of the per-frame cost of the JS-side VR
+		// maintenance calls onXRFrame makes on the multiview path: ctl
+		// (updateControllers), dial (updateDialLayers), layers (the help AND
+		// perf placards' maintenance, updateHelpLayers+updatePerfLayers,
+		// folded together since both are "extra quad-layer upkeep") -- see
+		// accumJsPerf/onXRFrame below. Read by the '[vrperf]' console line,
+		// the perf placard, and the post-session chip.
 		jsPerf:{ctl:0,dial:0,layers:0},
 		jsPerfWindow:0,
 		// VR HUD composite (fsvr.h FsVrHudDataPointer): an off-screen two-layer
@@ -382,6 +401,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// updateHelpAutoHide, scripts/smoke-vrctl.mjs Group 11).
 		helpRes:{right:undefined,left:undefined},
 		help:{visible:false,shownAt:0},
+		// Head-locked perf placard (Module.ysfwVrOptions.perf, ?vrperf=1):
+		// same lazy-resource shape as dialRes/helpRes above (undefined = not
+		// yet attempted, false = unavailable, object =
+		// {canvas,ctx,quad,inLayers,drawnAt} once created), but single (no
+		// per-hand pair) and anchored to viewerSpace like the dial quads --
+		// see ensurePerfResources/updatePerfLayers.
+		perfRes:undefined,
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -2843,13 +2869,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 	}
 
 	// Rebuilds session.renderState.layers from scratch out of every quad
-	// currently marked inLayers (dial + help placards, both hands) plus the
-	// projection layer first/background.  Dial and help visuals are updated
-	// from separate functions (updateDialLayers/updateHelpLayers) that can
-	// each change independently, so neither may build the array from just
-	// its own state -- doing so would silently drop the other's quad the
-	// next time only one of them changes (the array is not additive across
-	// calls, WebXR replaces the whole list each updateRenderState).
+	// currently marked inLayers (dial + help placards, both hands, plus the
+	// single perf placard) plus the projection layer first/background.
+	// Dial, help, and perf visuals are each updated from separate functions
+	// (updateDialLayers/updateHelpLayers/updatePerfLayers) that can each
+	// change independently, so none may build the array from just its own
+	// state -- doing so would silently drop the others' quads the next time
+	// only one of them changes (the array is not additive across calls,
+	// WebXR replaces the whole list each updateRenderState).
 	function syncRenderStateLayers()
 	{
 		var layers=[vr.mvLayer];
@@ -2857,6 +2884,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.dialRes.left && vr.dialRes.left.inLayers){ layers.push(vr.dialRes.left.quad); }
 		if(vr.helpRes.right && vr.helpRes.right.inLayers){ layers.push(vr.helpRes.right.quad); }
 		if(vr.helpRes.left && vr.helpRes.left.inLayers){ layers.push(vr.helpRes.left.quad); }
+		if(vr.perfRes && vr.perfRes.inLayers){ layers.push(vr.perfRes.quad); }
 		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
 	}
 
@@ -3150,16 +3178,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 		p[key]=(0===p[key] ? ms : p[key]*0.95+ms*0.05);
 	}
 
-	// Prints the '[vrperf]' phase-breakdown line: engine tick/sim/draw
-	// (YsfwGetTickMs / FsVrPerfDataPointer slots [0][1]), the multiview
-	// draw-path breakdown (slots [2..5], see fsvr.h), and the JS-side EMAs
-	// gathered in onXRFrame around the multiview-only maintenance calls
-	// (controller processing, dial canvas redraw+upload, help-quad layer
-	// maintenance). Safe to call whether or not the wasm build exports
-	// _YsfwVrPerfDataPointer (defensive: older cached builds during
-	// development). All EMA, so a single call is a representative snapshot,
-	// not a one-frame spike.
-	function printVrPerfLine()
+	// Single source of truth for every number the '[vrperf]' console line,
+	// the in-headset perf placard (drawPerfPlacard below), and the
+	// post-session chip (vr.stats.phases, see the session-end handler)
+	// display, so the three consumers can never drift out of sync with each
+	// other or with fsvr.h's FsVrPerfDataPointer slot layout. Safe to call
+	// whether or not the wasm build exports _YsfwVrPerfDataPointer
+	// (defensive: older cached builds during development). All EMA, so a
+	// single call is a representative snapshot, not a one-frame spike.
+	function readVrPerfSnapshot()
 	{
 		var tick=(Module._YsfwGetTickMs ? Module._YsfwGetTickMs() : 0);
 		var sim=0,draw=0,scene=0,hud=0,gui=0,reticle=0;
@@ -3170,11 +3197,157 @@ EM_JS(void,YsfwInstallWebXR,(),
 			scene=HEAPF32[p+2]; hud=HEAPF32[p+3]; gui=HEAPF32[p+4]; reticle=HEAPF32[p+5];
 		}
 		var jp=vr.jsPerf;
-		console.log('[vrperf] tick '+tick.toFixed(1)+
-		            ' | sim '+sim.toFixed(1)+' draw '+draw.toFixed(1)+
-		            ' | scene '+scene.toFixed(1)+' hud '+hud.toFixed(1)+' gui '+gui.toFixed(1)+' reticle '+reticle.toFixed(1)+
-		            ' | js: ctl '+jp.ctl.toFixed(1)+' dial '+jp.dial.toFixed(1)+' layers '+jp.layers.toFixed(1)+
+		// vr.stats only exists once vr.enter() has run at least once (set at
+		// the top of vr.enter, below) -- guard so headless callers that draw
+		// the placard via forceMultiview/dumpPerfPlacard without a real
+		// session (never calling vr.enter) get 0 instead of throwing.
+		return {tick:tick,sim:sim,draw:draw,scene:scene,hud:hud,gui:gui,reticle:reticle,
+		        ctl:jp.ctl,dial:jp.dial,layers:jp.layers,fps:(vr.stats ? vr.stats.fps : 0)};
+	}
+
+	// Prints the '[vrperf]' phase-breakdown line: engine tick/sim/draw
+	// (YsfwGetTickMs / FsVrPerfDataPointer slots [0][1]), the multiview
+	// draw-path breakdown (slots [2..5], see fsvr.h), and the JS-side EMAs
+	// gathered in onXRFrame around the multiview-only maintenance calls
+	// (controller processing, dial canvas redraw+upload, help/perf-quad
+	// layer maintenance).
+	function printVrPerfLine()
+	{
+		var s=readVrPerfSnapshot();
+		console.log('[vrperf] tick '+s.tick.toFixed(1)+
+		            ' | sim '+s.sim.toFixed(1)+' draw '+s.draw.toFixed(1)+
+		            ' | scene '+s.scene.toFixed(1)+' hud '+s.hud.toFixed(1)+' gui '+s.gui.toFixed(1)+' reticle '+s.reticle.toFixed(1)+
+		            ' | js: ctl '+s.ctl.toFixed(1)+' dial '+s.dial.toFixed(1)+' layers '+s.layers.toFixed(1)+
 		            ' (ms EMA)');
+	}
+
+	// ---- Perf placard: head-locked live numbers (Module.ysfwVrOptions.perf)
+	// -------------------------------------------------------------------
+	// Same lazy-resource / layers-path discipline as the dial and help quads
+	// above: quad-layer visuals are a "nice to have" here -- any failure
+	// leaves the '[vrperf]' console line and the post-session chip working
+	// exactly as before. This is the actual fix for "reading the console in
+	// VR is impractical": the same EMA numbers printed every 5s are also
+	// redrawn onto a small head-locked quad, at most once a second.
+	var PERF_CANVAS_W=768, PERF_CANVAS_H=192;
+	var PERF_QUAD_W=0.30, PERF_QUAD_H=0.075;
+	// Below and centred relative to the dial quads (ensureDialResources:
+	// x=+-0.18, y=-0.18, z=-0.8, 0.12m square each) -- this placard's own
+	// y=-0.2625..-0.3375 band (0.075m tall, centred at -0.30) never overlaps
+	// the dials' y=-0.12..-0.24 band regardless of its wider x extent.
+	var PERF_QUAD_POS={x:0,y:-0.30,z:-0.85};
+	// Drawn at most once a second (see updatePerfLayers) -- dark-
+	// translucent-rounded-panel visual language matching drawHelpCanvas
+	// above, monospace so the columns of numbers line up.
+	function drawPerfPlacard(ctx)
+	{
+		var w=PERF_CANVAS_W,h=PERF_CANVAS_H;
+		var s=readVrPerfSnapshot();
+		ctx.clearRect(0,0,w,h);
+		ctx.fillStyle='rgba(10,14,20,0.6)';
+		roundRectPath(ctx,4,4,w-8,h-8,16);
+		ctx.fill();
+		ctx.strokeStyle='rgba(230,237,243,0.35)';
+		ctx.lineWidth=2;
+		ctx.stroke();
+
+		ctx.textAlign='left';
+		ctx.textBaseline='middle';
+		ctx.font='30px monospace';
+		ctx.fillStyle='rgba(230,237,243,0.95)';
+		ctx.fillText('tick '+s.tick.toFixed(1)+'ms  sim '+s.sim.toFixed(1)+'  draw '+s.draw.toFixed(1),24,50);
+		ctx.fillText('scene '+s.scene.toFixed(1)+'  hud '+s.hud.toFixed(1)+'  gui '+s.gui.toFixed(1)+'  ret '+s.reticle.toFixed(1),24,102);
+		ctx.fillStyle='rgba(160,200,255,0.95)';
+		ctx.fillText('js: ctl '+s.ctl.toFixed(1)+'  dial '+s.dial.toFixed(1)+'  layers '+s.layers.toFixed(1)+'   '+s.fps.toFixed(1)+'fps',24,154);
+	}
+	function ensurePerfResources()
+	{
+		if(undefined!==vr.perfRes)
+		{
+			return vr.perfRes; // cached: an object, or false (unavailable).
+		}
+		var res=false;
+		try
+		{
+			if(vr.mvBinding && vr.viewerSpace)
+			{
+				var canvas=document.createElement('canvas');
+				canvas.width=PERF_CANVAS_W;
+				canvas.height=PERF_CANVAS_H;
+				var quad=vr.mvBinding.createQuadLayer({
+					space:vr.viewerSpace,
+					viewPixelWidth:PERF_CANVAS_W,
+					viewPixelHeight:PERF_CANVAS_H,
+					layout:'mono',
+					width:PERF_QUAD_W,
+					height:PERF_QUAD_H,
+					transform:new XRRigidTransform(PERF_QUAD_POS)
+				});
+				try
+				{
+					if('blendTextureSourceAlpha' in quad)
+					{
+						quad.blendTextureSourceAlpha=true;
+					}
+				}catch(e){}
+				res={canvas:canvas,ctx:canvas.getContext('2d'),quad:quad,inLayers:false,drawnAt:0};
+			}
+		}
+		catch(e)
+		{
+			console.warn('[vr] perf quad layer unavailable: '+(e&&e.message?e.message:e));
+			res=false;
+		}
+		vr.perfRes=res;
+		return res;
+	}
+	// Per-frame perf-placard maintenance, the perf counterpart of
+	// updateDialLayers/updateHelpLayers above: created lazily on the first VR
+	// frame with Module.ysfwVrOptions.perf enabled, torn down (both the
+	// layers-array entry and the toggle-off case below) the instant perf is
+	// switched off, and fully reset at session end (see the session-end
+	// handler). Redrawn+uploaded at most once a second -- see
+	// drawPerfPlacard's doc comment.
+	function updatePerfLayers(frame)
+	{
+		var opts=Module.ysfwVrOptions||{};
+		if(!vr.mvBinding || !opts.perf)
+		{
+			if(vr.perfRes && vr.perfRes.inLayers)
+			{
+				vr.perfRes.inLayers=false;
+				syncRenderStateLayers();
+			}
+			return; // No layers support, or the perf placard just isn't wanted.
+		}
+		var res=ensurePerfResources();
+		if(!res)
+		{
+			return; // No quad-layer support: console line/chip still work.
+		}
+		var layersChanged=false;
+		if(!res.inLayers)
+		{
+			res.inLayers=true;
+			res.drawnAt=0; // Force an immediate first draw+upload.
+			layersChanged=true;
+		}
+		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
+		if(1000<=now-res.drawnAt)
+		{
+			try
+			{
+				drawPerfPlacard(res.ctx);
+				var sub=vr.mvBinding.getSubImage(res.quad,frame);
+				uploadCanvasToSubImage(res.canvas,sub);
+				res.drawnAt=now;
+			}
+			catch(e){} // Leave res.drawnAt so the next frame retries.
+		}
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
+		}
 	}
 
 	function onXRFrame(t,frame)
@@ -3254,9 +3427,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 				var perfP2=performance.now();
 				updateHelpLayers(frame);
 				var perfP3=performance.now();
+				updatePerfLayers(frame);
+				var perfP4=performance.now();
 				accumJsPerf('ctl',perfP1-perfP0);
 				accumJsPerf('dial',perfP2-perfP1);
-				accumJsPerf('layers',perfP3-perfP2);
+				// Help + perf placard maintenance folded into one bucket
+				// (see jsPerf's doc comment on the vr object literal).
+				accumJsPerf('layers',(perfP3-perfP2)+(perfP4-perfP3));
 			}
 		}
 		else
@@ -3433,6 +3610,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 						// session is already ending): whatever the perf block last
 						// held, right next to the fps/CPU summary above.
 						printVrPerfLine();
+						// Same numbers, snapshotted onto vr.stats so
+						// web/index.html's post-session chip (Module.onVrEnd)
+						// can show a phase line too -- unconditionally (not
+						// gated behind Module.ysfwVrOptions.perf like the
+						// console line/quad above): the snapshot itself costs
+						// nothing, and the chip is what actually gets read
+						// after a headset A/B run.
+						var pf=readVrPerfSnapshot();
+						st.phases={sim:pf.sim,draw:pf.draw,scene:pf.scene,hud:pf.hud,gui:pf.gui,reticle:pf.reticle,
+						           ctl:pf.ctl,dial:pf.dial,layers:pf.layers};
 					}
 					vr.session=null;
 					vr.refSpace=null;
@@ -3487,6 +3674,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.dialRes={right:undefined,left:undefined};
 					vr.helpRes={right:undefined,left:undefined};
 					vr.help={visible:false,shownAt:0};
+					vr.perfRes=undefined;
 
 					teardownHud();
 					teardownGui();
@@ -4053,6 +4241,32 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// dialog, null on the other -- no longer hardcoded to 'right'.
 			var guiMode=dial.guiMode||null;
 			drawDial(ctx,hand,dial.sel,state,guiMode);
+			return canvas.toDataURL('image/png');
+		}
+		catch(e)
+		{
+			return null;
+		}
+	};
+
+	// dumpPerfPlacard: headless-probe helper, the perf-placard counterpart of
+	// dumpDialLayer above, so a human/script can eyeball what the perf
+	// placard (drawPerfPlacard) actually renders without a real WebXR
+	// session/quad-layer (ensurePerfResources requires vr.mvBinding/
+	// vr.viewerSpace, neither of which exist in the headless test harness --
+	// vr.forceMultiview does not stand up a real WebXR layers binding, see
+	// its doc comment). Draws through the EXACT SAME drawPerfPlacard the
+	// real head-locked quad uses, onto a throwaway 2D canvas -- a readback
+	// of the real placard content, not a reimplementation of it.
+	vr.dumpPerfPlacard=function()
+	{
+		try
+		{
+			var canvas=document.createElement('canvas');
+			canvas.width=PERF_CANVAS_W;
+			canvas.height=PERF_CANVAS_H;
+			var ctx=canvas.getContext('2d');
+			drawPerfPlacard(ctx);
 			return canvas.toDataURL('image/png');
 		}
 		catch(e)
