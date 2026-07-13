@@ -223,8 +223,12 @@ function foilLoft(sections, thickness, colorT, colorB, spanAxis) {
     const up = [], dn = [];
     for (const [cf, uT, uB] of PROF) {
       const z = zys(s.znLE + s.chord * cf);
-      up.push(addV(g, ...pt(s.span, off + uT * t, z), true));
-      dn.push(addV(g, ...pt(s.span, off + uB * t, z), true));
+      // NOT smooth ('R'): a thin airfoil shares LE/TE/tip-cap topology between
+      // its up- and down-facing skins, so the engine's averaged vertex normal
+      // goes edge-on and Gouraud paints the whole panel near-black in flight.
+      // Flat is what stock wings do; R stays on genuinely closed rounds only.
+      up.push(addV(g, ...pt(s.span, off + uT * t, z)));
+      dn.push(addV(g, ...pt(s.span, off + uB * t, z)));
     }
     return { up, dn };
   });
