@@ -29,22 +29,30 @@ that owns the session and fills that state every frame:
     throttle), and the face buttons fire synthetic KeyboardEvents on the
     default key bindings (gear, spoiler/brake, flaps).
   - Each hand's trigger is a SaccFlight-style radial "function dial":
-    pushing that hand's thumbstick past a deadzone picks one of 4 sectors
-    (up/right/down/left), the pick sticks after the stick recentres, and
-    the trigger then dispatches whichever function is currently selected
-    (see RIGHT_DIAL/LEFT_DIAL below). While a session uses the WebXR
-    layers path (single-pass stereo, see YsfwVrSetMultiview above), each
-    hand also gets a small head-locked XRQuadLayer showing the dial so the
-    selection is visible in-headset; without layers the dial still works,
-    it is just invisible.
-  - The dial quads also show LIVE aircraft state (fsvr.h /
-    FsVrAircraftStateDataPointer), not just static labels: the right dial's
-    Gear/Brake sectors show the current UP/DOWN (or transitional %) and
-    ON/OFF, its centre shows the selected weapon short-name + remaining
-    count; the left dial's Flap+/Flap- sectors and centre show the current
-    flap %. The canvas is only redrawn when the sticky sector selection OR
-    this state changes (see updateDialLayers/aircraftStateSig below), not
-    every frame.
+    pushing that hand's thumbstick past a deadzone picks one of N evenly-
+    spaced sectors (N=RIGHT_DIAL.length/LEFT_DIAL.length, 6 today, sector i
+    centred at i*(360/N) degrees clockwise from up -- see updateDialStick),
+    the pick sticks after the stick recentres, and the trigger then
+    dispatches whichever function is currently selected (see RIGHT_DIAL/
+    LEFT_DIAL below). While a session uses the WebXR layers path (single-
+    pass stereo, see YsfwVrSetMultiview above), each hand also gets a small
+    head-locked XRQuadLayer showing the dial so the selection is visible
+    in-headset; without layers the dial still works, it is just invisible.
+  - The dial quads use the same fully-transparent, radial-spoke-label
+    visual language as the in-flight-GUI guide below (drawDial reuses
+    drawSpokeSpan/fitSpokeLabel -- see drawGuiDialGuide's doc comment for
+    the design rationale): a thin tick per sector (longer/amber + a small
+    arrowhead for the selected one) and the function's label text running
+    outward along that sector's spoke -- no wedge fill, no centre hub.
+    LIVE aircraft state (fsvr.h / FsVrAircraftStateDataPointer) still
+    shows on the face: gear UP/DOWN/%, brake ON/OFF, flap %, and the
+    selected weapon + remaining count are drawn as a dimmer second span
+    chained past the owning entry's label along its spoke, keyed off the
+    entry's key code rather than the old fixed up/right/down/left slots
+    (see dialEntryStateText) so the tables can be reordered freely. The
+    canvas is only redrawn when the sticky sector selection OR this state
+    changes (see updateDialLayers/aircraftStateSig below), not every
+    frame.
   - Four on-device-tested control refinements (SaccFlight-style), all
     implemented in processControllerPlain/deflectionFromDeltaQ below:
       - Recenter: holding right A for >=1s re-offsets the reference space
@@ -82,23 +90,24 @@ that owns the session and fills that state every frame:
     computeGuiMenuLayout reading the engine's real option labels -- fsvr.h's
     FsVrGuiMenuPointer, written every VR frame by
     FsSimulation::SimComputeVrGuiState regardless of the composite below) is
-    SELF-SUFFICIENT to operate any in-flight dialog that fits its 6 slots and
-    is hotkey-driven (guiMenu.drivable), which covers the autopilot family
-    plus the radio-comm/ATC/approach menus (see fsvr.h's apMenu doc comment
-    for the exact list) -- so the on-quad rendering of the dialog itself is
-    now OPT-IN, default OFF (see guiPanelWanted/Module.ysfwVrOptions.guiPanel,
-    ?vrpanel=1). setupGui/teardownGui allocate a second off-screen two-layer
-    multiview framebuffer (640x360x2, see fsvr.h's FsVrGuiDataPointer --
-    shrunk from an earlier 1024x640 so the SAME absolute-pixel dialog layout
-    covers a bigger fraction of the texture, ~1.6x bigger on the composited
-    quad) that the engine (FsSimulation::SimDrawVrGui) renders whichever
-    dialog is currently open into every frame, composited onto a second,
-    GUI-anchored quad (closer/lower than the HUD glass) -- see
-    guiDialogState/vr.readGuiData. Absolute kill switch:
-    Module.ysfwVrOptions.gui===false. The panel is force-enabled anyway
-    (maybeForceGuiPanel) the instant the guide itself finds a dialog it
-    cannot fully drive -- more real options than its 6 slots (radio-comm
-    menus can have 7+), or not hotkey-driven at all
+    SELF-SUFFICIENT to operate any in-flight dialog that fits its
+    GUI_DIAL_CAPACITY (8) slots and is hotkey-driven (guiMenu.drivable), which
+    covers the autopilot family plus the radio-comm/ATC/approach menus (see
+    fsvr.h's apMenu doc comment for the exact list) -- so the on-quad
+    rendering of the dialog itself is now OPT-IN, default OFF (see
+    guiPanelWanted/Module.ysfwVrOptions.guiPanel, ?vrpanel=1). setupGui/
+    teardownGui allocate a second off-screen two-layer multiview framebuffer
+    (640x360x2, see fsvr.h's FsVrGuiDataPointer -- shrunk from an earlier
+    1024x640 so the SAME absolute-pixel dialog layout covers a bigger
+    fraction of the texture, ~1.6x bigger on the composited quad) that the
+    engine (FsSimulation::SimDrawVrGui) renders whichever dialog is currently
+    open into every frame, composited onto a second, GUI-anchored quad
+    (closer/lower than the HUD glass) -- see guiDialogState/vr.readGuiData.
+    Absolute kill switch: Module.ysfwVrOptions.gui===false. The panel is
+    force-enabled anyway (maybeForceGuiPanel) the instant the guide itself
+    finds a dialog it cannot fully drive -- more real options than
+    GUI_DIAL_CAPACITY (radio-comm's wingman-command menu is exactly 8, right
+    at the cap), or not hotkey-driven at all
     (replay/continue/stationary/vehicle-change/chat -- mouse-only) -- so
     nothing becomes unreachable, it just costs the composite only when
     actually needed.
@@ -108,30 +117,47 @@ that owns the session and fills that state every frame:
     guiDialogState().visible transitions false->true, from
     vr.ctl.lastDialTapHand -- see processControllerPlain's doc comment;
     defaults to 'left', where the AP tap lives, if that is stale/unknown).
-    While a dialog is open, processControllerPlain reroutes ONLY the owner
-    hand's 4 stick sectors + A/B to the dialog's own hotkeys (Digit1..5/
-    Digit0, see GUI_DIAL) when guiMenu.drivable, or to a generic
-    Escape/cancel tap otherwise (GUI_ESCAPE_ACTION); the owner hand's
-    thumbstick click is repurposed as a truthful cancel/Escape binding (the
-    one input left spare once 4 sectors + trigger + A + B are spoken for).
-    The OTHER hand is completely untouched -- its dial, trigger, A/B/X/Y all
-    keep their normal flight-control meaning, exactly as if no dialog were
-    open, so the pilot never loses that hand's functions to a dialog they
-    didn't open. Discoverability: the owner hand's quad is FORCED visible for
-    as long as a dialog stays open (regardless of thumbstick engagement) and
-    switches to a dialog-guide face -- sectors numbered 1..4 (+A=5/B=0, or
-    X=5/Y=0 on the left hand, in the centre) labelled with the dialog's REAL
-    option text when drivable, or a uniform "ESC" face (with a "see panel"
-    hint once the panel is forced) otherwise -- see
+    While a dialog is open, processControllerPlain reroutes the owner hand's
+    stick sectors to the dialog's own hotkeys when guiMenu.drivable, or
+    to a generic Escape/cancel tap otherwise (GUI_ESCAPE_ACTION); the owner
+    hand's thumbstick click is repurposed as a truthful cancel/Escape
+    binding. That is the WHOLE dialog grammar: sector pick + trigger
+    confirm + stick-click cancel, nothing else. Like the normal RIGHT_DIAL/
+    LEFT_DIAL (a fixed table, N=6 sectors today, see updateDialStick), the
+    drivable guide dial is also N-WAY, but its N is DYNAMIC instead of
+    fixed: it shows one sector PER REAL OPTION the open dialog reports
+    (N=guiMenu.options.length, up to GUI_DIAL_CAPACITY=8), evenly dividing
+    the circle starting at up (12 o'clock) and going clockwise, sector i
+    dispatching guiMenu.options[i]'s OWN real hotkey (read positionally off
+    the engine's label text via parseMenuLabel -- see guiDialEngagedFor/
+    hotkeyCode below) -- NOT a fixed Digit1..4 table, so a 6- or 7-option
+    menu (radio-comm's wingman-command dialog has 7 numbered commands plus
+    an explicit "0...Don't send" option, 8 total) is fully dial-selectable
+    without ever needing the on-quad panel.
+    The owner hand's A/B (X/Y on the left hand) are simply PARKED while the
+    dialog is open: their normal flight taps (gear/brake, flaps) are
+    suppressed so a face-button fumble mid-dialog can't drop the gear, and
+    they carry no dialog meaning either -- the N sectors already reach every
+    real option, so a second fixed-digit path would only be a redundant
+    grammar to memorize. (A's long-press recenter stays live -- view-only,
+    dialog-irrelevant.) The OTHER hand is completely untouched --
+    its dial, trigger, A/B/X/Y all keep their normal flight-control meaning,
+    exactly as if no dialog were open, so the pilot never loses that hand's
+    functions to a dialog they didn't open. Discoverability: the owner hand's
+    quad is FORCED visible for as long as a dialog stays open (regardless of
+    thumbstick engagement) and switches to a dialog-guide face -- N sectors
+    numbered 1..N labelled with the
+    dialog's REAL option text when drivable, or a uniform "ESC" face (with a
+    "see panel" hint once the panel is forced) otherwise -- see
     drawGuiDialGuide/rdial.guiMode/rdial.guiMenu (ldial.* symmetrically);
     falls back to the normal dial the instant the dialog closes. Grip-stick
     (aileron/elevator/rudder) and the throttle grip are NEVER affected, on
-    EITHER hand: the plane keeps flying regardless of any open dialog. See
-    the doc comment on GUI_DIAL for why this stops at a 4-hotkey stick
-    mapping rather than the generic Tab-focus/Arrow-key/Enter scheme a first
-    read of the engine might suggest -- most in-flight dialogs (the autopilot
-    family included) do not actually route keyboard input through that
-    generic path.
+    EITHER hand: the plane keeps flying regardless of any open dialog. A
+    haptic pulse fires on every sector change in guide mode too (the SAME
+    updateDialStick pick the normal dial uses, just quantized to the
+    dialog's own N wedges instead of the fixed table's N -- see its doc
+    comment), standing in for the visual feedback a pilot not looking at
+    the guide quad would otherwise miss.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -296,6 +322,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// fully drive on its own, for the rest of the session (see
 		// guiPanelWanted, teardownGui resets it).
 		guiForced:false,
+		// Headless-test-only override for guiDialogState()/readGuiMenu()
+		// below (see vr.pokeGuiMenu/vr.clearGuiOverride, scripts/
+		// smoke-vrgui.mjs): null in every real session (both functions read
+		// the native FsVrGuiDataPointer/FsVrGuiMenuPointer blocks exactly as
+		// before). Exists because reaching a REAL >6-option in-flight dialog
+		// headlessly (radio-comm's wingman-command menu needs a live AI
+		// wingman in formation, non-trivial to script) would cost far more
+		// than it proves about this file's OWN N-way sector-picking/mapping
+		// math (updateDialStick/computeGuiMenuLayout/guiDialEngagedFor),
+		// which is pure JS with no engine dependency once given a menu list
+		// -- so the test fabricates one instead of the real dialog. The
+		// 6-option autopilot menu (a real dialog, reachable the normal way)
+		// still covers one genuine end-to-end N!=4 case.
+		testGuiOverride:null,
 		// Head-locked function-dial quad layers (lazily created, layers path
 		// only). viewerSpace: the session's 'viewer' reference space the
 		// quads are anchored to. dialRes[hand]: undefined = not yet
@@ -353,20 +393,30 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// Right A button: press/hold/release state for the tap-vs-
 			// recenter decision (see A_TAP_MAX_MS/A_RECENTER_MS).
 			aBtn:{pressed:false,pressAt:0,recentered:false},
-			rightB:false,
-			leftX:false,
-			leftY:false,
 			leftTrigger:false,
 			keys:{},
 			// Radial function-dial state per hand (see RIGHT_DIAL/LEFT_DIAL).
-			// sel: sticky selected sector ('up'|'right'|'down'|'left').
+			// sel: sticky selected sector INDEX (0..N-1, numeric, N=that
+			//   hand's table length -- 6 today) for the NORMAL flight-
+			//   function dial, using the SAME continuous-angle + hysteresis
+			//   N-way pick as guiSel below (see updateDialStick) -- just
+			//   quantized to the table's fixed N instead of a dialog's
+			//   dynamic one. Also harmlessly updated (but never read for
+			//   anything user-visible) while the generic/ESC GUI-guide face
+			//   is showing, since that face's uniform "every sector = ESC"
+			//   dispatch doesn't key off sel at all. guiSel: sticky selected
+			//   sector INDEX (0..N-1, numeric) for the N-way GUI-guide dial
+			//   ONLY, reset to 0 every time a dialog freshly opens (see
+			//   processControllerPlain's guiOwner-assignment block) --
+			//   entirely separate state from sel so the normal dial can never
+			//   be left holding a stale numeric value once a dialog closes.
 			// engaged: the function snapshot captured at the trigger's press
 			//   edge (see processControllerPlain) -- kept for the whole press
 			//   so a mid-press dial flick can't retarget an already-firing
 			//   trigger. visible/hideAt drive the quad layer's on/off fade.
 			dial:{
-				right:{sel:'up',engaged:null,visible:false,hideAt:0},
-				left:{sel:'up',engaged:null,visible:false,hideAt:0}
+				right:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0},
+				left:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0}
 			},
 			// Last known grip pose per hand, plain-copied out of this frame's
 			// XRPose each frame in updateControllers (real XR path only --
@@ -380,89 +430,162 @@ EM_JS(void,YsfwInstallWebXR,(),
 	Module.ysfwVr=vr;
 
 	// ---- Radial function-dial tables (SaccFlightAndVehicles-style) ------
-	// One function per sector per hand.  keyCode is the DOM KeyboardEvent
-	// code dispatched (see fssimplewindow_emscripten.cpp's keyCodeMapping
-	// for the code->FSKEY table); mode 'hold' mirrors the trigger's raw
-	// press/release (key held as long as the trigger is), mode 'tap' fires
-	// one keydown+keyup pulse on the trigger's press edge only. Every key
-	// below is cross-checked against FsControlAssignment::SetDefaultKeyAssign
-	// (upstream/YSFLIGHT/src/core/fscontrol.cpp) -- see the per-entry notes.
-	var RIGHT_DIAL={
-		// FSBTF_FIREWEAPON (Space): a level-sensed virtual button in the
-		// engine (fscontrol.cpp's "implemented through virtual buttons of
-		// FsAirplaneProperty" switch) -- fires while held, so 'hold'.
-		up:   {label:'Gun',    code:'Space', mode:'hold'},
-		// FSBTF_SELECTWEAPON (Digit2): cycles the selected weapon
+	// One function per sector per hand, ARRAYS now (not up/right/down/left
+	// keyed objects): entry i sits at canvas/stick angle i*(360/N) degrees
+	// clockwise from up (N=array length, 6 today for both hands -- the SAME
+	// convention updateDialStick's N-way pick and drawDial's rendering both
+	// use, and the SAME convention the GUI-guide dial already used for its
+	// dynamic N -- see computeGuiMenuLayout/drawGuiDialGuide). keyCode is
+	// the DOM KeyboardEvent code dispatched (see fssimplewindow_emscripten.
+	// cpp's keyCodeMapping for the code->FSKEY table); mode 'hold' mirrors
+	// the trigger's raw press/release (key held as long as the trigger is,
+	// used for level-sensed virtual buttons), mode 'tap' fires one
+	// keydown+keyup pulse on the trigger's press edge only (used for
+	// toggles/cycles/edge actions). Every key below is cross-checked against
+	// FsControlAssignment::SetDefaultKeyAssign (upstream/YSFLIGHT/src/core/
+	// fscontrol.cpp) -- see the per-entry notes.
+	var RIGHT_DIAL=[
+		// [0] up (0deg). FSBTF_FIREWEAPON (Space): a level-sensed virtual
+		// button in the engine (fscontrol.cpp's "implemented through virtual
+		// buttons of FsAirplaneProperty" switch) -- fires while held, so
+		// 'hold'.
+		{label:'Gun',     code:'Space', mode:'hold'},
+		// [1] 60deg. FSBTF_SELECTWEAPON (Digit2): cycles the selected weapon
 		// (FsGroundProperty::CycleWeaponOfChoiceByUser / ctlCycleWeaponButtonExt)
 		// on the press edge -- a 'tap', not a hold, and matches the touch UI's
 		// own weapon-select button (web/index.html's tap('Digit2')).
-		right:{label:'武器切替',code:'Digit2',mode:'tap'},
-		// FSBTF_LANDINGGEAR (KeyG): fscontrol.cpp toggles
+		{label:'武器切替', code:'Digit2',mode:'tap'},
+		// [2] 120deg. FSBTF_DISPENSEFLARE (Digit4): another level-sensed
+		// virtual button (same fscontrol.cpp switch as FSBTF_FIREWEAPON
+		// above) -- fires while held, so 'hold', same as Gun.
+		{label:'フレア',   code:'Digit4',mode:'hold'},
+		// [3] 180deg (down). FSBTF_LANDINGGEAR (KeyG): fscontrol.cpp toggles
 		// ctlGear=(ctlGear<0.5?1.0:0.0) on each press -- a toggle, so 'tap'
 		// (one edge per trigger pull, not a sustained hold).
-		down: {label:'Gear',   code:'KeyG',  mode:'tap'},
-		// FSBTF_SPOILERBRAKE (KeyB): same toggle pattern as gear
+		{label:'Gear',    code:'KeyG',  mode:'tap'},
+		// [4] 240deg. FSBTF_SPOILERBRAKE (KeyB): same toggle pattern as gear
 		// (ctlSpoiler=(ctlSpoiler<0.5?1.0:0.0) in fscontrol.cpp) -- 'tap',
 		// not 'hold', despite the name "brake" suggesting a held button.
-		left: {label:'Brake',  code:'KeyB',  mode:'tap'}
-	};
-	var LEFT_DIAL={
-		// FSBTF_FLAPUP (KeyR): steps one flap position per press -- 'tap'.
-		up:   {label:'Flap+',  code:'KeyR', mode:'tap'},
-		// FSBTF_FLAPDOWN (KeyF): steps one flap position per press -- 'tap'.
-		down: {label:'Flap-',  code:'KeyF', mode:'tap'},
-		// No default key targets FSBTF_SMOKE itself (SetDefaultKeyAssign
-		// binds only FSKEY_P -> FSBTF_CYCLESMOKESELECTOR); that cycle
-		// function advances the smoke-generator channel on the press edge
-		// (FsAirplaneProperty::CycleSmokeSelector, called from
-		// IsCycleSmokeSelectorButtonJustPressed) -- an edge action, so
-		// 'tap' here (deviates from the brief's "hold" guess: there is no
-		// holdable smoke key in the shipped defaults).
-		right:{label:'Smoke',  code:'KeyP', mode:'tap'},
-		// Free slot: FSBTF_OPENAUTOPILOTMENU (Backspace) opens the
+		{label:'Brake',   code:'KeyB',  mode:'tap'},
+		// [5] 300deg. FSBTF_RADAR (Digit3): toggles the radar display on the
+		// press edge (fscontrol.cpp's toggle-switch pattern, same shape as
+		// gear/brake above) -- 'tap'.
+		{label:'レーダー', code:'Digit3',mode:'tap'}
+	];
+	var LEFT_DIAL=[
+		// [0] up (0deg). FSBTF_FLAPUP (KeyR): steps one flap position per
+		// press -- 'tap'.
+		{label:'Flap+',  code:'KeyR',     mode:'tap'},
+		// [1] 60deg. No default key targets FSBTF_SMOKE itself
+		// (SetDefaultKeyAssign binds only FSKEY_P -> FSBTF_CYCLESMOKESELECTOR);
+		// that cycle function advances the smoke-generator channel on the
+		// press edge (FsAirplaneProperty::CycleSmokeSelector, called from
+		// IsCycleSmokeSelectorButtonJustPressed) -- an edge action, so 'tap'
+		// here (deviates from an earlier "hold" guess: there is no holdable
+		// smoke key in the shipped defaults).
+		{label:'Smoke',  code:'KeyP',     mode:'tap'},
+		// [2] 120deg. FSBTF_OPENRADIOCOMMMENU (Enter): opens the radio-comm
+		// dialog on the press edge -- 'tap' (opens a dialog, same as AP
+		// below; the existing GUI-guide machinery -- guiOwner/guiMenu/
+		// drawGuiDialGuide -- takes over this hand automatically the instant
+		// dialogVisible flips true, exactly as it does for AP).
+		{label:'無線',    code:'Enter',    mode:'tap'},
+		// [3] 180deg (down). FSBTF_FLAPDOWN (KeyF): steps one flap position
+		// per press -- 'tap'.
+		{label:'Flap-',  code:'KeyF',     mode:'tap'},
+		// [4] 240deg. FSBTF_OPENAUTOPILOTMENU (Backspace) opens the
 		// autopilot dialog -- a deliberately calm, occasional action (the
 		// tablet touch UI already treats it as a tap), which fits the left
 		// hand well since that hand's grip already owns the continuous
 		// throttle control and its trigger is otherwise idle.
-		left: {label:'AP',     code:'Backspace',mode:'tap'}
-	};
+		{label:'AP',     code:'Backspace',mode:'tap'},
+		// [5] 300deg. FSBTF_AUTOTRIM (KeyT): a level-sensed virtual button
+		// (same fscontrol.cpp switch as FIREWEAPON/DISPENSEFLARE) -- fires
+		// while held, so 'hold' (holding it trims continuously; releasing
+		// stops).
+		{label:'トリム',  code:'KeyT',     mode:'hold'}
+	];
 
 	// GUI-dialog stick mapping (see SimDrawVrGui's doc comment / fsvr.h's
 	// FsVrGuiDataPointer): while a modal in-flight dialog is open (guiData[5]
 	// dialogVisible), this REPLACES RIGHT_DIAL/LEFT_DIAL for the OWNER hand's
-	// thumbstick 4 sectors (see vr.ctl.guiOwner / processControllerPlain's
+	// thumbstick sectors (see vr.ctl.guiOwner / processControllerPlain's
 	// rActive/lActive -- whichever hand's dial tap plausibly opened the
 	// dialog), so that hand's trigger sector-tap dispatches the dialog's own
 	// direct hotkeys instead of its normal flight functions. The OTHER hand
-	// never consults this table at all -- see the class doc comment's
-	// "Ownership" paragraph. Digit1..4 only: this table is only consulted
-	// when computeGuiMenuLayout says the menu is "drivable" (see
-	// processControllerPlain) -- the engine reports apMenu (the open dialog
-	// is one of the hotkey-driven in-flight dialogs: the autopilot family
-	// plus radio-comm/ATC/approach menus, see fsvr.h's apMenu doc comment for
-	// the full list) AND has at least one real option. Those dialogs'
-	// ProcessRawKeyInput (fsguiinfltdlg.cpp) all consume
-	// Digit1..Digit9/Digit0/Escape directly and POSITIONALLY (the Nth option
-	// added is the Nth digit, regardless of what FsGuiDialogItem::fsKey the
-	// button itself carries -- see fsvr.h's FsVrGuiMenuPointer doc comment),
-	// independent of the generic FsGuiDialog Tab-focus/mouse-click machinery
-	// that the remaining, mouse-only in-flight dialogs rely on instead (see
-	// updateControllers' doc comment below for why this table stops at 4:
-	// Digit5/Digit0 are reached through the owner hand's A/B buttons
-	// instead, freeing the 4-sector stick for the first 4 options of
-	// whichever dialog is actually open). The .label fields below are just
-	// internal, descriptive fallback text (the AP menu's own options,
-	// historically the only dialog wired up here) -- NOT what is drawn
-	// in-headset any more; the actual on-canvas guide (drawGuiDialGuide)
-	// reads the CURRENT dialog's real option text from the owner hand's
-	// dial.guiMenu (computeGuiMenuLayout), so it stays correct for whichever
-	// of the drivable dialogs is open.
-	var GUI_DIAL={
-		up:   {label:'1', code:'Digit1', mode:'tap'},
-		right:{label:'2', code:'Digit2', mode:'tap'},
-		down: {label:'3', code:'Digit3', mode:'tap'},
-		left: {label:'4', code:'Digit4', mode:'tap'}
-	};
+	// never consults any of this at all -- see the class doc comment's
+	// "Ownership" paragraph. Only consulted when computeGuiMenuLayout says
+	// the menu is "drivable" (see processControllerPlain) -- the engine
+	// reports apMenu (the open dialog is one of the hotkey-driven in-flight
+	// dialogs: the autopilot family plus radio-comm/ATC/approach menus, see
+	// fsvr.h's apMenu doc comment for the full list) AND has at least one
+	// real option. Those dialogs' ProcessRawKeyInput (fsguiinfltdlg.cpp) all
+	// consume Digit1..Digit9/Digit0/Escape directly and POSITIONALLY (the Nth
+	// option added is the Nth digit, regardless of what
+	// FsGuiDialogItem::fsKey the button itself carries -- see fsvr.h's
+	// FsVrGuiMenuPointer doc comment), independent of the generic
+	// FsGuiDialog Tab-focus/mouse-click machinery that the remaining,
+	// mouse-only in-flight dialogs rely on instead.
+	//
+	// Unlike RIGHT_DIAL/LEFT_DIAL (a fixed table, N=6 sectors today, the
+	// SAME for every dialog/no-dialog state), there is no fixed GUI_DIAL
+	// table any more: the dial guide is N-WAY with a DYNAMIC N, one sector
+	// per REAL option the currently-open dialog reports
+	// (guiMenu.options.length, up to GUI_DIAL_CAPACITY -- see
+	// computeGuiMenuLayout), and sector i dispatches guiMenu.options[i]'s OWN
+	// hotkey, read positionally off the engine's label text (parseMenuLabel
+	// already extracted it into .hotkey) -- see hotkeyCode/
+	// guiDialEngagedFor below. This is what lets a 6- or 7-option dialog
+	// (the autopilot menu; radio-comm's wingman-command menu) be fully
+	// dial-selectable without the on-quad panel, where an old fixed-4-sector
+	// design would have needed the owner hand's A/B buttons to reach options
+	// 5/6 (see GUI_DIAL_CAPACITY's doc comment) and forced the panel on
+	// above that.
+	// With every real option reachable by a sector, the owner hand's A/B
+	// (X/Y on the left hand) carry NO dialog meaning at all any more --
+	// they are parked while a dialog is open (see processControllerPlain),
+	// keeping the dialog grammar to exactly three inputs: sector pick,
+	// trigger confirm, thumbstick-click cancel.
+	//
+	// hotkeyCode(opt,idx): the DOM KeyboardEvent code for one parsed option
+	// (see parseMenuLabel) -- opt.hotkey ('1'..'9' or '0') when the engine's
+	// own label prefix parsed cleanly, else a positional fallback (idx+1,
+	// 1-based, wrapping 10->'0') for the rare item whose label has no
+	// recognized digit prefix (a pagination "<<Prev"/"Next>>" button, kept in
+	// options[] since it isn't the 'ESC' cancel entry) -- so the guide can
+	// still offer a best-effort key rather than silently dropping that
+	// sector's dispatch.
+	function hotkeyCode(opt,idx)
+	{
+		var h=(opt && opt.hotkey) || String((idx+1)%10);
+		return ('0'===h) ? 'Digit0' : ('Digit'+h);
+	}
+	// The dial-confirm action for the owner hand's currently-selected sector
+	// (rdial.guiSel/ldial.guiSel, an N-way index -- see updateDialStick),
+	// given that hand's current guiMenu (computeGuiMenuLayout). Mirrors the
+	// old GUI_DIAL[dial.sel]/GUI_ESCAPE_ACTION ternary in shape (an
+	// {label,code,mode:'tap'} action, or GUI_ESCAPE_ACTION), just reading the
+	// engine's REAL per-option hotkey instead of a fixed table -- so it can
+	// never promise a Digit code the currently-open dialog does not actually
+	// have a button for. Falls back to GUI_ESCAPE_ACTION whenever the guide
+	// isn't in drivable ('ap') mode at all, or (should not happen given
+	// guiSel is always kept in [0,guiMenu.options.length) -- see
+	// processControllerPlain's dialog-open reset and updateDialStick's modulo
+	// pick -- but checked anyway, fail-safe) the selected index has no
+	// backing option.
+	function guiDialEngagedFor(guiMenu,sel)
+	{
+		if(!guiMenu || !guiMenu.drivable)
+		{
+			return GUI_ESCAPE_ACTION;
+		}
+		var opt=guiMenu.options[sel];
+		if(!opt)
+		{
+			return GUI_ESCAPE_ACTION;
+		}
+		return {label:(opt.hotkey||String(sel+1)), code:hotkeyCode(opt,sel), mode:'tap'};
+	}
 	// Generic "close/cancel" action for any OTHER in-flight dialog
 	// (dialogVisible but not apMenu -- radio-comm menus, replay/continue
 	// dialogs, etc.): every in-flight dialog in the engine either consumes
@@ -579,13 +702,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GL.textures[texId]=tex;
 		tex.name=texId;
 
+		// hudData[6] is the collimated gunsight-reticle enable (default on):
+		// when set, the engine suppresses the baked-in flat-HUD crosshair and
+		// instead draws a per-eye world-space reticle in the scene pass (see
+		// SimDrawAllScreen / FsVrDrawReticle).  Module.ysfwVrOptions.reticle
+		// ===false (?vrreticle=0) turns it off AND restores the baked crosshair.
+		var reticle=(false===opts.reticle ? 0 : 1);
 		var p=_YsfwVrHudDataPointer()>>2;
 		HEAPF32[p+0]=1;     // enable
 		HEAPF32[p+1]=fbId;  // hudFbo
 		HEAPF32[p+2]=texId; // hudTexArray
 		HEAPF32[p+3]=W;
 		HEAPF32[p+4]=H;
-		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
+		HEAPF32[p+5]=0; HEAPF32[p+6]=reticle; HEAPF32[p+7]=0;
 
 		vr.hud={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H};
 		console.log('[vr] HUD composite '+W+'x'+H+'x2 (fbId='+fbId+' texId='+texId+')');
@@ -622,9 +751,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// window-size-independent absolute-pixel layouts (see SimDrawVrGui's doc
 	// comment) cover a much bigger FRACTION of the texture than the previous
 	// 1024x640 did, while still (checked against the autopilot menu, the
-	// widest in-flight dialog that matters for GUI_DIAL's hotkey guide --
-	// see scripts/smoke-vrgui.mjs) fitting inside it uncropped. Composited
-	// onto the SAME physical quad size (FsVrDrawGuiQuad, fssimulation.cpp),
+	// widest in-flight dialog that matters for the dial guide's hotkey
+	// dispatch -- see scripts/smoke-vrgui.mjs) fitting inside it uncropped.
+	// Composited onto the SAME physical quad size (FsVrDrawGuiQuad, fssimulation.cpp),
 	// this makes the dialog appear roughly 1024/640 = 1.6x bigger to the
 	// pilot without touching the quad's world-space placement.
 	// Whether the in-flight-dialog quad should actually be allocated/composited
@@ -754,6 +883,18 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// frame unconditionally -- see fsvr.h's FsVrGuiDataPointer doc comment.
 	function guiDialogState()
 	{
+		// Headless-test override (vr.testGuiOverride, see its doc comment on
+		// the vr state block above) takes priority when set -- lets
+		// scripts/smoke-vrgui.mjs fabricate a >6-option menu's
+		// dialogVisible/apMenu without a live engine dialog, which would
+		// otherwise stomp any direct write to the native block on the very
+		// next real engine tick (FsSimulation::SimComputeVrGuiState runs
+		// unconditionally and would see no C++ dialog open). Never set in a
+		// real session.
+		if(vr.testGuiOverride)
+		{
+			return {visible:!!vr.testGuiOverride.visible,apMenu:!!vr.testGuiOverride.apMenu};
+		}
 		var p=_YsfwVrGuiDataPointer()>>2;
 		return {visible:0!==HEAPF32[p+5],apMenu:0!==HEAPF32[p+6]};
 	}
@@ -766,6 +907,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 	var guiMenuCache={version:-1,items:[]};
 	function readGuiMenu()
 	{
+		// Headless-test override, see guiDialogState's identical check
+		// above: returns the fabricated list directly, bypassing the
+		// version-cache/native read entirely (cheap enough either way, and
+		// only ever taken when a test has explicitly opted in).
+		if(vr.testGuiOverride)
+		{
+			return vr.testGuiOverride.menu||[];
+		}
 		var ver=_YsfwVrGuiMenuVersion();
 		if(ver===guiMenuCache.version)
 		{
@@ -809,21 +958,31 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		return {hotkey:null,text:label};
 	}
-	// How many of the dial's fixed slots (4 sectors + right-A + right-B) a
-	// menu can use.
-	var GUI_DIAL_CAPACITY=6;
+	// How many sectors the N-way dial guide can show at once -- one per real
+	// option, so this is also the max menu size the guide alone can fully
+	// drive (see the class doc comment's GUI-in-VR section). 8 covers every
+	// currently-known hotkey-driven in-flight dialog: the autopilot family
+	// tops out at 6 real options, radio-comm's wingman-command menu (the
+	// widest, see FsGuiRadioCommCommandDialog) at exactly 8 (7 numbered
+	// commands plus an explicit "0...Don't send"); Digit1..Digit9/Digit0 give
+	// headroom to 10 if a future dialog ever needs it, but a 256px quad
+	// showing 8 short-text wedges is already tight (see drawGuiDialGuide) so
+	// this stays at the honest, currently-sufficient 8 rather than the raw
+	// keyboard ceiling.
+	var GUI_DIAL_CAPACITY=8;
 	// Turns the engine's raw option-label list into what the dial guide can
 	// actually show: the non-cancel options (up to GUI_DIAL_CAPACITY of
 	// them), the cancel line separately, an overflow flag when there were
-	// MORE real options than that, and "drivable" -- whether GUI_DIAL's
-	// fixed Digit1../Digit0 dispatch (below) is trustworthy to promise via a
-	// numbered face at all, which requires BOTH that the engine says this
-	// dialog accepts direct positional hotkeys (hotkeyMenu, fsvr.h's apMenu)
-	// AND that there is at least one real option to show. Overflow does NOT
-	// affect drivable/dispatch: sectors 1-4 and A(5)/B(0) still fire the
-	// exact same real actions whether or not a 7th+ option exists out of the
-	// dial's reach -- overflow only means the guide must ALSO point at the
-	// on-quad panel (forced on, see maybeForceGuiPanel) for the rest.
+	// MORE real options than that, and "drivable" -- whether the per-option
+	// positional Digit dispatch (guiDialEngagedFor/hotkeyCode above) is
+	// trustworthy to promise via a numbered face at all, which requires BOTH
+	// that the engine says this dialog accepts direct positional hotkeys
+	// (hotkeyMenu, fsvr.h's apMenu) AND that there is at least one real
+	// option to show. Overflow does NOT affect drivable/dispatch: every
+	// sector within GUI_DIAL_CAPACITY still fires the exact same real action
+	// whether or not a 9th+ option exists out of the dial's reach --
+	// overflow only means the guide must ALSO point at the on-quad panel
+	// (forced on, see maybeForceGuiPanel) for the rest.
 	function computeGuiMenuLayout(hotkeyMenu)
 	{
 		var raw=readGuiMenu();
@@ -846,15 +1005,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			overflow:GUI_DIAL_CAPACITY<options.length,
 			drivable:(true===hotkeyMenu && 0<options.length)
 		};
-	}
-	function clipGuideText(text,maxLen)
-	{
-		maxLen=maxLen||9;
-		if(!text)
-		{
-			return '';
-		}
-		return (maxLen<text.length) ? (text.slice(0,maxLen-1)+'…') : text;
 	}
 
 	// ---- VR controller -> flight-control state block --------------------
@@ -1158,10 +1308,64 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// "up" sector) is y NEGATIVE. Flip to upY=-y once here so the rest of
 	// this function reads in plain screen terms (up=away, down=toward,
 	// matching a top-down view of the stick).
-	var DIAL_SELECT_THRESHOLD=0.5;  // magnitude to (re)pick a sector.
+	var DIAL_SELECT_THRESHOLD=0.5;
+	var DIAL_HYSTERESIS_DEG=6;  // Extra angle past a sector boundary before the pick switches (anti-flicker).  // magnitude to (re)pick a sector.
 	var DIAL_VISIBLE_THRESHOLD=0.3; // magnitude to fade the dial layer in.
 	var DIAL_HIDE_DELAY_MS=1200;    // time after re-centring before it hides.
-	function updateDialStick(dial,thumb,rawSrc)
+	// Shared N-way sector pick: quantizes the stick angle (x,upY already in
+	// plain screen terms, see updateDialStick's doc comment) to sectorN even
+	// wedges -- sector i's centre is at i*(360/sectorN) degrees clockwise
+	// from up (0deg=up, matching Canvas/atan2 convention: 0deg=up (x=0,
+	// upY=1), 90deg=right, +-180deg=down, -90deg=left) -- and writes the
+	// result into dial[field] (either 'sel', the normal fixed-table pick, or
+	// 'guiSel', the GUI-guide's dynamic-N pick; see updateDialStick below).
+	// Boundary hysteresis: keeps the current sector until the stick points
+	// DIAL_HYSTERESIS_DEG past the shared boundary, so aiming near a
+	// boundary doesn't flicker (and buzz) between two sectors. Sweeping the
+	// stick around the rim still re-selects continuously, sector by sector.
+	// A haptic pulse fires on every actual sector change (used by both the
+	// normal dial and the GUI guide -- see their respective doc comments).
+	function pickDialSector(dial,field,x,upY,sectorN,rawSrc)
+	{
+		var deg=Math.atan2(x,upY)*180/Math.PI;
+		if(deg<0)
+		{
+			deg+=360;
+		}
+		var idx=Math.round(deg/(360/sectorN))%sectorN;
+		var cur=dial[field];
+		if(idx!==cur && null!=cur && cur<sectorN)
+		{
+			var half=180/sectorN;
+			var curCen=cur*(360/sectorN);
+			var away=Math.abs(((deg-curCen)%360+540)%360-180);
+			if(away<=half+DIAL_HYSTERESIS_DEG)
+			{
+				idx=cur;
+			}
+		}
+		if(idx!==cur)
+		{
+			dial[field]=idx;
+			vrHapticPulse(rawSrc);
+		}
+	}
+	// sectorN: this hand's NORMAL flight-function dial's sector count
+	// (RIGHT_DIAL.length/LEFT_DIAL.length, 6 today -- the caller passes the
+	// table length; see processControllerPlain's call sites), quantized via
+	// pickDialSector into dial.sel (a numeric 0..sectorN-1 index). Also runs
+	// (harmlessly) while the generic/ESC GUI-guide face is showing, since
+	// that face's uniform "every sector = ESC" dispatch doesn't key off sel
+	// at all -- see vr.ctl.dial's doc comment. guiSectorN: 0/undefined
+	// leaves the GUI-guide's pick untouched this call; a positive integer
+	// instead runs that SAME pickDialSector helper into dial.guiSel (a
+	// numeric 0..guiSectorN-1 sector index -- see guiDialEngagedFor/
+	// drawGuiDialGuide), quantized to guiSectorN even wedges instead of the
+	// fixed table's sectorN. Kept as two entirely separate fields (not one
+	// field reused for both) so a dialog closing can never leave the normal
+	// dial holding a stale numeric value picked under a different N -- see
+	// vr.ctl.dial's doc comment.
+	function updateDialStick(dial,thumb,rawSrc,sectorN,guiSectorN)
 	{
 		var x=(thumb ? thumb[0] : 0)||0;
 		var upY=(thumb ? -thumb[1] : 0)||0;
@@ -1169,14 +1373,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
 		if(DIAL_SELECT_THRESHOLD<mag)
 		{
-			// Canvas/atan2 convention: 0deg=up (x=0,upY=1), 90deg=right,
-			// +-180deg=down, -90deg=left.
-			var deg=Math.atan2(x,upY)*180/Math.PI;
-			var sector=(-45<=deg && deg<45) ? 'up' : (45<=deg && deg<135) ? 'right' : (-135<=deg && deg<-45) ? 'left' : 'down';
-			if(sector!==dial.sel)
+			if(guiSectorN)
 			{
-				dial.sel=sector;
-				vrHapticPulse(rawSrc);
+				pickDialSector(dial,'guiSel',x,upY,guiSectorN,rawSrc);
+			}
+			else
+			{
+				pickDialSector(dial,'sel',x,upY,sectorN,rawSrc);
 			}
 		}
 		if(DIAL_VISIBLE_THRESHOLD<mag)
@@ -1278,6 +1481,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var nowOwner=(typeof performance!=='undefined' ? performance.now() : Date.now());
 			var tapRecent=(null!==vr.ctl.lastDialTapHand && (nowOwner-vr.ctl.lastDialTapAt)<=OWNER_RECENCY_MS);
 			vr.ctl.guiOwner=(tapRecent ? vr.ctl.lastDialTapHand : 'left');
+			// Fresh dialog: always start the N-way guide pointed at sector 0
+			// (the first real option) regardless of whichever sector a
+			// PREVIOUS, differently-sized dialog last left guiSel on -- a
+			// smaller menu closing and a bigger one opening right after must
+			// not silently inherit an out-of-range or misleading index.
+			vr.ctl.dial.right.guiSel=0;
+			vr.ctl.dial.left.guiSel=0;
 		}
 		vr.ctl.guiWasVisible=guiState.visible;
 		// Per-hand "is this dialog actually rerouting THIS hand's inputs
@@ -1324,11 +1534,28 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 
 			var rdial=vr.ctl.dial.right;
+			// guiMenu (computeGuiMenuLayout) reads the engine's REAL
+			// option-label list (fsvr.h's FsVrGuiMenuPointer) and is exposed
+			// on rdial.guiMenu for the guide to draw from and for
+			// inspection/tests, so the guide can never promise a mapping
+			// that either doesn't exist or the router doesn't actually
+			// implement: guiMode is 'ap' when guiMenu.drivable (the
+			// per-option positional Digit hotkeys are live AND there is at
+			// least one real option to label them with), 'generic' otherwise
+			// (only the Escape reroutes are trustworthy). Computed BEFORE
+			// updateDialStick below (not after, as it once was) because the
+			// N-way GUI-guide pick needs to know N=guiMenu.options.length
+			// this same call.
+			var guiMenu=(rActive ? computeGuiMenuLayout(guiState.apMenu) : null);
+			var guiSectorN=(guiMenu && guiMenu.drivable) ? guiMenu.options.length : 0;
 			// Sector-selection bookkeeping (haptic-on-change, visibility/fade
 			// timer) runs unconditionally -- it is harmless bystander state
-			// when the OTHER hand owns an open dialog, and this is also the
-			// exact stick geometry the GUI_DIAL mapping below reuses.
-			updateDialStick(rdial,entry.thumb,rawSrc);
+			// when the OTHER hand owns an open dialog. guiSectorN>0 routes
+			// this call to the N-way GUI-guide pick (rdial.guiSel) instead of
+			// the normal fixed-table one (rdial.sel, RIGHT_DIAL.length
+			// sectors) -- see updateDialStick's doc comment; the SAME
+			// underlying stick geometry and pickDialSector helper drive both.
+			updateDialStick(rdial,entry.thumb,rawSrc,RIGHT_DIAL.length,guiSectorN);
 
 			// Dialog-guide takeover: ONLY while this hand is the dialog's
 			// owner (rActive -- see vr.ctl.guiOwner above) does this dial
@@ -1342,24 +1569,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// none is open), rActive is false and this dial is left
 			// completely alone -- normal RIGHT_DIAL face, normal
 			// thumbstick-engagement visibility rule, exactly as if no
-			// dialog existed. guiMenu (computeGuiMenuLayout) reads the
-			// engine's REAL option-label list (fsvr.h's FsVrGuiMenuPointer)
-			// and is exposed on rdial.guiMenu for the guide to draw from and
-			// for inspection/tests, so the guide can never promise a mapping
-			// that either doesn't exist or the router doesn't actually
-			// implement: guiMode is 'ap' when guiMenu.drivable (GUI_DIAL's
-			// Digit1..4/A=5/B=0 hotkeys are live AND there is at least one
-			// real option to label them with), 'generic' otherwise (only the
-			// Escape reroutes are trustworthy).
-			var guiMenu=(rActive ? computeGuiMenuLayout(guiState.apMenu) : null);
+			// dialog existed.
 			rdial.guiMenu=guiMenu;
 			rdial.guiMode=(!guiMenu ? null : (guiMenu.drivable ? 'ap' : 'generic'));
 			if(rActive)
 			{
 				rdial.visible=true;
-				// The dial's 6 slots cannot reach every option (radio-comm
-				// menus can have 7+, see FsGuiRadioCommCommandDialog), and
-				// some in-flight dialogs are not hotkey-driven at all
+				// GUI_DIAL_CAPACITY sectors cannot reach every option
+				// (radio-comm's wingman-command menu is exactly at the cap,
+				// see FsGuiRadioCommCommandDialog), and some in-flight
+				// dialogs are not hotkey-driven at all
 				// (replay/continue/stationary/vehicle-change/chat -- mouse-
 				// only). Either way, force the on-quad panel on so the full
 				// dialog stays readable/reachable (a real physical keyboard,
@@ -1380,7 +1599,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				// snapshot: dial flicks mid-press don't retarget it.
 				if(rActive)
 				{
-					rdial.engaged=(guiState.apMenu ? GUI_DIAL[rdial.sel] : GUI_ESCAPE_ACTION);
+					rdial.engaged=guiDialEngagedFor(guiMenu,rdial.guiSel);
 				}
 				else
 				{
@@ -1418,12 +1637,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// the view (once per hold) and suppresses the gear tap on the
 			// eventual release. A hold released in between (neither quick
 			// nor long enough) intentionally does nothing. While THIS hand
-			// owns an open dialog (rActive), the short tap's target key is
-			// rerouted instead: Digit5 (the AP menu's 5th option, "Fly
-			// Heading Bug", out of stick-sector reach -- see GUI_DIAL's doc
-			// comment) when apMenu, else Escape (generic close). Recenter is
-			// left enabled either way -- it is a view-only action, not a
-			// flight or dialog control.
+			// owns an open dialog (rActive), the tap is simply parked --
+			// no gear drop from a mid-dialog fumble, and no dialog meaning
+			// either (the N-way sectors already reach every real option;
+			// cancel is the thumbstick click). Recenter is left enabled
+			// either way -- it is a view-only action, not a flight or
+			// dialog control.
 			var aPressed=!!(entry.buttons && entry.buttons.a);
 			var aBtn=vr.ctl.aBtn;
 			var aNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -1443,19 +1662,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 				{
 					vrKeyTap('KeyG'); // Default landing-gear key: a real tap, not a hold.
 				}
-				else
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit5' : 'Escape');
-				}
 			}
 			aBtn.pressed=aPressed;
 
 			// Right B: normally a held spoiler/air-brake key; while THIS hand
-			// owns an open dialog, rerouted to Digit0 (the AP menu's
-			// "Disengage" option) when apMenu, else Escape (generic close)
-			// -- dispatched as a tap on the press edge, not held, since
-			// neither target is a holdable key.
+			// owns an open dialog it is parked (same reasoning as A above),
+			// with a release-if-held safety so a brake held from before the
+			// dialog opened doesn't stay stuck on.
 			var bPressed=!!(entry.buttons && entry.buttons.b);
 			if(!rActive)
 			{
@@ -1464,23 +1677,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 			else
 			{
 				vrKeyEdge('KeyB',false); // Release it if it was held from before the dialog opened.
-				if(bPressed && !vr.ctl.rightB)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit0' : 'Escape');
-				}
 			}
-			vr.ctl.rightB=bPressed;
 
 			// Thumbstick click (xr-standard buttons[3]): normally toggles the
 			// help placards on the press edge, either hand (see toggleHelp).
 			// While THIS hand owns an open dialog, it is repurposed instead
 			// as the dialog's truthful cancel/Escape binding -- the ONE
-			// input the owner hand has spare after the 4 sectors + trigger +
-			// A + B are spoken for by GUI_DIAL's 6 positional slots, so a
-			// pilot can always back out of a dialog without touching the
-			// other (fully normal) hand at all. See drawGuiDialGuide's
-			// on-quad label for this.
+			// input the owner hand has spare regardless of how many of the
+			// N sectors + trigger + A + B the currently-open dialog's real
+			// options occupy, so a pilot can always back out of a dialog
+			// without touching the other (fully normal) hand at all. See
+			// drawGuiDialGuide's on-quad label for this.
 			var rStickBtn=!!(entry.buttons && entry.buttons.stick);
 			if(rActive)
 			{
@@ -1580,12 +1787,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 
 			// Left X/Y (buttons.a/.b): normally held flap-down/flap-up keys;
-			// while THIS hand owns an open dialog (lActive), rerouted to the
-			// same truthful extra hotkeys the right A/B give when it is the
-			// owner -- Digit5/Digit0 when apMenu, else a generic Escape.
-			// When the RIGHT hand owns the dialog instead (or none is open),
-			// lActive is false and these fall straight through to their
-			// normal flap behaviour, undisturbed.
+			// while THIS hand owns an open dialog (lActive) they are parked,
+			// exactly like the right hand's A/B when it is the owner (see
+			// above) -- flap taps suppressed, no dialog meaning, with the
+			// same release-if-held safety. When the RIGHT hand owns the
+			// dialog instead (or none is open), lActive is false and these
+			// fall straight through to their normal flap behaviour,
+			// undisturbed.
 			var xPressed=!!(entry.buttons && entry.buttons.a);
 			if(!lActive)
 			{
@@ -1594,13 +1802,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			else
 			{
 				vrKeyEdge('KeyF',false);
-				if(xPressed && !vr.ctl.leftX)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit5' : 'Escape');
-				}
 			}
-			vr.ctl.leftX=xPressed;
 
 			var yPressed=!!(entry.buttons && entry.buttons.b);
 			if(!lActive)
@@ -1610,23 +1812,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 			else
 			{
 				vrKeyEdge('KeyR',false);
-				if(yPressed && !vr.ctl.leftY)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap(guiState.apMenu ? 'Digit0' : 'Escape');
-				}
 			}
-			vr.ctl.leftY=yPressed;
 
 			// Left trigger: dial-selected function (see LEFT_DIAL) when this
 			// hand is NOT the dialog owner (including no dialog at all) --
 			// fully normal, sticky-sector semantics as always. When lActive,
 			// this becomes the dialog's own confirm input instead, exactly
-			// mirroring the right dial's GUI_DIAL routing (see rActive's
-			// branch above) so the dialog is drivable from WHICHEVER hand
-			// opened it.
+			// mirroring the right dial's N-way GUI-guide routing (see
+			// rActive's branch above) so the dialog is drivable from
+			// WHICHEVER hand opened it.
 			var ldial=vr.ctl.dial.left;
-			updateDialStick(ldial,entry.thumb,rawSrc);
+			// Symmetric to the right dial's guiMenu/guiSectorN computation
+			// above: computed BEFORE updateDialStick so the N-way GUI-guide
+			// pick (ldial.guiSel) knows N=guiMenuL.options.length this call.
+			var guiMenuL=(lActive ? computeGuiMenuLayout(guiState.apMenu) : null);
+			var guiSectorNL=(guiMenuL && guiMenuL.drivable) ? guiMenuL.options.length : 0;
+			updateDialStick(ldial,entry.thumb,rawSrc,LEFT_DIAL.length,guiSectorNL);
 			// Dialog-guide takeover on the left dial, symmetric to the right
 			// dial's rActive branch above: only while lActive, this dial
 			// becomes the dialog's selection guide (forced visible,
@@ -1636,7 +1837,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// thumbstick-engagement visibility, exactly as if no dialog
 			// existed (matches the brief: "the other hand fully reverts to
 			// its normal functions").
-			var guiMenuL=(lActive ? computeGuiMenuLayout(guiState.apMenu) : null);
 			ldial.guiMenu=guiMenuL;
 			ldial.guiMode=(!guiMenuL ? null : (guiMenuL.drivable ? 'ap' : 'generic'));
 			if(lActive)
@@ -1654,7 +1854,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				vrHapticPulse(rawSrc);
 				if(lActive)
 				{
-					ldial.engaged=(guiState.apMenu ? GUI_DIAL[ldial.sel] : GUI_ESCAPE_ACTION);
+					ldial.engaged=guiDialEngagedFor(guiMenuL,ldial.guiSel);
 				}
 				else
 				{
@@ -1852,19 +2052,43 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// the dial logic (selection + trigger routing, above) fully working,
 	// just without the in-headset visual -- every step is try/catch-guarded
 	// and callers treat "no resource" as "draw nothing this frame".
-	var DIAL_LABELS={
-		right:{up:RIGHT_DIAL.up.label,right:RIGHT_DIAL.right.label,down:RIGHT_DIAL.down.label,left:RIGHT_DIAL.left.label},
-		left: {up:LEFT_DIAL.up.label, right:LEFT_DIAL.right.label, down:LEFT_DIAL.down.label, left:LEFT_DIAL.left.label}
-	};
 	// Canvas-space angle (0deg=east/+x, 90deg=south/+y, clockwise, matching
-	// CanvasRenderingContext2D.arc's convention) for each sector's wedge
-	// centre -- "up" is drawn at the top of the texture (-90deg).
+	// CanvasRenderingContext2D.arc's convention) for each of the 4 CARDINAL
+	// direction keys -- "up" is drawn at the top of the texture (-90deg).
+	// Only the generic/ESC GUI-guide face (drawGuiDialGuide's fixed
+	// GUI_GUIDE_SECTORS spokes) uses this any more: the normal dial
+	// (drawDial) and the drivable GUI-guide's N-way face both compute their
+	// own sector angles directly as -90+i*(360/N) (i, N numeric), matching
+	// updateDialStick's pick -- see their own comments.
 	var DIAL_SECTOR_CANVAS_DEG={up:-90,right:0,down:90,left:180};
+	// Per-hand dial canvas/quad-layer texture resolution, in px (square).
+	// Raised from the original 256 to 384 (2026-07 radial-label redesign):
+	// the GUI guide draws FULL option text (not clipped to ~5-9 chars)
+	// rotated along each sector's spoke, so crisp small text at the outer
+	// radius matters far more than it did for the old fixed-wedge normal
+	// dial labels; the normal dial face was subsequently brought onto the
+	// SAME radial-spoke-label design (drawDial) and now shares this exact
+	// 384px baseline (k=w/384 in both). 384 is still a trivial per-frame
+	// 2D-canvas-plus-texSubImage2D cost (same code path as the old 256,
+	// just more texels) and the physical quad size (ensureDialResources's
+	// width/height:0.12, unchanged) stays the same, so this is
+	// resolution-only, not layout. drawDial/drawGuiDialGuide/
+	// ensureDialResources/dumpDialLayer all derive their w/h/cx/cy/rOuter
+	// from the ACTUAL canvas size (ctx.canvas.width), not this constant
+	// directly, so both faces' proportions are bit-for-bit the same design
+	// regardless of canvas support/fallback size.
+	var DIAL_CANVAS_PX=384;
 
-	// Weapon short-name map for the right dial's centre readout (fsdef.h's
-	// FSWEAPON_* enum -- see FsVrAircraftStateDataPointer's doc comment in
-	// fsvr.h for the full mapping this mirrors). Anything not in this table
-	// (including FSWEAPON_NULL=127, no weapon selected) reads as 'WPN'.
+	// Live aircraft-state readouts on the normal dial face (fsvr.h /
+	// FsVrAircraftStateDataPointer): the pre-redesign face keyed these off
+	// the fixed up/right/down/left slots (gear/brake lines under those
+	// sectors) plus a centre-hub weapon/flap readout. The transparent-radial
+	// redesign has no fixed slots and no hub, so the state is now keyed off
+	// each table ENTRY's key code instead (dialEntryStateText below) and
+	// drawn as a second, dimmer span chained outward along that entry's own
+	// spoke -- position-independent, so RIGHT_DIAL/LEFT_DIAL can be
+	// reordered freely without touching this. The weapon readout rides the
+	// weapon-select (Digit2) spoke now that there is no hub.
 	var WEAPON_LABELS={
 		0:'GUN',    // FSWEAPON_GUN
 		1:'AAM-S',  // FSWEAPON_AIM9    (short-range AAM)
@@ -1886,51 +2110,33 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return WEAPON_LABELS.hasOwnProperty(t) ? WEAPON_LABELS[t] : 'WPN';
 	}
 	function fmtPct(v){ return Math.round(clamp(v,0,1)*100)+'%'; }
-
-	// Per-sector live-state line drawn under a sector's label (null = none).
-	// Right dial: Gear (down) shows UP/DOWN or a transitional %; Brake (left)
-	// shows ON/OFF (KeyB toggles ctlBrake+ctlSpoiler together, see fsvr.h).
-	// Left dial: Flap+/Flap- (up/down) both show the current flap %, so
-	// either sector tells the pilot where the flaps already are.
-	function dialSectorStateLine(hand,dir,state)
+	// Live-state text for one dial-table entry, keyed off entry.code (NOT a
+	// sector position): KeyG = gear UP/DOWN or transitional %, KeyB = brake
+	// ON/OFF (KeyB toggles ctlBrake+ctlSpoiler together, see fsvr.h), KeyR/
+	// KeyF = current flap % (either flap sector tells the pilot where the
+	// flaps already are), Digit2 = selected weapon short-name + remaining
+	// count. null = this entry has no live state to show.
+	function dialEntryStateText(entry,state)
 	{
 		if(!state || !state.valid)
 		{
 			return null;
 		}
-		if('right'===hand)
+		switch(entry.code)
 		{
-			if('down'===dir)
-			{
-				if(state.gear<=0.02){ return 'UP'; }
-				if(state.gear>=0.98){ return 'DOWN'; }
-				return fmtPct(state.gear);
-			}
-			if('left'===dir)
-			{
-				return state.brake>=0.5 ? 'ON' : 'OFF';
-			}
-		}
-		else if('up'===dir || 'down'===dir)
-		{
+		case 'KeyG':
+			if(state.gear<=0.02){ return 'UP'; }
+			if(state.gear>=0.98){ return 'DOWN'; }
+			return fmtPct(state.gear);
+		case 'KeyB':
+			return state.brake>=0.5 ? 'ON' : 'OFF';
+		case 'KeyR':
+		case 'KeyF':
 			return fmtPct(state.flap);
-		}
-		return null;
-	}
-	// Centre readout: right dial shows the selected weapon + remaining count
-	// (replaces the plain dot); left dial shows the flap % (replaces it too).
-	// Returns null (draw the plain dot) when there is no valid player state.
-	function dialCenterText(hand,state)
-	{
-		if(!state || !state.valid)
-		{
-			return null;
-		}
-		if('right'===hand)
-		{
+		case 'Digit2':
 			return weaponLabel(state.wpnType)+' '+Math.max(0,Math.round(state.wpnCount));
 		}
-		return 'FLP '+fmtPct(state.flap);
+		return null;
 	}
 	// ---- GUI-dialog guide (drawn on whichever hand OWNS the open dialog --
 	// see vr.ctl.guiOwner / processControllerPlain's rActive/lActive -- in
@@ -1946,135 +2152,321 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//                positional hotkeys (fsvr.h's apMenu -- the autopilot
 	//                family, radio-comm/ATC/approach menus, see
 	//                FsSimulation::SimComputeVrGuiState) AND has at least one
-	//                real option. The owner hand's 4 stick sectors dispatch
-	//                GUI_DIAL's Digit1..4 against guiMenu.options[0..3]; the
-	//                two options out of the 4-sector stick's reach (see
-	//                GUI_DIAL's doc comment) are on the owner hand's A button
-	//                (Digit5, options[4]) and B button (Digit0, options[5])
-	//                -- shown in the centre (labelled A/B on the right hand,
-	//                X/Y on the left, matching each hand's real Touch
-	//                controller silkscreen). If the dialog has MORE real
-	//                options than the dial's 6 slots (guiMenu.overflow --
-	//                e.g. the wingman-command radio-comm menu has 7), the
-	//                second centre line becomes a pointer at the on-quad
-	//                panel (forced on, see maybeForceGuiPanel) instead of the
-	//                cancel-binding reminder, since both don't fit -- the
-	//                cancel binding (the owner hand's thumbstick click,
-	//                unconditional on rActive/lActive) still works either
-	//                way, it is just not re-stated on-canvas that frame.
+	//                real option. Like the normal RIGHT_DIAL/LEFT_DIAL face
+	//                (a fixed table, N=6 sectors today), this is ALSO N-WAY,
+	//                but N is DYNAMIC here: one wedge per real option
+	//                (N=guiMenu.options.length, up to GUI_DIAL_CAPACITY=8),
+	//                evenly dividing the circle starting at up (12 o'clock)
+	//                and going clockwise --
+	//                sector i is guiMenu.options[i], labelled with its own
+	//                parsed hotkey digit and option text (see
+	//                guiDialEngagedFor/hotkeyCode for the matching dispatch
+	//                math in processControllerPlain, and updateDialStick for
+	//                the matching stick-angle pick). The currently
+	//                stick-selected sector (dial.guiSel) is highlighted so
+	//                the pilot can confirm a pick before pulling the
+	//                trigger, mirroring the normal dial's own
+	//                (dir===sel)-highlight (see drawDial below). The cancel
+	//                binding (the owner hand's thumbstick click,
+	//                unconditional on rActive/lActive) is re-stated on a
+	//                single small corner hint line; if the dialog has MORE
+	//                real options than GUI_DIAL_CAPACITY (guiMenu.overflow
+	//                -- e.g. radio-comm's wingman-command menu sits exactly
+	//                at the 8-option cap, so only a 9th+ option would ever
+	//                overflow), that same line also points at the on-quad
+	//                panel (forced on, see maybeForceGuiPanel). The owner
+	//                hand's A/B (X/Y) do nothing during a dialog (parked --
+	//                see processControllerPlain), so there is nothing to
+	//                remind about and no centre hub any more -- the middle
+	//                of the guide stays fully transparent. Full option text
+	//                (not a clipped
+	//                few characters) is drawn RADIALLY along each sector's
+	//                spoke (see drawSpokeSpan/fitSpokeLabel below), so
+	//                legibility degrades much more gracefully as N grows
+	//                past ~6 than the old horizontal-clipped-text-in-a-
+	//                wedge layout did -- font size only shrinks (down to a
+	//                12px*canvasScale floor) as a LAST resort before finally
+	//                ellipsizing; scripts/smoke-vrgui.mjs dumps a PNG of an
+	//                N>4 guide for a human to judge.
 	//   'generic' -- !guiMenu.drivable: either the open dialog is not
 	//                hotkey-driven at all (replay/continue/stationary/
 	//                vehicle-change/chat dialogs -- mouse-only), or (rare)
 	//                the engine reported apMenu but zero parseable options.
-	//                ALL of the owner hand's 4 sectors, A, and B dispatch the
-	//                exact same GUI_ESCAPE_ACTION tap (see rdial/ldial's
-	//                engaged ternary above) -- so every sector is labelled
-	//                identically instead of implying 4 distinct functions
-	//                that don't exist. The on-quad panel is forced on here
-	//                too, so the dialog's real content (however many options
-	//                it has) is still readable even though the dial can't
-	//                drive it.
+	//                This face stays the ORIGINAL fixed 4-sector uniform
+	//                "ESC" look (not N-way -- there is no per-option content
+	//                to divide sectors by), matching that every sector
+	//                dispatches the exact same GUI_ESCAPE_ACTION tap
+	//                (see rdial/ldial's engaged assignment above). The
+	//                on-quad panel is forced on here too, so the dialog's
+	//                real content (however many options it has) is still
+	//                readable even though the dial can't drive it.
 	// The OTHER (non-owner) hand never reaches this function at all -- its
 	// guiMode stays null and it keeps drawing its own normal dial face, see
 	// drawDial below.
-	var GUI_GUIDE_SECTOR_NUM={up:'1',right:'2',down:'3',left:'4'};
+	//
+	// ---- Fully-transparent, radial-label redesign (2026-07) ----------------
+	// Replaces the old opaque-wedge-fill + horizontally-clipped-text look
+	// (e.g. "Brea…" for "Break and Attack") with: NO outer circle, NO wedge
+	// fill, NO wedge borders, NO centre hub -- only floating text (plus thin
+	// per-sector tick marks and one small corner hint line) over whatever
+	// the pilot is actually looking at. Every option's FULL label text is drawn ROTATED to run
+	// outward along its own sector's spoke (see drawSpokeSpan), which is
+	// what makes room for the full text instead of a handful of clipped
+	// characters: a spoke's usable length is far greater than a wedge's
+	// horizontal chord ever was.
+	//
+	// Upside-down prevention (drawSpokeSpan's `flip`): a span rotated by
+	// its sector's canvas angle (centerRad) reads fine -- at worst sideways,
+	// comfortable with a slight head tilt -- as long as the spoke's
+	// on-canvas X-direction is non-negative (Math.cos(centerRad)>=0, i.e.
+	// the spoke points into the canvas-RIGHT half). Past that (the spoke's
+	// direction has crossed more than +-90deg off upright, into the
+	// canvas-LEFT half, Math.cos(centerRad)<0) an unflipped span would
+	// render fully upside-down and mirrored. For exactly those sectors,
+	// drawSpokeSpan rotates an EXTRA 180deg (folding the effective on-screen
+	// rotation back into the readable +-90deg range) and right-aligns the
+	// text instead of left-aligning it, so it still visually starts near
+	// the hub and grows outward -- every label ends up readable without the
+	// viewer ever needing to tilt their head past +-90deg.
 	var GUI_GUIDE_SECTORS=['up','right','down','left'];
+	// Shrinks `text`'s font (bold sans-serif) from startPx down to floorPx
+	// (1px steps) until it fits maxWidth; if even the floor size overflows,
+	// ellipsizes at the floor size as a last resort (fit-then-shrink-then-
+	// ellipsize, in that priority order -- see this function's callers).
+	// ctx.font/measureText are unaffected by the current transform (translate/
+	// rotate), so this is safe to call before drawSpokeSpan's save/rotate.
+	function fitSpokeLabel(ctx,text,maxWidth,startPx,floorPx)
+	{
+		text=text||'';
+		var fontPx=startPx;
+		ctx.font='bold '+fontPx+'px sans-serif';
+		while(floorPx<fontPx && maxWidth<ctx.measureText(text).width)
+		{
+			fontPx-=1;
+			ctx.font='bold '+fontPx+'px sans-serif';
+		}
+		if(maxWidth>=ctx.measureText(text).width)
+		{
+			return {text:text,fontPx:fontPx};
+		}
+		var t=text;
+		while(1<t.length && maxWidth<ctx.measureText(t+'…').width)
+		{
+			t=t.slice(0,-1);
+		}
+		return {text:t+'…',fontPx:fontPx};
+	}
+	// Draws `text` along the spoke at canvas angle `centerRad`, treating `r`
+	// as a physical (always-positive, hub-to-rim) starting radius and
+	// returning the physical radius immediately past what was just drawn --
+	// so callers can chain multiple spans (a hotkey digit, then the option
+	// text) outward along the same spoke without having to reason about the
+	// upside-down `flip` themselves (see this function's doc comment on
+	// drawGuiDialGuide above for the flip rule). A dark stroke under the
+	// bright fill keeps the label legible against both a bright sky and a
+	// dark ground behind this fully-transparent canvas.
+	function drawSpokeSpan(ctx,cx,cy,centerRad,flip,r,text,fontPx,fillStyle)
+	{
+		ctx.save();
+		ctx.translate(cx,cy);
+		ctx.rotate(flip ? centerRad+Math.PI : centerRad);
+		ctx.font='bold '+fontPx+'px sans-serif';
+		ctx.textBaseline='middle';
+		ctx.textAlign=flip ? 'right' : 'left';
+		var localX=flip ? -r : r;
+		var width=ctx.measureText(text).width;
+		ctx.lineWidth=Math.max(2,fontPx*0.22);
+		ctx.strokeStyle='rgba(8,10,14,0.9)';
+		ctx.strokeText(text,localX,0);
+		ctx.fillStyle=fillStyle;
+		ctx.fillText(text,localX,0);
+		ctx.restore();
+		return r+width;
+	}
 	function drawGuiDialGuide(ctx,guiMode,hand)
 	{
-		var w=256,h=256,cx=128,cy=128,rOuter=110;
+		// k is relative to a 384px canvas (DIAL_CANVAS_PX) -- ALL the pixel
+		// budget numbers below (hubR, tick lengths, digit/text start radii,
+		// rOuter's margin from the edge) are tuned against that baseline so
+		// a full-length option label actually gets the ~140px of spoke
+		// length it needs; if the canvas is ever smaller (no quad-layer
+		// support -- see dumpDialLayer/ensureDialResources), k<1 shrinks
+		// everything proportionally rather than recomputing a second set of
+		// constants. (drawDial's own k is intentionally still relative to
+		// 256 -- that face's numbers were tuned for the original 256px
+		// canvas and must stay bit-for-bit the same proportions.)
+		var w=ctx.canvas.width,h=ctx.canvas.height,cx=w/2,cy=h/2,k=w/384;
+		// rOuter reaches almost to the canvas edge -- there is no outer
+		// circle/wedge border to stay inside of any more, so the old
+		// 110/256=0.43 fraction would waste more than half the available
+		// spoke length for nothing.
+		var rOuter=w/2-10*k;
 		var menu=vr.ctl.dial[hand].guiMenu; // {options,cancel,overflow,drivable} or null/stale -- see computeGuiMenuLayout.
 		var options=(menu && menu.options) || [];
-		// Real Touch-controller face-button labels: A/B on the right
-		// controller, X/Y on the left -- the abstraction in
-		// processControllerPlain calls both hands' pair "a"/"b" internally,
-		// but the guide should tell the truth about which physical buttons
-		// the pilot's OWNER hand actually has.
-		var btnLabel1=('right'===hand ? 'A' : 'X'), btnLabel2=('right'===hand ? 'B' : 'Y');
-		ctx.fillStyle='rgba(10,14,20,0.55)';
-		ctx.beginPath();
-		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
-		ctx.fill();
-		for(var i=0; i<GUI_GUIDE_SECTORS.length; ++i)
+		// No hub disc is drawn any more (see the tail of this function), but
+		// its radius lives on as the central keep-clear zone the tick marks
+		// and label spans still start outside of -- the centre stays fully
+		// transparent so the stick's own physical direction is the pointer.
+		var hubR=28*k;
+		if('ap'===guiMode && 0<options.length)
 		{
-			var dir=GUI_GUIDE_SECTORS[i];
-			var centerRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
-			var a0=centerRad-Math.PI/4, a1=centerRad+Math.PI/4;
-			ctx.beginPath();
-			ctx.moveTo(cx,cy);
-			ctx.arc(cx,cy,rOuter,a0,a1);
-			ctx.closePath();
-			// Blue for a live, drivable hotkey menu, amber/red for the
-			// generic mode where every sector is just "cancel" -- a
-			// different hue makes the "this isn't the usual dial" state
-			// obvious at a glance, before reading any text.
-			ctx.fillStyle=('ap'===guiMode) ? 'rgba(77,163,255,0.55)' : 'rgba(214,96,64,0.55)';
-			ctx.fill();
-			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2;
-			ctx.stroke();
-			var labelR=rOuter*0.62;
-			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
-			ctx.textAlign='center';
-			ctx.fillStyle='#fff';
-			if('ap'===guiMode)
+			// N-way: one spoke per real option, N<=GUI_DIAL_CAPACITY (8).
+			// Sector i's centre is at canvas angle -90deg (up) + i*wedge,
+			// clockwise -- the SAME convention updateDialStick's N-way pick
+			// quantizes the stick angle to, so the highlighted/selected
+			// spoke here always matches what a trigger pull would actually
+			// confirm.
+			var n=options.length;
+			var wedge=2*Math.PI/n;
+			var selIdx=vr.ctl.dial[hand].guiSel;
+			// Starting font sizes shrink a little as N grows (tighter
+			// angular clearance near the hub) -- fitSpokeLabel then shrinks
+			// the OPTION TEXT further per-label, down to a floor, before
+			// ever ellipsizing (see drawGuiDialGuide's doc comment above).
+			var numFontBase=(4>=n ? 22 : (6>=n ? 20 : 18))*k;
+			var textFontStart=(4>=n ? 17 : (6>=n ? 16 : 14))*k;
+			var floorFontPx=12*k;
+			for(var i=0; i<n; ++i)
 			{
-				var opt=options[i];
-				if(opt)
+				var centerRad=-Math.PI/2+i*wedge;
+				var flip=Math.cos(centerRad)<0; // see the flip-rule doc comment above.
+				var selected=(i===selIdx);
+				// Thin tick mark at the sector's inner end -- minimal
+				// orientation accent replacing the old wedge borders. Kept
+				// SHORT (unlike the old wedge-radius-spanning border) so it
+				// does not eat into the label's radius budget -- the tick
+				// is purely an orientation cue, not a boundary. Always
+				// drawn along the TRUE outward direction (never flipped):
+				// only TEXT readability needs the 180deg fold, the geometry
+				// itself is fine either way.
+				var tickInnerR=hubR+3*k, tickOuterR=selected ? hubR+13*k : hubR+7*k;
+				ctx.save();
+				ctx.translate(cx,cy);
+				ctx.rotate(centerRad);
+				ctx.beginPath();
+				ctx.moveTo(tickInnerR,0);
+				ctx.lineTo(tickOuterR,0);
+				ctx.lineWidth=(selected ? 3 : 1.5)*k;
+				ctx.strokeStyle=selected ? 'rgba(255,214,64,0.95)' : 'rgba(230,237,243,0.55)';
+				ctx.stroke();
+				// digitStartR: where the hotkey digit begins. Chained off
+				// THIS sector's own tickOuterR (with a bigger gap when
+				// selected, since the arrowhead below reaches a bit further
+				// than the plain tick) so the arrowhead can never overlap
+				// the digit even though selected/unselected ticks differ.
+				var digitStartR=tickOuterR+(selected ? 9*k : 5*k);
+				if(selected)
 				{
-					ctx.font='bold 28px sans-serif';
-					ctx.textBaseline='middle';
-					ctx.fillText(GUI_GUIDE_SECTOR_NUM[dir],lx,ly-10);
-					ctx.font='bold 12px sans-serif';
-					ctx.fillText(clipGuideText(opt.text),lx,ly+12);
+					// Selection accent: a small arrowhead beyond the tick,
+					// since there is no wedge fill left to highlight with.
+					// Sized to stay clear of digitStartR above.
+					var apexR=tickOuterR+6*k;
+					ctx.beginPath();
+					ctx.moveTo(apexR,0);
+					ctx.lineTo(apexR-5*k,-4*k);
+					ctx.lineTo(apexR-5*k,4*k);
+					ctx.closePath();
+					ctx.fillStyle='rgba(255,214,64,0.95)';
+					ctx.fill();
 				}
-				// No option at this position (e.g. a 2-option dialog like
-				// the "spread/tighten formation" radio-comm menu leaves
-				// down/left empty) -- draw nothing rather than imply a
-				// function that does not exist.
+				ctx.restore();
+				var opt=options[i];
+				var digitFontPx=selected ? numFontBase+3*k : numFontBase;
+				var digitColor=selected ? '#ffe066' : '#fff';
+				var r=drawSpokeSpan(ctx,cx,cy,centerRad,flip,digitStartR,opt.hotkey||String(i+1),digitFontPx,digitColor);
+				r+=4*k; // gap between the hotkey digit and the option text.
+				var avail=Math.max(20*k,rOuter-r);
+				var fit=fitSpokeLabel(ctx,opt.text||'',avail,selected ? textFontStart+2*k : textFontStart,floorFontPx);
+				var textColor=selected ? '#ffe066' : '#dff2e8';
+				drawSpokeSpan(ctx,cx,cy,centerRad,flip,r,fit.text,fit.fontPx,textColor);
 			}
-			else
-			{
-				ctx.font='bold 20px sans-serif';
-				ctx.textBaseline='middle';
-				ctx.fillText('ESC',lx,ly);
-			}
-		}
-		ctx.beginPath();
-		ctx.arc(cx,cy,30,0,2*Math.PI);
-		ctx.fillStyle='rgba(20,26,34,0.9)';
-		ctx.fill();
-		ctx.strokeStyle='rgba(230,237,243,0.6)';
-		ctx.lineWidth=2;
-		ctx.stroke();
-		ctx.textAlign='center';
-		if('ap'===guiMode)
-		{
-			ctx.fillStyle='#fff';
-			ctx.font='bold 13px sans-serif';
-			ctx.textBaseline='middle';
-			ctx.fillText(btnLabel1+'=5 '+btnLabel2+'=0',cx,cy-8);
-			ctx.fillStyle='rgba(255,224,130,0.95)';
-			ctx.font='bold 11px sans-serif';
-			// Cancel is now this SAME hand's thumbstick click (see
-			// processControllerPlain's rActive/lActive stick-click branch) --
-			// no more cross-hand escape, so label it as a self-contained
-			// binding rather than pointing at the other controller.
-			ctx.fillText((menu && menu.overflow) ? '他はパネル参照' : '取消:スティック',cx,cy+9);
 		}
 		else
 		{
-			ctx.fillStyle='#fff';
-			ctx.font='bold 15px sans-serif';
-			ctx.textBaseline='middle';
-			ctx.fillText('ESC',cx,cy-7);
-			ctx.fillStyle='rgba(255,224,130,0.95)';
-			ctx.font='bold 10px sans-serif';
-			ctx.fillText(0<options.length ? 'パネル参照('+options.length+')' : '全入力=ESC',cx,cy+9);
+			// Generic/ESC face: same fully-transparent treatment, but there
+			// is no per-option content to label -- every sector dispatches
+			// the identical GUI_ESCAPE_ACTION, so this stays a simple fixed
+			// 4-spoke "ESC" reminder (unrotated: 3 short latin letters read
+			// fine upright at any position, so radial rotation would only
+			// add visual noise here for no legibility gain).
+			for(var gi=0; gi<GUI_GUIDE_SECTORS.length; ++gi)
+			{
+				var dir=GUI_GUIDE_SECTORS[gi];
+				var gCenterRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
+				ctx.save();
+				ctx.translate(cx,cy);
+				ctx.rotate(gCenterRad);
+				ctx.beginPath();
+				ctx.moveTo(hubR+4*k,0);
+				ctx.lineTo(hubR+14*k,0);
+				ctx.lineWidth=1.5*k;
+				ctx.strokeStyle='rgba(230,237,243,0.55)';
+				ctx.stroke();
+				ctx.restore();
+				var gLabelR=hubR+26*k;
+				var glx=cx+Math.cos(gCenterRad)*gLabelR, gly=cy+Math.sin(gCenterRad)*gLabelR;
+				ctx.textAlign='center';
+				ctx.textBaseline='middle';
+				ctx.font='bold '+(20*k)+'px sans-serif';
+				// Amber -- a different hue from the 'ap' N-way face's white/
+				// yellow makes "this isn't the usual dial" obvious at a
+				// glance, before reading any text.
+				ctx.lineWidth=3*k;
+				ctx.strokeStyle='rgba(8,10,14,0.9)';
+				ctx.strokeText('ESC',glx,gly);
+				ctx.fillStyle='#ffb37a';
+				ctx.fillText('ESC',glx,gly);
+			}
 		}
+		// No centre hub any more -- the old hub disc only repeated what the
+		// selected sector's accent already shows, and the "A=5 B=0" reminder
+		// it carried died with the face-button reroutes it described (see
+		// processControllerPlain: the owner hand's A/B are parked now), so
+		// the centre stays fully transparent like everything else. The ONE
+		// binding no sector can label -- cancel, this SAME hand's thumbstick
+		// click -- plus the overflow/panel pointer goes on a single small
+		// fit-shrunk line tucked into the canvas' bottom-LEFT corner: the
+		// only bottom-edge region no spoke label can ever reach (a straight-
+		// down spoke's rotated text runs through bottom-CENTRE; the bottom-
+		// left DIAGONAL spoke is capped at rOuter, whose corner-ward
+		// component tops out at rOuter/sqrt(2), well above this line).
+		var hint;
+		if('ap'===guiMode)
+		{
+			hint=(menu && menu.overflow) ? '他はパネル参照 / 取消:スティック押込' : '取消:スティック押込';
+		}
+		else
+		{
+			hint=(0<options.length ? 'パネル参照('+options.length+') / ' : '')+'全入力=ESC';
+		}
+		var hintFit=fitSpokeLabel(ctx,hint,cx-16*k,12*k,8*k);
+		ctx.font='bold '+hintFit.fontPx+'px sans-serif';
+		ctx.textAlign='left';
+		ctx.textBaseline='middle';
+		ctx.lineWidth=Math.max(2,hintFit.fontPx*0.22);
+		ctx.strokeStyle='rgba(8,10,14,0.9)';
+		ctx.strokeText(hintFit.text,6*k,h-10*k);
+		ctx.fillStyle='rgba(255,224,130,0.95)';
+		ctx.fillText(hintFit.text,6*k,h-10*k);
 	}
+	// ---- Normal flight-function dial face: fully-transparent, radial-label
+	// (2026-07, same redesign/visual language as drawGuiDialGuide below) ----
+	// RIGHT_DIAL/LEFT_DIAL are now N-way arrays (N=6 today) rather than a
+	// fixed up/right/down/left table, so this face is drawn exactly like
+	// the GUI guide's 'ap' branch (see drawGuiDialGuide's doc comment for
+	// the full design rationale -- no background disc, no outer circle, no
+	// wedge fill/borders, no centre hub, only floating text), just WITHOUT
+	// the leading hotkey-digit span (these are fixed functions, not
+	// numbered menu options) and with N fixed at the table's own length
+	// instead of a dialog's dynamic option count. sel (numeric 0..N-1, see
+	// updateDialStick/pickDialSector) picks which sector gets the longer/
+	// amber tick + arrowhead accent; 'hold'-mode entries currently being
+	// fired share that SAME accent while the trigger is held (dial.sel does
+	// not change mid-hold, so no extra state/color is needed here -- see
+	// the class doc comment's Four-refinements section).
 	function drawDial(ctx,hand,sel,state,guiMode)
 	{
-		var w=256,h=256,cx=128,cy=128,rOuter=110;
+		var w=ctx.canvas.width,h=ctx.canvas.height,cx=w/2,cy=h/2,k=w/384;
 		ctx.clearRect(0,0,w,h);
 		// guiMode is only ever non-null for whichever hand currently OWNS an
 		// open dialog (see processControllerPlain's rActive/lActive) -- so
@@ -2084,71 +2476,59 @@ EM_JS(void,YsfwInstallWebXR,(),
 			drawGuiDialGuide(ctx,guiMode,hand);
 			return;
 		}
-		ctx.fillStyle='rgba(10,14,20,0.55)';
-		ctx.beginPath();
-		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
-		ctx.fill();
-		var sectors=['up','right','down','left'];
-		for(var i=0; i<sectors.length; ++i)
+		var table=('right'===hand ? RIGHT_DIAL : LEFT_DIAL);
+		var n=table.length;
+		var wedge=2*Math.PI/n;
+		// Same hubR/rOuter keep-clear convention as drawGuiDialGuide (k here
+		// is also w/384, so the two faces' proportions match exactly).
+		var rOuter=w/2-10*k;
+		var hubR=28*k;
+		var textFontStart=17*k, floorFontPx=12*k;
+		for(var i=0; i<n; ++i)
 		{
-			var dir=sectors[i];
-			var centerRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
-			var a0=centerRad-Math.PI/4, a1=centerRad+Math.PI/4;
+			var centerRad=-Math.PI/2+i*wedge;
+			var flip=Math.cos(centerRad)<0; // see drawGuiDialGuide's flip-rule doc comment.
+			var selected=(i===sel);
+			var tickInnerR=hubR+3*k, tickOuterR=selected ? hubR+13*k : hubR+7*k;
+			ctx.save();
+			ctx.translate(cx,cy);
+			ctx.rotate(centerRad);
 			ctx.beginPath();
-			ctx.moveTo(cx,cy);
-			ctx.arc(cx,cy,rOuter,a0,a1);
-			ctx.closePath();
-			ctx.fillStyle=(dir===sel) ? 'rgba(77,163,255,0.85)' : 'rgba(143,163,187,0.28)';
-			ctx.fill();
-			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2;
+			ctx.moveTo(tickInnerR,0);
+			ctx.lineTo(tickOuterR,0);
+			ctx.lineWidth=(selected ? 3 : 1.5)*k;
+			ctx.strokeStyle=selected ? 'rgba(255,214,64,0.95)' : 'rgba(230,237,243,0.55)';
 			ctx.stroke();
-			var labelR=rOuter*0.62;
-			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
-			ctx.textAlign='center';
-			var stateLine=dialSectorStateLine(hand,dir,state);
-			if(stateLine)
+			if(selected)
 			{
-				// Smaller label + a highlighted state line beneath it -- both
-				// still fit inside the wedge at 256px.
-				ctx.fillStyle='#fff';
-				ctx.font='bold 17px sans-serif';
-				ctx.textBaseline='middle';
-				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly-9);
-				ctx.fillStyle='rgba(255,224,130,0.95)';
-				ctx.font='bold 15px sans-serif';
-				ctx.fillText(stateLine,lx,ly+10);
+				var apexR=tickOuterR+6*k;
+				ctx.beginPath();
+				ctx.moveTo(apexR,0);
+				ctx.lineTo(apexR-5*k,-4*k);
+				ctx.lineTo(apexR-5*k,4*k);
+				ctx.closePath();
+				ctx.fillStyle='rgba(255,214,64,0.95)';
+				ctx.fill();
 			}
-			else
+			ctx.restore();
+			var labelStartR=tickOuterR+(selected ? 9*k : 5*k);
+			var avail=Math.max(20*k,rOuter-labelStartR);
+			var fit=fitSpokeLabel(ctx,table[i].label,avail,selected ? textFontStart+2*k : textFontStart,floorFontPx);
+			var textColor=selected ? '#ffe066' : '#dff2e8';
+			var r=drawSpokeSpan(ctx,cx,cy,centerRad,flip,labelStartR,fit.text,fit.fontPx,textColor);
+			// Live-state readout (gear/brake/flap/weapon -- see
+			// dialEntryStateText above): a second, dimmer span chained
+			// outward past the label on the same spoke. The labels are all
+			// short, so the leftover radius comfortably fits these few-char
+			// readouts; fitSpokeLabel still guards the pathological case.
+			var stateText=dialEntryStateText(table[i],state);
+			if(stateText)
 			{
-				ctx.fillStyle='#fff';
-				ctx.font='bold 22px sans-serif';
-				ctx.textBaseline='middle';
-				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly);
+				var stateStartR=r+5*k;
+				var stateFit=fitSpokeLabel(ctx,stateText,Math.max(16*k,rOuter-stateStartR),13*k,9*k);
+				var stateColor=selected ? 'rgba(255,224,130,0.9)' : 'rgba(170,214,190,0.9)';
+				drawSpokeSpan(ctx,cx,cy,centerRad,flip,stateStartR,stateFit.text,stateFit.fontPx,stateColor);
 			}
-		}
-		var centerText=dialCenterText(hand,state);
-		if(centerText)
-		{
-			ctx.beginPath();
-			ctx.arc(cx,cy,22,0,2*Math.PI);
-			ctx.fillStyle='rgba(20,26,34,0.88)';
-			ctx.fill();
-			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2;
-			ctx.stroke();
-			ctx.fillStyle='#fff';
-			ctx.font='bold 13px sans-serif';
-			ctx.textAlign='center';
-			ctx.textBaseline='middle';
-			ctx.fillText(centerText,cx,cy);
-		}
-		else
-		{
-			ctx.beginPath();
-			ctx.arc(cx,cy,14,0,2*Math.PI);
-			ctx.fillStyle='rgba(230,237,243,0.85)';
-			ctx.fill();
 		}
 	}
 	function ensureDialResources(hand)
@@ -2163,12 +2543,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(vr.mvBinding && vr.viewerSpace)
 			{
 				var canvas=document.createElement('canvas');
-				canvas.width=256;
-				canvas.height=256;
+				canvas.width=DIAL_CANVAS_PX;
+				canvas.height=DIAL_CANVAS_PX;
 				var quad=vr.mvBinding.createQuadLayer({
 					space:vr.viewerSpace,
-					viewPixelWidth:256,
-					viewPixelHeight:256,
+					viewPixelWidth:DIAL_CANVAS_PX,
+					viewPixelHeight:DIAL_CANVAS_PX,
 					layout:'mono',
 					width:0.12,
 					height:0.12,
@@ -2332,11 +2712,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// open dialog (vr.ctl.guiOwner) -- null on the other hand, which
 			// keeps drawing its own normal face.
 			var guiMode=dial.guiMode||null;
-			// Redraw when the sticky sector selection changes, the live
-			// aircraft state (gear/brake/flap/weapon) changes -- e.g. the
-			// gear finishing its travel must update the dial even though
-			// dial.sel hasn't moved -- OR the guiMode changes (a dialog
-			// just opened/closed/switched between apMenu and generic).
+			// Redraw when the sticky sector selection changes, OR the
+			// guiMode changes (a dialog just opened/closed/switched between
+			// apMenu and generic). stateSig is still tracked/compared here
+			// too (harmless -- drawDial no longer paints aircraft state
+			// on the normal face, see its doc comment, so a state-only
+			// change now just re-draws identical pixels) rather than
+			// threading a third redraw condition's removal through this
+			// call, dumpDialLayer, and drawDial's shared signature.
 			if(res.drawnSel!==dial.sel || res.drawnStateSig!==stateSig || res.drawnGuiMode!==guiMode)
 			{
 				try
@@ -2931,12 +3314,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.lastDialTapHand=null;
 					vr.ctl.lastDialTapAt=0;
 					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false};
-					vr.ctl.rightB=false;
-					vr.ctl.leftX=false;
-					vr.ctl.leftY=false;
 					vr.ctl.leftTrigger=false;
-					vr.ctl.dial.right={sel:'up',engaged:null,visible:false,hideAt:0};
-					vr.ctl.dial.left={sel:'up',engaged:null,visible:false,hideAt:0};
+					vr.ctl.dial.right={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
+					vr.ctl.dial.left={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
 					vr.ctl.gripPose={right:null,left:null};
 					vr.viewerSpace=null;
 					vr.dialRes={right:undefined,left:undefined};
@@ -3035,6 +3415,38 @@ EM_JS(void,YsfwInstallWebXR,(),
 			},vq,null);
 		}
 	};
+	// Headless test hooks for the N-way GUI dial guide (scripts/
+	// smoke-vrgui.mjs), fabricating a dialog the real engine has no easy
+	// headless path to (radio-comm's wingman-command menu needs a live AI
+	// wingman in formation) -- see vr.testGuiOverride's doc comment on the vr
+	// state block for why this is a deliberate, test-only shortcut rather
+	// than faking the native FsVrGuiDataPointer/FsVrGuiMenuPointer blocks
+	// directly (the real engine tick would immediately overwrite those).
+	//   lines: array of raw option-label strings, SAME format the engine
+	//     serializes (FsSimulation::SimSerializeVrGuiMenu) -- e.g.
+	//     '1...Break and Attack', '0...Don't send' -- parsed the exact same
+	//     way a real menu is (parseMenuLabel/computeGuiMenuLayout), so this
+	//     exercises the real parsing/sector-mapping code, not a re-implementation.
+	//   opts: {visible, apMenu} -- both default true (a visible, hotkey-driven
+	//     dialog); pass apMenu:false to fabricate a non-hotkey (generic/ESC)
+	//     dialog instead.
+	// After this call, guiDialogState()/readGuiMenu() return the fabricated
+	// state until vr.clearGuiOverride() -- processControllerPlain then drives
+	// the owner hand's dial exactly as it would for a real dialog.
+	vr.pokeGuiMenu=function(lines,opts)
+	{
+		opts=opts||{};
+		vr.testGuiOverride={
+			visible:(false!==opts.visible),
+			apMenu:(false!==opts.apMenu),
+			menu:lines||[]
+		};
+	};
+	vr.clearGuiOverride=function()
+	{
+		vr.testGuiOverride=null;
+	};
+
 	// Debug/test hook: read the 16-float control block back as a plain array
 	// (see fsvr.h for the layout).  The hosting page has no HEAPF32 access
 	// (this build does not export it), so scripts/smoke-vrctl.mjs uses this
@@ -3160,6 +3572,77 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return { meanDiff:sum/(a.length/4)/3 };
 	};
 
+	// Headless test hooks for the collimated gunsight reticle
+	// (scripts/smoke-vrreticle.mjs).  readMultiviewCenterPatch reads back a
+	// (2*half)x(2*half) RGBA patch centered on a scene layer of the test color
+	// texture-array; the .mjs then locates the HUD-green reticle pixels and
+	// compares their centroid between the two eye layers (zero disparity is the
+	// whole point of the collimated fix).  GL readPixels is bottom-up; the patch
+	// is returned in that native orientation (fine for a layer-vs-layer compare).
+	vr.readMultiviewCenterPatch=function(layer,half)
+	{
+		var W=vr.testW,H=vr.testH;
+		var cx=Math.floor(W/2),cy=Math.floor(H/2);
+		var x0=cx-half,y0=cy-half,w=2*half,h=2*half;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.testColor,0,layer);
+		var px=new Uint8Array(w*h*4);
+		GLctx.readPixels(x0,y0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		return { W:W,H:H,x0:x0,y0:y0,w:w,h:h,px:Array.from(px) };
+	};
+	// dumpMultiviewLayer: center-cropped PNG (data URL) of a scene layer, for
+	// eyeball/golden-image evidence of the reticle (scripts/smoke-vrreticle.mjs
+	// writes it out).  cropHalf defaults to a full-frame dump; scale (default 1)
+	// nearest-neighbor upscales the crop so the ~3 px reticle is legible.
+	// Vertically flipped (readPixels bottom-up -> top-down canvas), like
+	// dumpHudLayer.
+	vr.dumpMultiviewLayer=function(layer,cropHalf,scale)
+	{
+		scale=scale||1;
+		var W=vr.testW,H=vr.testH;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.testColor,0,layer);
+		var full=new Uint8ClampedArray(W*H*4);
+		GLctx.readPixels(0,0,W,H,GLctx.RGBA,GLctx.UNSIGNED_BYTE,full);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		var cx=Math.floor(W/2),cy=Math.floor(H/2);
+		var half=cropHalf||Math.floor(Math.min(W,H)/2);
+		var ox=cx-half,oy=cy-half,cw=2*half,ch=2*half;
+		var out=new Uint8ClampedArray(cw*ch*4);
+		for(var y=0; y<ch; ++y)
+		{
+			var srcY=H-1-(oy+y);
+			for(var x=0; x<cw; ++x)
+			{
+				var si=(srcY*W+(ox+x))*4,di=(y*cw+x)*4;
+				out[di]=full[si];out[di+1]=full[si+1];out[di+2]=full[si+2];out[di+3]=full[si+3];
+			}
+		}
+		var src=document.createElement('canvas');
+		src.width=cw;src.height=ch;
+		var sctx=src.getContext('2d');
+		var imgData=sctx.createImageData(cw,ch);
+		imgData.data.set(out);
+		sctx.putImageData(imgData,0,0);
+		if(1===scale)
+		{
+			return src.toDataURL('image/png');
+		}
+		var canvas=document.createElement('canvas');
+		canvas.width=cw*scale;canvas.height=ch*scale;
+		var ctx2d=canvas.getContext('2d');
+		ctx2d.imageSmoothingEnabled=false;
+		ctx2d.drawImage(src,0,0,canvas.width,canvas.height);
+		return canvas.toDataURL('image/png');
+	};
+
 	// Headless test hooks for the VR HUD composite (scripts/smoke-vrhud.mjs).
 	// readHudData exposes the 8-float HUD state block (see fsvr.h);
 	// readHudLayerStats reads back a given layer of the HUD texture array and
@@ -3190,6 +3673,38 @@ EM_JS(void,YsfwInstallWebXR,(),
 			out.push(HEAPF32[p+i]);
 		}
 		return out;
+	};
+	// readHudPatchStats: mean luminance + mean alpha (0-255) over a patch of a
+	// HUD texture layer centered on top-down texture coords (cxTop,cyTop).  Used
+	// by scripts/smoke-vrreticle.mjs to assert the gun-crosshair region of the
+	// flat HUD is now empty (the crosshair moved to the world-space reticle),
+	// while the rest of the HUD (readHudLayerStats) is untouched.  readPixels is
+	// bottom-up, so the top-down row is flipped here.
+	vr.readHudPatchStats=function(layer,cxTop,cyTop,half)
+	{
+		if(!vr.hud)
+		{
+			return { lum:0, alpha:0, n:0 };
+		}
+		var W=vr.hud.w,H=vr.hud.h;
+		var x0=Math.max(0,cxTop-half),x1=Math.min(W,cxTop+half);
+		var gy0=Math.max(0,H-(cyTop+half)),gy1=Math.min(H,H-(cyTop-half));
+		var w=x1-x0,h=gy1-gy0;
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTextureLayer(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,vr.hud.tex,0,layer);
+		var px=new Uint8Array(w*h*4);
+		GLctx.readPixels(x0,gy0,w,h,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		var lum=0,alpha=0,n=px.length/4;
+		for(var i=0; i<px.length; i+=4)
+		{
+			lum+=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+			alpha+=px[i+3];
+		}
+		return { lum:lum/n, alpha:alpha/n, n:n };
 	};
 	vr.readHudLayerStats=function(layer)
 	{
@@ -3342,8 +3857,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			hand=hand||'right';
 			var canvas=document.createElement('canvas');
-			canvas.width=256;
-			canvas.height=256;
+			canvas.width=DIAL_CANVAS_PX;
+			canvas.height=DIAL_CANVAS_PX;
 			var ctx=canvas.getContext('2d');
 			var dial=vr.ctl.dial[hand];
 			var state=readAircraftStateSnapshot();
