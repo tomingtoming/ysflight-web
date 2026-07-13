@@ -16,9 +16,11 @@
       { "zn": 1.0,  "top": 1.06,  "bottom": -1.1,  "w": 1.05 },
       { "zn": 2.5,  "top": 1.88,  "bottom": -1.82, "w": 1.65 },
       { "zn": 4.0,  "top": 2.61,  "bottom": -2.32, "w": 2.06 },
-      { "zn": 4.7,  "top": 3.15,  "bottom": -2.49, "w": 2.21,
-        "comment": "on-curve insert (ring seam): splits the 4.0-5.5 ring row so the cockpit glass paints a thin band, not a 1.5m square" },
+      { "zn": 4.7,  "top": 3.16,  "bottom": -2.5,  "w": 2.21,
+        "comment": "this and the next two: DXF L2 crown/belly verbatim over the cockpit (the sparse 4.0/5.5 stations let Catmull-Rom sag below the drawing here) + ring seams for the glass band" },
+      { "zn": 5.0,  "top": 3.41,  "bottom": -2.57, "w": 2.27 },
       { "zn": 5.5,  "top": 3.76,  "bottom": -2.68, "w": 2.37 },
+      { "zn": 6.3,  "top": 4.08,  "bottom": -2.83, "w": 2.49 },
       { "zn": 8.0,  "top": 4.3,   "bottom": -3.08, "w": 2.76 },
       { "zn": 12.0, "top": 4.36,  "bottom": -3.41, "w": 3.14 },
       { "zn": 20.0, "top": 4.36,  "bottom": -3.49, "w": 3.25 },
@@ -37,14 +39,16 @@
     ]
   },
   "decals": {
-    "comment": "window bands and door stations read off the drawing's detail layers (main deck y 0.06-0.42, upper deck y 2.72-3.06).",
+    "comment": "windows and doors from the DXF L64/L68 detail layers verbatim: main deck 84 windows y 0.061-0.450 pitch 0.51 w 0.27 (zn 5.59-59.44), upper deck 30 windows y 2.729-3.122 (zn 9.65-25.91), five 1.07x1.96 doors y -0.70..1.26 at zn 9.50/22.87/34.68/46.33/60.74, each with its own porthole ~0.25 aft of the door center.",
     "cheatline": { "znFrom": 2.4, "znTo": 70.0, "y0": 0.52, "y1": 0.96 },
     "windowRows": [
-      { "znFrom": 6.2, "znTo": 59.5, "y0": 0.06, "y1": 0.42, "pitch": 1.15, "skipDoors": true },
-      { "znFrom": 7.6, "znTo": 25.6, "y0": 2.72, "y1": 3.06, "pitch": 1.15 }
+      { "znFrom": 5.59, "znTo": 59.6, "y0": 0.06, "y1": 0.45, "pitch": 0.51, "w": 0.27, "skipDoors": true },
+      { "znFrom": 9.65, "znTo": 26.0, "y0": 2.73, "y1": 3.12, "pitch": 0.51, "w": 0.27 }
     ],
-    "doors": { "zn": [9.2, 17.8, 27.0, 44.5, 57.5], "y0": -0.15, "y1": 1.75, "halfW": 0.55 },
-    "cockpit": { "znFrom": 4.6, "znTo": 5.4, "y0": 3.0, "y1": 3.6 }
+    "doors": { "zn": [9.5, 22.87, 34.68, 46.33, 60.74], "y0": -0.7, "y1": 1.26, "halfW": 0.535,
+      "window": { "dz": 0.25, "y0": 0.06, "y1": 0.45, "w": 0.27 } },
+    "cockpit": { "znFrom": 4.43, "znTo": 6.3, "y0": 2.88, "y1": 3.41, "rake": 1.17,
+      "comment": "DXF L68 window outline verbatim: band zn 4.43..6.30, y 2.88..3.41, leading edge raked up-aft from (4.45,2.94) to (5.0,3.40) = dzn/dy 1.17" }
   },
   "wing": {
     "comment": "L11 planform vertices verbatim; TE from scanlines 39.2@3.3 .. 54.4@33.  Dihedral linear root -2.4 -> tip 1.55 (face view).  Flaps in two sections like the real wing (inboard / outboard, gap behind the inner engine at x11.9 where the hinge polyline also kinks at the span-12 wing section) so each hinges about its own local LE line.",

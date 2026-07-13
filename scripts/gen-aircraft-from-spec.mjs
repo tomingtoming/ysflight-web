@@ -124,39 +124,35 @@ function skinX(zn, y) {
 
 // --- fuselage loft -------------------------------------------------------------------
 
+// Ring cross-section point (also used to lay the cockpit glass ON the facets).
+function ringPt(zn, i, N) {
+  const s = stationAt(zn);
+  const yc = (s.top + s.bottom) / 2, aUp = s.top - yc, aDn = yc - s.bottom;
+  const th = (i / N) * Math.PI * 2;
+  const sy = Math.sin(th);
+  const y = yc + (sy >= 0 ? aUp : aDn) * sy;
+  const x = s.w * Math.cos(th) * (sy > 0 ? 1 - humpNarrow(s) * sy * sy : 1);
+  return [x, y];
+}
+
 function fuselage() {
   const g = mkGeo();
   const N = spec.fuselage.ringPoints || 32;
   const rings = denseZn.map((zn) => {
-    const s = stationAt(zn);
-    const yc = (s.top + s.bottom) / 2, aUp = s.top - yc, aDn = yc - s.bottom;
-    const nar = humpNarrow(s);
     const ring = [];
     for (let i = 0; i < N; i++) {
-      const th = (i / N) * Math.PI * 2;
-      const sy = Math.sin(th);
-      const y = yc + (sy >= 0 ? aUp : aDn) * sy;
-      const x = s.w * Math.cos(th) * (sy > 0 ? 1 - nar * sy * sy : 1);
+      const [x, y] = ringPt(zn, i, N);
       ring.push({ i: addV(g, x, y, zys(zn), true), y });
     }
     return ring;
   });
   const bellyY = spec.fuselage.bellyY ?? -2.5;
-  // Cockpit glass = the hull's OWN quads recolored (the stock-747 technique:
-  // no floated decal to sink into or z-fight the dome — the dome facets ARE
-  // the windshield).  Band: shoulder ring angles, the spec's zn/y window.
-  const ck = spec.decals && spec.decals.cockpit;
   for (let r = 0; r + 1 < rings.length; r++) {
-    const znq = (denseZn[r] + denseZn[r + 1]) / 2;
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
       const quad = [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]];
       const avgY = quad.reduce((s_, q) => s_ + q.y, 0) / 4;
-      let color = avgY < bellyY ? COL.belly : COL.body;
-      if (ck && znq >= ck.znFrom && znq <= ck.znTo &&
-          Math.min(Math.sin((2 * Math.PI * i) / N), Math.sin((2 * Math.PI * j) / N)) >= 0.82 &&
-          avgY >= ck.y0 - 0.15 && avgY <= ck.y1 + 0.05) color = COL.glass;
-      addFace(g, quad.map((q) => q.i), color);
+      addFace(g, quad.map((q) => q.i), avgY < bellyY ? COL.belly : COL.body);
     }
   }
   addFace(g, rings[0].map((q) => q.i), COL.body);                          // nose cap (+z)
@@ -170,16 +166,16 @@ function decals() {
   const g = mkGeo();
   const D = spec.decals;
   if (!D) return g;
-  const strip = (zn0, zn1, y0, y1, color, step) => {
+  const strip = (zn0, zn1, y0, y1, color, step, off = 0.04) => {
     const n = Math.max(1, Math.round((zn1 - zn0) / step));
     for (let k = 0; k < n; k++) {
       const a = zn0 + ((zn1 - zn0) * k) / n, b = zn0 + ((zn1 - zn0) * (k + 1)) / n;
       for (const sgn of [1, -1]) {
         const q = [
-          addV(g, sgn * (skinX(a, y0) + 0.04), y0, zys(a)),
-          addV(g, sgn * (skinX(b, y0) + 0.04), y0, zys(b)),
-          addV(g, sgn * (skinX(b, y1) + 0.04), y1, zys(b)),
-          addV(g, sgn * (skinX(a, y1) + 0.04), y1, zys(a)),
+          addV(g, sgn * (skinX(a, y0) + off), y0, zys(a)),
+          addV(g, sgn * (skinX(b, y0) + off), y0, zys(b)),
+          addV(g, sgn * (skinX(b, y1) + off), y1, zys(b)),
+          addV(g, sgn * (skinX(a, y1) + off), y1, zys(a)),
         ];
         addFace(g, sgn > 0 ? q : q.slice().reverse(), color);
       }
@@ -188,19 +184,109 @@ function decals() {
   const doors = D.doors ? D.doors.zn : [];
   if (D.cheatline) {
     const c = D.cheatline;
-    strip(c.znFrom, c.znTo, c.y0, c.y1, COL.stripe, 2.2);
+    // the stripe yields to the doors — both are skin decals at the same
+    // offset, so overlapping spans would be exactly coplanar (z-fight)
+    const hw = D.doors ? D.doors.halfW : 0;
+    const cuts = (D.doors && D.doors.y1 > c.y0 && D.doors.y0 < c.y1)
+      ? doors.map((d) => [d - hw, d + hw]).sort((p, q) => p[0] - q[0]) : [];
+    let a = c.znFrom;
+    for (const [s, e] of [...cuts, [c.znTo, c.znTo]]) {
+      if (s > a) strip(a, Math.min(s, c.znTo), c.y0, c.y1, COL.stripe, 2.2);
+      a = Math.max(a, e);
+    }
   }
   for (const row of D.windowRows || []) {
+    const w = row.w || 0.55;
+    const skipR = (D.doors && D.doors.halfW || 0.55) + 0.35;
     for (let zn = row.znFrom; zn < row.znTo; zn += row.pitch || 1.15) {
-      if (row.skipDoors && doors.some((d) => Math.abs(zn - d) < 1.0)) continue;
-      strip(zn, zn + 0.55, row.y0, row.y1, COL.win, 1);
+      if (row.skipDoors && doors.some((d) => Math.abs(zn + w / 2 - d) < skipR)) continue;
+      strip(zn, zn + w, row.y0, row.y1, COL.win, 1);
     }
   }
   if (D.doors) {
-    for (const d of doors) strip(d - D.doors.halfW, d + D.doors.halfW, D.doors.y0, D.doors.y1, COL.door, 2);
+    const dw = D.doors.window;
+    for (const d of doors) {
+      strip(d - D.doors.halfW, d + D.doors.halfW, D.doors.y0, D.doors.y1, COL.door, 2);
+      // the door's own porthole (slightly aft of the door centerline; floated
+      // 3cm above the door quad so the two decals don't z-fight)
+      if (dw) strip(d + (dw.dz || 0) - (dw.w || 0.27) / 2, d + (dw.dz || 0) + (dw.w || 0.27) / 2, dw.y0, dw.y1, COL.win, 1, 0.07);
+    }
   }
-  // (cockpit glass is painted onto the hull's own quads in fuselage() —
-  //  floated decals sink into the curved dome; see the note there.)
+  // Cockpit glass: the drawing's side-view window outline, clipped per hull
+  // facet and laid ON each facet's plane (+2.5cm along its normal).  A flat
+  // floated decal sinks into the doubly-curved dome somewhere; a whole-facet
+  // repaint is too chunky (a 1.5m black square) and rows break the band.
+  // Clipping the EXACT outline onto the planar facets gives the drawing's
+  // shape — raked leading edge and all — with sinking structurally impossible.
+  if (D.cockpit) {
+    const ck = D.cockpit;
+    const N = spec.fuselage.ringPoints || 32;
+    const rk = ck.rake || 0;
+    const outline = [
+      [ck.znFrom, ck.y0], [ck.znTo, ck.y0],
+      [ck.znTo, ck.y1], [ck.znFrom + rk * (ck.y1 - ck.y0), ck.y1],
+    ];
+    const clip = (poly, f) => {  // Sutherland-Hodgman: keep f(p) >= 0
+      const out = [];
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        const fa = f(a), fb = f(b);
+        if (fa >= 0) out.push(a);
+        if ((fa >= 0) !== (fb >= 0)) {
+          const t = fa / (fa - fb);
+          out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+        }
+      }
+      return out;
+    };
+    const area2 = (poly) => Math.abs(poly.reduce((s, p, i) => {
+      const q = poly[(i + 1) % poly.length];
+      return s + p[0] * q[1] - q[0] * p[1];
+    }, 0)) / 2;
+    for (let r = 0; r + 1 < denseZn.length; r++) {
+      const zn0 = denseZn[r], zn1 = denseZn[r + 1];
+      if (zn1 < ck.znFrom - 0.01 || zn0 > ck.znTo + 0.01) continue;
+      for (let i = 0; i < N; i++) {
+        const A0 = ringPt(zn0, i, N), B0 = ringPt(zn0, i + 1, N);
+        const A1 = ringPt(zn1, i, N), B1 = ringPt(zn1, i + 1, N);
+        if (Math.max(A0[1], B0[1], A1[1], B1[1]) < ck.y0 ||
+            Math.min(A0[1], B0[1], A1[1], B1[1]) > ck.y1) continue;
+        const yA = (zn) => A0[1] + ((zn - zn0) / (zn1 - zn0)) * (A1[1] - A0[1]);
+        const yB = (zn) => B0[1] + ((zn - zn0) / (zn1 - zn0)) * (B1[1] - B0[1]);
+        const sgn = Math.sign(B0[1] - A0[1] || B1[1] - A1[1]) || 1;
+        let poly = clip(outline, (p) => p[0] - zn0);
+        poly = clip(poly, (p) => zn1 - p[0]);
+        poly = clip(poly, (p) => sgn * (p[1] - yA(p[0])));
+        poly = clip(poly, (p) => sgn * (yB(p[0]) - p[1]));
+        if (poly.length < 3 || area2(poly) < 0.004) continue;
+        // facet plane normal (outward: same winding as the fuselage quad)
+        const F = [[A1[0], A1[1], zys(zn1)], [B1[0], B1[1], zys(zn1)],
+                   [B0[0], B0[1], zys(zn0)], [A0[0], A0[1], zys(zn0)]];
+        let nx = 0, ny = 0, nz = 0;
+        for (let k = 0; k < 4; k++) {
+          const [x0, y0, z0] = F[k], [x1, y1, z1] = F[(k + 1) % 4];
+          nx += (y0 - y1) * (z0 + z1); ny += (z0 - z1) * (x0 + x1); nz += (x0 - x1) * (y0 + y1);
+        }
+        const nl = Math.hypot(nx, ny, nz) || 1;
+        nx /= nl; ny /= nl; nz /= nl;
+        const pts = poly.map(([zn, y]) => {
+          const u = (zn - zn0) / (zn1 - zn0);
+          const yl = yA(zn), yh = yB(zn);
+          const v = (y - yl) / ((yh - yl) || 1e-9);
+          const x = (A0[0] + (A1[0] - A0[0]) * u) * (1 - v) + (B0[0] + (B1[0] - B0[0]) * u) * v;
+          return [x + nx * 0.025, y + ny * 0.025, zys(zn) + nz * 0.025];
+        });
+        // wind the piece to face the facet's outward normal
+        let px = 0, py = 0, pz = 0;
+        for (let k = 0; k < pts.length; k++) {
+          const [x0, y0, z0] = pts[k], [x1, y1, z1] = pts[(k + 1) % pts.length];
+          px += (y0 - y1) * (z0 + z1); py += (z0 - z1) * (x0 + x1); pz += (x0 - x1) * (y0 + y1);
+        }
+        if (px * nx + py * ny + pz * nz < 0) pts.reverse();
+        addFace(g, pts.map((p) => addV(g, ...p)), COL.glass);
+      }
+    }
+  }
   return g;
 }
 
