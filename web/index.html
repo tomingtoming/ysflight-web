@@ -1207,6 +1207,9 @@
     // rate, ?vraa=1 re-enables MSAA. Controller-feel knobs: ?vryawdz=<deg>
     // rudder-only deadzone (default 6), ?vrexpo=<n> stick exponent curve
     // (default 1.0 = off) -- see fswebxr.cpp's deflectionFromDeltaQ.
+    // ?vrperf=1 prints a '[vrperf]' phase-breakdown console line every 5s
+    // (engine tick/sim/draw + multiview scene/hud/gui/reticle + JS-side
+    // controller/dial/help-layer EMAs) -- see fswebxr.cpp's printVrPerfLine.
     (function () {
       var q = new URLSearchParams(location.search);
       var o = {};
@@ -1217,6 +1220,7 @@
       if (q.get('vrhud') === '0') o.hud = false; // kill switch for the VR HUD composite
       if (q.get('vrreticle') === '0') o.reticle = false; // kill switch for the collimated gunsight reticle (restores the baked flat-HUD crosshair)
       if (q.get('vrhelp') === '0') o.help = false; // kill switch for the per-hand controller help placards
+      if (q.get('vrperf') === '1') o.perf = true; // print a '[vrperf]' phase-breakdown console line every 5s (see fswebxr.cpp's printVrPerfLine)
       // ?vrpanel=1 forces the in-flight-dialog quad on (default off: the
       // right dial's selection guide alone drives any dialog that fits it,
       // see fswebxr.cpp's guiPanelWanted/maybeForceGuiPanel).

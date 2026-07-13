@@ -16,6 +16,8 @@ Follows the same BSD-style license as fslazywindow itself.
 #include <fssimplewindow.h>
 #include <fslazywindow.h>
 
+#include "graphics/common/fsvr.h"
+
 static bool busy=false;  // To prevent re-entry
 
 // ----------------------------------------------------------------------------
@@ -126,6 +128,13 @@ static void MainLoopTick(void)
 	appPtr->Interval();
 	busy=false;
 
+	// Phase split for FsVrPerfDataPointer()[0]/[1] (see fsvr.h): the
+	// simulation/interval half vs. the draw half of the tick, same EMA
+	// (alpha=0.05) as tickMsAvg below. Always-on (negligible next to the
+	// work it measures); the VR web layer prints it under ?vrperf=1.
+	const double tAfterInterval=emscripten_get_now();
+	FsVrPerfAccumulate(0,tAfterInterval-t0);
+
 	if(0!=FsCheckWindowExposure() || true==appPtr->NeedRedraw())
 	{
 		appPtr->Draw();
@@ -133,6 +142,7 @@ static void MainLoopTick(void)
 
 	const double tickMs=emscripten_get_now()-t0;
 	tickMsAvg=(0.0==tickMsAvg ? tickMs : tickMsAvg*0.95+tickMs*0.05);
+	FsVrPerfAccumulate(1,emscripten_get_now()-tAfterInterval);
 }
 
 // ----------------------------------------------------------------------------

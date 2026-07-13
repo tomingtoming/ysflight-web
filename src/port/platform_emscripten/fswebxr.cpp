@@ -250,6 +250,18 @@ extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrAircraftStateDataPointer(void)
 	return FsVrAircraftStateDataPointer();
 }
 
+// Forwards to the engine's VR phase-breakdown perf block (fsvr.h, 16
+// floats): slots [2..5] (scene/HUD/GUI/reticle) are filled once per VR
+// multiview frame by FsSimulation::SimDrawAllScreen; slots [0..1]
+// (sim/draw) are filled once per tick by fslazywindow_emscripten.cpp's
+// MainLoopTick. onXRFrame below reads this (plus its own JS-side EMAs) to
+// print the '[vrperf]' console line -- see fsvr.h's FsVrPerfDataPointer doc
+// comment for the full slot layout.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrPerfDataPointer(void)
+{
+	return FsVrPerfDataPointer();
+}
+
 // Forwards to the engine's VR in-flight-GUI-dialog composite state block
 // (fsvr.h, 8 floats): the JS runtime writes [enable,fbo,texArray,texW,texH]
 // here when single-pass stereo engages (see setupGui below); the engine
@@ -322,6 +334,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		mvDepth:null,
 		mvDepthSize:null,
 		testMode:false,
+		// JS-side EMA (alpha=0.05, same shape as the engine's fsvr.h
+		// FsVrPerfDataPointer) of the per-frame cost of the three JS-side VR
+		// maintenance calls onXRFrame makes on the multiview path -- see
+		// accumJsPerf/onXRFrame below. Read by the '[vrperf]' console line.
+		jsPerf:{ctl:0,dial:0,layers:0},
+		jsPerfWindow:0,
 		// VR HUD composite (fsvr.h FsVrHudDataPointer): an off-screen two-layer
 		// multiview framebuffer the engine renders the flat HUD into, plus the
 		// emscripten GL-table ids so the C++ side can bind them by integer name.
@@ -3123,6 +3141,42 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 	}
 
+	// Folds a new JS-side sample (ms) into vr.jsPerf[key] with the same
+	// alpha=0.05 EMA as the engine's fsvr.h FsVrPerfDataPointer, so the
+	// '[vrperf]' line mixes native and JS numbers on the same footing.
+	function accumJsPerf(key,ms)
+	{
+		var p=vr.jsPerf;
+		p[key]=(0===p[key] ? ms : p[key]*0.95+ms*0.05);
+	}
+
+	// Prints the '[vrperf]' phase-breakdown line: engine tick/sim/draw
+	// (YsfwGetTickMs / FsVrPerfDataPointer slots [0][1]), the multiview
+	// draw-path breakdown (slots [2..5], see fsvr.h), and the JS-side EMAs
+	// gathered in onXRFrame around the multiview-only maintenance calls
+	// (controller processing, dial canvas redraw+upload, help-quad layer
+	// maintenance). Safe to call whether or not the wasm build exports
+	// _YsfwVrPerfDataPointer (defensive: older cached builds during
+	// development). All EMA, so a single call is a representative snapshot,
+	// not a one-frame spike.
+	function printVrPerfLine()
+	{
+		var tick=(Module._YsfwGetTickMs ? Module._YsfwGetTickMs() : 0);
+		var sim=0,draw=0,scene=0,hud=0,gui=0,reticle=0;
+		if(Module._YsfwVrPerfDataPointer)
+		{
+			var p=Module._YsfwVrPerfDataPointer()>>2;
+			sim=HEAPF32[p+0]; draw=HEAPF32[p+1];
+			scene=HEAPF32[p+2]; hud=HEAPF32[p+3]; gui=HEAPF32[p+4]; reticle=HEAPF32[p+5];
+		}
+		var jp=vr.jsPerf;
+		console.log('[vrperf] tick '+tick.toFixed(1)+
+		            ' | sim '+sim.toFixed(1)+' draw '+draw.toFixed(1)+
+		            ' | scene '+scene.toFixed(1)+' hud '+hud.toFixed(1)+' gui '+gui.toFixed(1)+' reticle '+reticle.toFixed(1)+
+		            ' | js: ctl '+jp.ctl.toFixed(1)+' dial '+jp.dial.toFixed(1)+' layers '+jp.layers.toFixed(1)+
+		            ' (ms EMA)');
+	}
+
 	function onXRFrame(t,frame)
 	{
 		var session=vr.session;
@@ -3141,6 +3195,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			st.t0=t;
 			st.tWindow=t;
 			st.framesWindow=0;
+			vr.jsPerfWindow=t;
 		}
 		++st.frames;
 		++st.framesWindow;
@@ -3151,6 +3206,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 			console.log('[vr] '+st.fps.toFixed(1)+' fps');
 			st.tWindow=t;
 			st.framesWindow=0;
+		}
+
+		// Phase-breakdown perf line (?vrperf=1): every 5s, independent of the
+		// 2s fps window above so the two don't fight over st's bookkeeping.
+		if((Module.ysfwVrOptions||{}).perf && 5000<=t-vr.jsPerfWindow)
+		{
+			printVrPerfLine();
+			vr.jsPerfWindow=t;
 		}
 
 		// The engine may be suspended mid-frame (ASYNCIFY lazy-pack fetch);
@@ -3184,9 +3247,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(pose)
 			{
 				writeEyeDataMv(pose);
+				var perfP0=performance.now();
 				updateControllers(frame,pose);
+				var perfP1=performance.now();
 				updateDialLayers(frame);
+				var perfP2=performance.now();
 				updateHelpLayers(frame);
+				var perfP3=performance.now();
+				accumJsPerf('ctl',perfP1-perfP0);
+				accumJsPerf('dial',perfP2-perfP1);
+				accumJsPerf('layers',perfP3-perfP2);
 			}
 		}
 		else
@@ -3244,6 +3314,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var frameRate=(0<opts.frameRate ? opts.frameRate : 72);
 		var antialias=(undefined!==opts.antialias ? !!opts.antialias : false);
 		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0};
+		vr.jsPerf={ctl:0,dial:0,layers:0};
+		vr.jsPerfWindow=0;
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
 		return navigator.xr.requestSession('immersive-vr',{requiredFeatures:['local'],optionalFeatures:['layers']}).then(function(session)
 		{
@@ -3357,6 +3429,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 						st.cpuMs=(Module._YsfwGetTickMs ? Module._YsfwGetTickMs() : 0);
 						console.log('[vr] session avg '+st.avgFps.toFixed(1)+' fps, '+
 						            st.cpuMs.toFixed(0)+'ms CPU/frame (period '+(1000/st.avgFps).toFixed(0)+'ms), over '+st.seconds.toFixed(1)+'s');
+						// Phase breakdown, unconditionally (costs nothing once the
+						// session is already ending): whatever the perf block last
+						// held, right next to the fps/CPU summary above.
+						printVrPerfLine();
 					}
 					vr.session=null;
 					vr.refSpace=null;
@@ -3762,6 +3838,23 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var p=_YsfwVrAircraftStateDataPointer()>>2;
 		var out=[];
 		for(var i=0; i<8; ++i)
+		{
+			out.push(HEAPF32[p+i]);
+		}
+		return out;
+	};
+
+	// Headless test hook for the VR perf phase-breakdown block (see fsvr.h's
+	// FsVrPerfDataPointer doc comment): the 16-float block as a plain array
+	// -- same pattern as readHudData/readAircraftState above (the hosting
+	// page has no HEAPF32 access; this is the read-side counterpart from
+	// inside the module). Used by scripts to probe slots [0..5] directly
+	// without waiting on the '[vrperf]' console line's 5s cadence.
+	vr.readPerfData=function()
+	{
+		var p=_YsfwVrPerfDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<16; ++i)
 		{
 			out.push(HEAPF32[p+i]);
 		}
