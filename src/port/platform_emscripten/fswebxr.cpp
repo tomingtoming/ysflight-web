@@ -79,9 +79,13 @@ that owns the session and fills that state every frame:
     positioned ~12cm above that hand's grip pose and re-billboarded toward
     the headset (yaw only) every frame (see updateHelpLayers/
     updateHelpTransform). Auto-shows on session start for 12s, then hides;
-    a thumbstick click (xr-standard buttons[3]) on either hand toggles both
-    placards at any time (see showHelp/toggleHelp/updateHelpAutoHide). Kill
-    switch: Module.ysfwVrOptions.help===false (?vrhelp=0).
+    holding the LEFT hand's X button for >=A_RECENTER_MS (mirroring the
+    right hand's A long-press recenter, see the four-refinements list
+    below) toggles both placards at any time (see showHelp/toggleHelp/
+    updateHelpAutoHide). A thumbstick click is deliberately NOT bound to
+    anything -- physically jolting the stick to press it is awkward in VR
+    (see processControllerPlain's per-hand doc comments). Kill switch:
+    Module.ysfwVrOptions.help===false (?vrhelp=0).
   - GUI-in-VR: the engine's 2D dialog machinery (autopilot/radio-comm menus,
     replay/continue dialogs) still opens and grabs input in VR even though
     ordinary 2D drawing is skipped -- e.g. the left dial's AP tap
@@ -120,9 +124,9 @@ that owns the session and fills that state every frame:
     While a dialog is open, processControllerPlain reroutes the owner hand's
     stick sectors to the dialog's own hotkeys when guiMenu.drivable, or
     to a generic Escape/cancel tap otherwise (GUI_ESCAPE_ACTION); the owner
-    hand's thumbstick click is repurposed as a truthful cancel/Escape
+    hand's B (right) / Y (left) press is the truthful cancel/Escape
     binding. That is the WHOLE dialog grammar: sector pick + trigger
-    confirm + stick-click cancel, nothing else. Like the normal RIGHT_DIAL/
+    confirm + B/Y cancel, nothing else. Like the normal RIGHT_DIAL/
     LEFT_DIAL (a fixed table, N=6 sectors today, see updateDialStick), the
     drivable guide dial is also N-WAY, but its N is DYNAMIC instead of
     fixed: it shows one sector PER REAL OPTION the open dialog reports
@@ -134,13 +138,20 @@ that owns the session and fills that state every frame:
     menu (radio-comm's wingman-command dialog has 7 numbered commands plus
     an explicit "0...Don't send" option, 8 total) is fully dial-selectable
     without ever needing the on-quad panel.
-    The owner hand's A/B (X/Y on the left hand) are simply PARKED while the
-    dialog is open: their normal flight taps (gear/brake, flaps) are
-    suppressed so a face-button fumble mid-dialog can't drop the gear, and
-    they carry no dialog meaning either -- the N sectors already reach every
-    real option, so a second fixed-digit path would only be a redundant
-    grammar to memorize. (A's long-press recenter stays live -- view-only,
-    dialog-irrelevant.) The OTHER hand is completely untouched --
+    The owner hand's A (X on the left hand) is simply PARKED while the
+    dialog is open: its normal flight tap (gear/flaps-down) is suppressed
+    so a face-button fumble mid-dialog can't drop the gear, and it carries
+    no dialog meaning either -- the N sectors already reach every real
+    option, so a second fixed-digit path would only be a redundant grammar
+    to memorize. The owner hand's B (Y on the left hand) instead fires a
+    truthful cancel/Escape tap on its press edge (its normal held brake/
+    flaps-up meaning is suppressed the same way) -- the ONE dialog-relevant
+    binding the owner hand carries, replacing thumbstick-click (physically
+    awkward to press in VR -- see processControllerPlain's per-hand doc
+    comments; the stick-click button is simply unbound now, in every
+    state). A's long-press recenter and X's long-press help-toggle both
+    stay live regardless of dialog state -- view-only, dialog-irrelevant.
+    The OTHER hand is completely untouched --
     its dial, trigger, A/B/X/Y all keep their normal flight-control meaning,
     exactly as if no dialog were open, so the pilot never loses that hand's
     functions to a dialog they didn't open. Discoverability: the owner hand's
@@ -352,7 +363,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// headless-testable visibility/toggle state (see showHelp/toggleHelp/
 		// updateHelpAutoHide, scripts/smoke-vrctl.mjs Group 11).
 		helpRes:{right:undefined,left:undefined},
-		help:{visible:false,shownAt:0,stickPrev:{right:false,left:false}},
+		help:{visible:false,shownAt:0},
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -391,8 +402,34 @@ EM_JS(void,YsfwInstallWebXR,(),
 			lastDialTapHand:null,
 			lastDialTapAt:0,
 			// Right A button: press/hold/release state for the tap-vs-
-			// recenter decision (see A_TAP_MAX_MS/A_RECENTER_MS).
-			aBtn:{pressed:false,pressAt:0,recentered:false},
+			// recenter decision (see A_TAP_MAX_MS/A_RECENTER_MS). owned
+			// latches whether any moment of the CURRENT press overlapped
+			// this hand owning an open dialog -- such a press must not fire
+			// the quick-tap action on release (the dialog can close mid-
+			// press, e.g. cancelled by B on this same hand, and the release
+			// would otherwise leak a spurious gear tap).
+			aBtn:{pressed:false,pressAt:0,recentered:false,owned:false},
+			// Left X button: same tap-vs-long-press shape as aBtn (owned
+			// included), but the long action toggles the help placards
+			// instead of recentering (see toggleHelp,
+			// processControllerPlain's left-hand branch). helped mirrors
+			// aBtn.recentered: fires toggleHelp at most once per hold.
+			xBtn:{pressed:false,pressAt:0,helped:false,owned:false},
+			// Right B / left Y previous-press state -- re-added ONLY for the
+			// dialog-owner cancel press-edge (see processControllerPlain's
+			// rActive/lActive branches); the normal, non-owner B/Y dispatch
+			// stays pure level-sensed vrKeyEdge and needs no edge memory of
+			// its own. The *Swallow flags latch a press that overlapped
+			// dialog ownership (the cancel press itself, or a brake/flap-up
+			// press held from before the dialog opened): a successful
+			// Escape closes the dialog out from under the still-held
+			// button, and without the latch the very next frame's non-owner
+			// path would fire the normal air-brake/flaps-up key. Swallowed
+			// until physical release.
+			rightB:false,
+			rightBSwallow:false,
+			leftY:false,
+			leftYSwallow:false,
 			leftTrigger:false,
 			keys:{},
 			// Radial function-dial state per hand (see RIGHT_DIAL/LEFT_DIAL).
@@ -541,11 +578,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// design would have needed the owner hand's A/B buttons to reach options
 	// 5/6 (see GUI_DIAL_CAPACITY's doc comment) and forced the panel on
 	// above that.
-	// With every real option reachable by a sector, the owner hand's A/B
-	// (X/Y on the left hand) carry NO dialog meaning at all any more --
-	// they are parked while a dialog is open (see processControllerPlain),
-	// keeping the dialog grammar to exactly three inputs: sector pick,
-	// trigger confirm, thumbstick-click cancel.
+	// With every real option reachable by a sector, the owner hand's A
+	// (X on the left hand) carries NO dialog meaning at all any more -- it
+	// is parked while a dialog is open (see processControllerPlain); B (Y
+	// on the left hand) is the dialog grammar's cancel input instead of its
+	// normal brake/flaps-up meaning, keeping the dialog grammar to exactly
+	// three inputs: sector pick, trigger confirm, B/Y cancel.
 	//
 	// hotkeyCode(opt,idx): the DOM KeyboardEvent code for one parsed option
 	// (see parseMenuLabel) -- opt.hotkey ('1'..'9' or '0') when the engine's
@@ -595,9 +633,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// FsGuiDialog::KeyIn's fsKey match clicks -- so Escape is the one input
 	// confirmed safe to fire at ANY open dialog, unlike Tab/Arrow keys/Enter
 	// (see the investigation notes in fsvr.h's FsVrGuiDataPointer comment).
-	// Also what the owner hand's thumbstick-click cancel binding dispatches
-	// (see processControllerPlain's rActive/lActive stick-click branch),
-	// regardless of drivable/apMenu.
+	// Also what the owner hand's B (right) / Y (left) press-edge cancel
+	// binding dispatches (see processControllerPlain's rActive/lActive
+	// branches), regardless of drivable/apMenu.
 	var GUI_ESCAPE_ACTION={label:'Cancel', code:'Escape', mode:'tap'};
 
 	if(!navigator.xr || !navigator.xr.isSessionSupported)
@@ -1410,11 +1448,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.help.visible=true;
 		vr.help.shownAt=(typeof performance!=='undefined' ? performance.now() : Date.now());
 	}
-	// Thumbstick-click (xr-standard buttons[3]) press edge on EITHER hand
-	// toggles both placards. A manual show (toggling back on) disarms the
-	// auto-hide timer (shownAt=0) -- only the initial auto-show times out on
-	// its own; once the pilot has explicitly asked to see it again it stays
-	// up until toggled off.
+	// Toggled by holding the LEFT hand's X button for >=A_RECENTER_MS (see
+	// processControllerPlain's left-hand branch and vr.ctl.xBtn) -- once per
+	// hold, mirroring the right hand's A long-press recenter. A manual show
+	// (toggling back on) disarms the auto-hide timer (shownAt=0) -- only the
+	// initial auto-show times out on its own; once the pilot has explicitly
+	// asked to see it again it stays up until toggled off.
 	function toggleHelp(rawSrc)
 	{
 		vr.help.visible=!vr.help.visible;
@@ -1640,9 +1679,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// owns an open dialog (rActive), the tap is simply parked --
 			// no gear drop from a mid-dialog fumble, and no dialog meaning
 			// either (the N-way sectors already reach every real option;
-			// cancel is the thumbstick click). Recenter is left enabled
-			// either way -- it is a view-only action, not a flight or
-			// dialog control.
+			// cancel is B, see below). Recenter is left enabled either way
+			// -- it is a view-only action, not a flight or dialog control.
 			var aPressed=!!(entry.buttons && entry.buttons.a);
 			var aBtn=vr.ctl.aBtn;
 			var aNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -1650,6 +1688,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				aBtn.pressAt=aNow;
 				aBtn.recentered=false;
+				aBtn.owned=false;
+			}
+			if(aPressed && rActive)
+			{
+				aBtn.owned=true; // see aBtn's doc comment: no tap on release.
 			}
 			if(aPressed && !aBtn.recentered && (aNow-aBtn.pressAt)>=A_RECENTER_MS)
 			{
@@ -1658,7 +1701,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 			if(!aPressed && aBtn.pressed && !aBtn.recentered && (aNow-aBtn.pressAt)<A_TAP_MAX_MS)
 			{
-				if(!rActive)
+				if(!rActive && !aBtn.owned)
 				{
 					vrKeyTap('KeyG'); // Default landing-gear key: a real tap, not a hold.
 				}
@@ -1666,42 +1709,46 @@ EM_JS(void,YsfwInstallWebXR,(),
 			aBtn.pressed=aPressed;
 
 			// Right B: normally a held spoiler/air-brake key; while THIS hand
-			// owns an open dialog it is parked (same reasoning as A above),
-			// with a release-if-held safety so a brake held from before the
-			// dialog opened doesn't stay stuck on.
+			// owns an open dialog, B is instead the truthful cancel/Escape
+			// binding (GUI_ESCAPE_ACTION is the one input confirmed safe for
+			// ANY open dialog -- see its doc comment), fired on the press
+			// edge -- the ONE input the owner hand has spare regardless of
+			// how many of the N sectors + trigger the currently-open
+			// dialog's real options occupy, so a pilot can always back out
+			// of a dialog without touching the other (fully normal) hand at
+			// all (see drawGuiDialGuide's on-quad label for this) -- plus a
+			// release-if-held safety so a brake held from before the dialog
+			// opened doesn't stay stuck on.
 			var bPressed=!!(entry.buttons && entry.buttons.b);
+			if(rActive && bPressed)
+			{
+				// This press overlapped dialog ownership (the cancel press
+				// itself, or a brake held from before the dialog opened) --
+				// swallow it from the normal path until physical release,
+				// or the Escape below closes the dialog and the very next
+				// frame's !rActive path would toggle the air brake off the
+				// still-held button (see vr.ctl.rightBSwallow's doc
+				// comment).
+				vr.ctl.rightBSwallow=true;
+			}
 			if(!rActive)
 			{
-				vrKeyEdge('KeyB',bPressed); // Default spoiler/air-brake key.
+				vrKeyEdge('KeyB',bPressed && !vr.ctl.rightBSwallow); // Default spoiler/air-brake key.
 			}
 			else
 			{
 				vrKeyEdge('KeyB',false); // Release it if it was held from before the dialog opened.
-			}
-
-			// Thumbstick click (xr-standard buttons[3]): normally toggles the
-			// help placards on the press edge, either hand (see toggleHelp).
-			// While THIS hand owns an open dialog, it is repurposed instead
-			// as the dialog's truthful cancel/Escape binding -- the ONE
-			// input the owner hand has spare regardless of how many of the
-			// N sectors + trigger + A + B the currently-open dialog's real
-			// options occupy, so a pilot can always back out of a dialog
-			// without touching the other (fully normal) hand at all. See
-			// drawGuiDialGuide's on-quad label for this.
-			var rStickBtn=!!(entry.buttons && entry.buttons.stick);
-			if(rActive)
-			{
-				if(rStickBtn && !vr.help.stickPrev.right)
+				if(bPressed && !vr.ctl.rightB)
 				{
 					vrHapticPulse(rawSrc);
 					vrKeyTap('Escape');
 				}
 			}
-			else if(rStickBtn && !vr.help.stickPrev.right)
+			if(!bPressed)
 			{
-				toggleHelp(rawSrc);
+				vr.ctl.rightBSwallow=false;
 			}
-			vr.help.stickPrev.right=rStickBtn;
+			vr.ctl.rightB=bPressed;
 		}
 		else if('left'===entry.hand)
 		{
@@ -1786,33 +1833,79 @@ EM_JS(void,YsfwInstallWebXR,(),
 				}
 			}
 
-			// Left X/Y (buttons.a/.b): normally held flap-down/flap-up keys;
-			// while THIS hand owns an open dialog (lActive) they are parked,
-			// exactly like the right hand's A/B when it is the owner (see
-			// above) -- flap taps suppressed, no dialog meaning, with the
-			// same release-if-held safety. When the RIGHT hand owns the
-			// dialog instead (or none is open), lActive is false and these
-			// fall straight through to their normal flap behaviour,
-			// undisturbed.
+			// Left X: mirrors the right hand's A tap-vs-long-press pattern
+			// (see A_TAP_MAX_MS/A_RECENTER_MS above, vr.ctl.xBtn), but the
+			// LONG action here is toggleHelp, not recenter: a quick
+			// press+release (<A_TAP_MAX_MS) taps the flaps-down key
+			// (FSBTF_FLAPDOWN steps one flap position per press, so a real
+			// tap -- not the old held vrKeyEdge -- matches its semantics);
+			// held >=A_RECENTER_MS instead toggles the help placards once
+			// per hold and suppresses the flap tap on the eventual release.
+			// While THIS hand owns an open dialog (lActive), the quick-tap
+			// flap dispatch is parked (same reasoning as the right hand's A
+			// above -- no face-button fumble mid-dialog), but the long-press
+			// help toggle stays live regardless -- it is a view-only action,
+			// not a flight or dialog control (same reasoning as the right
+			// hand's A long-press recenter staying live during dialogs).
 			var xPressed=!!(entry.buttons && entry.buttons.a);
-			if(!lActive)
+			var xBtn=vr.ctl.xBtn;
+			var xNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
+			if(xPressed && !xBtn.pressed)
 			{
-				vrKeyEdge('KeyF',xPressed); // Default flaps-down key.
+				xBtn.pressAt=xNow;
+				xBtn.helped=false;
+				xBtn.owned=false;
 			}
-			else
+			if(xPressed && lActive)
 			{
-				vrKeyEdge('KeyF',false);
+				xBtn.owned=true; // see xBtn's doc comment: no tap on release.
 			}
+			if(xPressed && !xBtn.helped && (xNow-xBtn.pressAt)>=A_RECENTER_MS)
+			{
+				toggleHelp(rawSrc);
+				xBtn.helped=true;
+			}
+			if(!xPressed && xBtn.pressed && !xBtn.helped && (xNow-xBtn.pressAt)<A_TAP_MAX_MS)
+			{
+				if(!lActive && !xBtn.owned)
+				{
+					vrKeyTap('KeyF'); // Default flaps-down key: a real tap, one flap step per press.
+				}
+			}
+			xBtn.pressed=xPressed;
 
+			// Left Y: normally a held flaps-up key; while THIS hand owns an
+			// open dialog, Y is instead the truthful cancel/Escape binding,
+			// exactly mirroring the right hand's B above -- fired on the
+			// press edge, plus a release-if-held safety so a flaps-up hold
+			// from before the dialog opened doesn't stay stuck on.
 			var yPressed=!!(entry.buttons && entry.buttons.b);
+			if(lActive && yPressed)
+			{
+				// Same swallow-until-release rule as the right B above (see
+				// vr.ctl.leftYSwallow's doc comment): without it, the very
+				// cancel press that closes the dialog would fire flaps-up
+				// off the still-held button one frame later.
+				vr.ctl.leftYSwallow=true;
+			}
 			if(!lActive)
 			{
-				vrKeyEdge('KeyR',yPressed); // Default flaps-up key.
+				vrKeyEdge('KeyR',yPressed && !vr.ctl.leftYSwallow); // Default flaps-up key.
 			}
 			else
 			{
 				vrKeyEdge('KeyR',false);
+				if(yPressed && !vr.ctl.leftY)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap('Escape');
+				}
 			}
+			if(!yPressed)
+			{
+				vr.ctl.leftYSwallow=false;
+			}
+			vr.ctl.leftY=yPressed;
 
 			// Left trigger: dial-selected function (see LEFT_DIAL) when this
 			// hand is NOT the dialog owner (including no dialog at all) --
@@ -1885,24 +1978,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 				}
 			}
 			vr.ctl.leftTrigger=ltriggerPressed;
-
-			// Thumbstick click: same toggle-vs-cancel split as the right
-			// hand above -- while THIS hand owns an open dialog, it is the
-			// truthful cancel/Escape binding instead of the help toggle.
-			var lStickBtn=!!(entry.buttons && entry.buttons.stick);
-			if(lActive)
-			{
-				if(lStickBtn && !vr.help.stickPrev.left)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap('Escape');
-				}
-			}
-			else if(lStickBtn && !vr.help.stickPrev.left)
-			{
-				toggleHelp(rawSrc);
-			}
-			vr.help.stickPrev.left=lStickBtn;
 		}
 	}
 
@@ -1960,7 +2035,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 				buttons:{
 					a:!!(gp.buttons[4] && gp.buttons[4].pressed),
 					b:!!(gp.buttons[5] && gp.buttons[5].pressed),
-					// xr-standard buttons[3] = thumbstick click (help toggle).
+					// xr-standard buttons[3] = thumbstick click -- INERT.
+					// processControllerPlain no longer reads this at all
+					// (pressing the stick physically jolts it, awkward in
+					// VR); kept only so the plain shape stays uniform with
+					// pokeControllerFrame's, which smoke tests still poke to
+					// assert the no-op.
 					stick:!!(gp.buttons[3] && gp.buttons[3].pressed)
 				}
 			},viewerQuat,src);
@@ -2167,18 +2247,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//                the pilot can confirm a pick before pulling the
 	//                trigger, mirroring the normal dial's own
 	//                (dir===sel)-highlight (see drawDial below). The cancel
-	//                binding (the owner hand's thumbstick click,
-	//                unconditional on rActive/lActive) is re-stated on a
-	//                single small corner hint line; if the dialog has MORE
+	//                binding (the owner hand's B/Y press, unconditional on
+	//                rActive/lActive) is re-stated on a single small corner
+	//                hint line; if the dialog has MORE
 	//                real options than GUI_DIAL_CAPACITY (guiMenu.overflow
 	//                -- e.g. radio-comm's wingman-command menu sits exactly
 	//                at the 8-option cap, so only a 9th+ option would ever
 	//                overflow), that same line also points at the on-quad
 	//                panel (forced on, see maybeForceGuiPanel). The owner
-	//                hand's A/B (X/Y) do nothing during a dialog (parked --
-	//                see processControllerPlain), so there is nothing to
-	//                remind about and no centre hub any more -- the middle
-	//                of the guide stays fully transparent. Full option text
+	//                hand's A (X on the left) does nothing during a dialog
+	//                (parked -- see processControllerPlain); B/Y's cancel
+	//                meaning is what the corner hint line above already
+	//                documents, so there is nothing else to remind about and
+	//                no centre hub any more -- the middle of the guide stays
+	//                fully transparent. Full option text
 	//                (not a clipped
 	//                few characters) is drawn RADIALLY along each sector's
 	//                spoke (see drawSpokeSpan/fitSpokeLabel below), so
@@ -2421,19 +2503,21 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// No centre hub any more -- the old hub disc only repeated what the
 		// selected sector's accent already shows, and the "A=5 B=0" reminder
 		// it carried died with the face-button reroutes it described (see
-		// processControllerPlain: the owner hand's A/B are parked now), so
-		// the centre stays fully transparent like everything else. The ONE
-		// binding no sector can label -- cancel, this SAME hand's thumbstick
-		// click -- plus the overflow/panel pointer goes on a single small
-		// fit-shrunk line tucked into the canvas' bottom-LEFT corner: the
-		// only bottom-edge region no spoke label can ever reach (a straight-
-		// down spoke's rotated text runs through bottom-CENTRE; the bottom-
-		// left DIAGONAL spoke is capped at rOuter, whose corner-ward
-		// component tops out at rOuter/sqrt(2), well above this line).
+		// processControllerPlain: the owner hand's A/X is parked now, B/Y is
+		// cancel), so the centre stays fully transparent like everything
+		// else. The ONE binding no sector can label -- cancel, this SAME
+		// hand's B (right) / Y (left) press -- plus the overflow/panel
+		// pointer goes on a single small fit-shrunk line tucked into the
+		// canvas' bottom-LEFT corner: the only bottom-edge region no spoke
+		// label can ever reach (a straight-down spoke's rotated text runs
+		// through bottom-CENTRE; the bottom-left DIAGONAL spoke is capped at
+		// rOuter, whose corner-ward component tops out at rOuter/sqrt(2),
+		// well above this line).
+		var cancelLabel=('right'===hand ? 'B' : 'Y');
 		var hint;
 		if('ap'===guiMode)
 		{
-			hint=(menu && menu.overflow) ? '他はパネル参照 / 取消:スティック押込' : '取消:スティック押込';
+			hint=(menu && menu.overflow) ? ('他はパネル参照 / 取消:'+cancelLabel) : ('取消:'+cancelLabel);
 		}
 		else
 		{
@@ -2781,7 +2865,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		],
 		left:[
 			{cx:80, cy:92,  label:'スティック',label2:'ダイヤル選択'},
-			{cx:64, cy:132, label:'X',        label2:'フラップ下げ'},
+			{cx:64, cy:132, label:'X',        label2:'フラップ下げ(長押し:ヘルプ)'},
 			{cx:96, cy:132, label:'Y',        label2:'フラップ上げ'},
 			{cx:80, cy:206, label:'トリガー',  label2:'左ダイヤル機能'},
 			{cx:80, cy:252, label:'グリップ',  label2:'スロットル(押込み過ぎでAB)'}
@@ -3313,7 +3397,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.guiWasVisible=false;
 					vr.ctl.lastDialTapHand=null;
 					vr.ctl.lastDialTapAt=0;
-					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false};
+					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false,owned:false};
+					vr.ctl.xBtn={pressed:false,pressAt:0,helped:false,owned:false};
+					vr.ctl.rightB=false;
+					vr.ctl.rightBSwallow=false;
+					vr.ctl.leftY=false;
+					vr.ctl.leftYSwallow=false;
 					vr.ctl.leftTrigger=false;
 					vr.ctl.dial.right={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
 					vr.ctl.dial.left={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
@@ -3321,7 +3410,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.viewerSpace=null;
 					vr.dialRes={right:undefined,left:undefined};
 					vr.helpRes={right:undefined,left:undefined};
-					vr.help={visible:false,shownAt:0,stickPrev:{right:false,left:false}};
+					vr.help={visible:false,shownAt:0};
 
 					teardownHud();
 					teardownGui();
@@ -3392,8 +3481,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// first so FsVrIsActive is true and the engine trusts the block).
 	//   list: array of {hand:'left'|'right', pos:[x,y,z], quat:[x,y,z,w],
 	//         squeeze:0..1, trigger:0..1, thumb:[x,y] (optional, dial stick),
-	//         buttons:{a:bool,b:bool,stick:bool (optional, thumbstick click --
-	//         help-placard toggle, see toggleHelp)}}
+	//         buttons:{a:bool,b:bool,stick:bool (optional, xr-standard
+	//         thumbstick click -- INERT, processControllerPlain no longer
+	//         reads it; kept only so tests can assert the no-op. A held long
+	//         (right) recenters/(left) toggles help via vr.ctl.aBtn/xBtn; B
+	//         (right)/Y (left) cancel an owned dialog -- see toggleHelp/
+	//         processControllerPlain)}}
 	//   viewerQuat: optional [x,y,z,w] headset orientation (default identity,
 	//         forward -Z).
 	// Goes through the exact same processControllerPlain as the real XR path

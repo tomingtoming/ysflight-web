@@ -204,15 +204,19 @@ const keysAfterButtons = await page.evaluate(() => {
   return window.__vrctlKeys.slice();
 });
 check('buttons: air-brake key ("KeyB") dispatched (right B)', keysAfterButtons.includes('KeyB'), 'keys=' + JSON.stringify(keysAfterButtons));
-check('buttons: flaps-down key ("KeyF") dispatched (left X)', keysAfterButtons.includes('KeyF'), 'keys=' + JSON.stringify(keysAfterButtons));
+// NOTE: left X ("flaps-down") is NOT checked here any more -- it now has
+// tap-vs-long-press semantics (see Group 6b below), same as right A, so a
+// bare press with no release does not immediately dispatch KeyF.
 check('buttons: flaps-up key ("KeyR") dispatched (left Y)', keysAfterButtons.includes('KeyR'), 'keys=' + JSON.stringify(keysAfterButtons));
 check('buttons: right A press-only does NOT immediately fire gear (tap/recenter semantics, see Group 6)', !keysAfterButtons.includes('KeyG'), 'keys=' + JSON.stringify(keysAfterButtons));
-// Release right A (a quick tap) so it doesn't linger into Group 6 -- this is
-// expected to fire a delayed KeyG tap of its own, which is fine, it's not
-// asserted on here.
+check('buttons: left X press-only does NOT immediately fire flaps-down (tap/help semantics, see Group 6b)', !keysAfterButtons.includes('KeyF'), 'keys=' + JSON.stringify(keysAfterButtons));
+// Release right A and left X (both quick taps) so neither lingers into
+// Group 6/6b -- each is expected to fire its own delayed KeyG/KeyF tap of
+// its own, which is fine, it's not asserted on here.
 await page.evaluate(() => {
   globalThis.Module.ysfwVr.pokeControllerFrame([
-    { hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }
+    { hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } },
+    { hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }
   ]);
 });
 
@@ -248,6 +252,21 @@ const recenterAfter = await page.evaluate(() => globalThis.Module.ysfwVr.recente
 check('right A: long hold (>=1s) attempts recenter (vr.recenterAttempts increments)', recenterAfter > recenterBefore, 'before=' + recenterBefore + ' after=' + recenterAfter);
 check('right A: long hold does not fire gear while still held', !longHoldResult.keysWhileHeld.includes('KeyG'), 'keys=' + JSON.stringify(longHoldResult.keysWhileHeld));
 check('right A: long hold does not fire gear on release either (suppressed by recenter)', !longHoldResult.keysAfterRelease.includes('KeyG'), 'keys=' + JSON.stringify(longHoldResult.keysAfterRelease));
+
+// ---- Group 6b: left X press/hold/release -> flap tap vs help toggle -----
+// Mirrors Group 6's right-A tap-vs-long-press pattern exactly (same
+// A_TAP_MAX_MS/A_RECENTER_MS constants, see fswebxr.cpp's vr.ctl.xBtn), but
+// the LONG action here toggles the help placards (see toggleHelp) instead
+// of recentering -- this replaces the old thumbstick-click help toggle (see
+// Group 11 below, which is where the actual visibility-flip is asserted).
+await page.evaluate(() => { window.__vrctlKeys = []; });
+await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]);
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]);
+});
+let keysAfterXQuickTap = await page.evaluate(() => window.__vrctlKeys.slice());
+check('left X: quick press+release (<400ms) taps flaps-down ("KeyF")', keysAfterXQuickTap.includes('KeyF'), 'keys=' + JSON.stringify(keysAfterXQuickTap));
 
 // ---- Group 7: rudder-only yaw deadzone (Feature 3) -----------------------
 // Default yawDeadzoneDeg=6 (fswebxr.cpp DEFAULT_YAW_DEADZONE_DEG): a wrist
@@ -408,7 +427,7 @@ check('yawOnlyQuatFromOrientation: pitch mixed into the input is stripped, yaw s
 // that can be checked cleanly without either a dedicated flag or fragile
 // timing/pixel assertions, so it is skipped rather than faked.
 
-// ---- Group 11: help placards -- visibility timer + thumbstick toggle ----
+// ---- Group 11: help placards -- visibility timer + left-X long-press ----
 // Feature: per-hand controller help placards (fswebxr.cpp showHelp/
 // toggleHelp/updateHelpAutoHide/updateHelpLayers). The quad-layer visuals
 // can't run headless (no real WebXR session here), but the visibility/
@@ -427,33 +446,56 @@ const helpAfterEnter = await page.evaluate(() => {
 check('help: forceMultiview succeeded (native-GL ANGLE, OVR_multiview2 present)', 'ok' === helpAfterEnter.forced, 'forced=' + helpAfterEnter.forced);
 check('help: placards auto-show on session start', true === helpAfterEnter.visible, 'visible=' + helpAfterEnter.visible);
 
-// Thumbstick click (xr-standard buttons[3]) on either hand toggles both
-// placards on the press edge only -- extend the plain entry shape with
-// buttons.stick (existing pokes above never set it, so their implicit
-// "stick: undefined" reads as not-pressed and never trips this new edge --
-// see the falsy-default coercion in fswebxr.cpp's stick-toggle blocks).
-const helpToggle1 = await page.evaluate(() => {
+// Toggling now lives on the LEFT hand's X button, held >=A_RECENTER_MS --
+// thumbstick click no longer does anything at all (physically jolting the
+// stick to press it is awkward in VR, see Group 6b above and the stick-noop
+// check below). Fabricate the hold duration (vr.ctl.xBtn.pressAt is a
+// plain, test-visible field -- same trick Group 6 uses for aBtn) instead of
+// a real >=1s wait.
+const xHelpToggleOff = await page.evaluate(() => {
   const vr = globalThis.Module.ysfwVr;
-  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: false } }]); // clean 0-edge
-  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // press edge -> toggle off
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]); // clean 0-edge
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]); // press edge
+  vr.ctl.xBtn.pressAt = performance.now() - 1100; // pretend it has been held 1.1s
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]); // still held -> crosses A_RECENTER_MS -> toggles help off
   return vr.help.visible;
 });
-check('help: thumbstick-click press edge toggles placards off', false === helpToggle1, 'visible=' + helpToggle1);
+check('help: left-X long-press (>=1s) toggles placards off', false === xHelpToggleOff, 'visible=' + xHelpToggleOff);
 
-const helpToggleHeld = await page.evaluate(() => {
+const xHelpToggleHeld = await page.evaluate(() => {
   const vr = globalThis.Module.ysfwVr;
-  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // still held, no new edge
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]); // still held, no new edge
   return vr.help.visible;
 });
-check('help: holding the thumbstick click (no new edge) does not re-toggle', false === helpToggleHeld, 'visible=' + helpToggleHeld);
+check('help: holding left-X (no new edge) does not re-toggle', false === xHelpToggleHeld, 'visible=' + xHelpToggleHeld);
 
-const helpToggle2 = await page.evaluate(() => {
+const xHelpToggleOn = await page.evaluate(() => {
   const vr = globalThis.Module.ysfwVr;
-  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: false } }]); // release right
-  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.1], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false, stick: true } }]); // press edge on the OTHER hand -> toggle back on
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]); // release
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]); // fresh press edge
+  vr.ctl.xBtn.pressAt = performance.now() - 1100; // pretend it has been held 1.1s again
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: true, b: false } }]); // crosses threshold again -> toggles back on
   return vr.help.visible;
 });
-check('help: thumbstick click on the other hand also toggles (either hand, press edge -> on)', true === helpToggle2, 'visible=' + helpToggle2);
+check('help: a second left-X long-press toggles placards back on', true === xHelpToggleOn, 'visible=' + xHelpToggleOn);
+await page.evaluate(() => {
+  globalThis.Module.ysfwVr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { a: false, b: false } }]); // release, tidy up
+});
+
+// Thumbstick click is now completely INERT: a press edge on either hand
+// must not toggle help, dispatch any key, or do anything else observable.
+const helpBeforeStickTest = await page.evaluate(() => globalThis.Module.ysfwVr.help.visible);
+await page.evaluate(() => { window.__vrctlKeys = []; });
+const stickNoop = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { stick: false } }]); // clean 0-edge
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { stick: true } }]); // right stick click press edge
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { stick: false } }]);
+  vr.pokeControllerFrame([{ hand: 'left', pos: [0, 0, -0.08], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: { stick: true } }]); // left stick click press edge
+  return { visible: vr.help.visible, keys: window.__vrctlKeys.slice() };
+});
+check('help: thumbstick click is inert -- visibility unchanged (either hand)', stickNoop.visible === helpBeforeStickTest, 'before=' + helpBeforeStickTest + ' after=' + stickNoop.visible);
+check('help: thumbstick click is inert -- no keys dispatched', 0 === stickNoop.keys.length, 'keys=' + JSON.stringify(stickNoop.keys));
 
 await page.screenshot({ path: outDir + '-final.png' });
 await browser.close();
