@@ -241,6 +241,17 @@ extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrControlDataPointer(void)
 	return FsVrControlDataPointer();
 }
 
+// Forwards to the engine's VR hand-pose block (fsvr.h, 16 floats): the JS
+// controller runtime below writes each hand's grip pose here, in VIEWER
+// space, every XR frame (see updateControllers/writeHandPoseBlock);
+// FsSimulation reads it (SimDrawAllScreen's multiview branch) to draw the
+// engine's own stick/throttle DNM models glued to the pilot's hand while
+// grabbed.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrHandPoseDataPointer(void)
+{
+	return FsVrHandPoseDataPointer();
+}
+
 extern "C" int EMSCRIPTEN_KEEPALIVE YsfwVrConsumeSimDrawnFrames(void)
 {
 	return FsVrConsumeSimDrawnFrames();
@@ -1177,6 +1188,42 @@ EM_JS(void,YsfwInstallWebXR,(),
 	function vecDot(a,b){ return a.x*b.x+a.y*b.y+a.z*b.z; }
 	function vecLen(v){ return Math.sqrt(v.x*v.x+v.y*v.y+v.z*v.z); }
 
+	// ---- VR hand-pose block (fsvr.h's FsVrHandPoseDataPointer) -----------
+	// Re-bases a grip pose (position+orientation, both relative to the SAME
+	// XR reference space the viewer pose is given in) onto the viewer's OWN
+	// pose this frame: relPos/relQuat = inverse(viewerPose)*gripPose. Pure
+	// re-basing, no coordinate-convention change (still x right, y up, -z
+	// forward) -- see fsvr.h's doc comment for why the engine can consume
+	// this directly (FsVisual::Draw's pos/att are already eye-relative).
+	function gripPoseInViewerSpace(gripPos,gripQuat,viewerPos,viewerQuat)
+	{
+		var vqConj=quatConjugate(viewerQuat);
+		var relPos=rotateVecByQuat(vecSub(gripPos,viewerPos),vqConj);
+		var relQuat=quatMultiply(vqConj,gripQuat);
+		return {pos:relPos,quat:relQuat};
+	}
+
+	// Writes one hand's slot of the hand-pose block: right=[0..7] (grabbed
+	// at [7]), left=[8..15] ([15] left reserved -- the engine gates the
+	// left/throttle hand on FsVrControlDataPointer[4] instead, see fsvr.h).
+	function writeHandPoseBlock(hand,gripPos,gripQuat,viewerPos,viewerQuat,grabbed)
+	{
+		var rel=gripPoseInViewerSpace(gripPos,gripQuat,viewerPos,viewerQuat);
+		var ptr=_YsfwVrHandPoseDataPointer()>>2;
+		var base=('right'===hand ? 0 : 8);
+		HEAPF32[ptr+base+0]=rel.pos.x;
+		HEAPF32[ptr+base+1]=rel.pos.y;
+		HEAPF32[ptr+base+2]=rel.pos.z;
+		HEAPF32[ptr+base+3]=rel.quat.x;
+		HEAPF32[ptr+base+4]=rel.quat.y;
+		HEAPF32[ptr+base+5]=rel.quat.z;
+		HEAPF32[ptr+base+6]=rel.quat.w;
+		if('right'===hand)
+		{
+			HEAPF32[ptr+7]=(grabbed ? 1 : 0);
+		}
+	}
+
 	// Decompose the grip rotation since grab-begin (deltaQ = q*conjugate(q0))
 	// into pitch/yaw/roll deflection.  Deflections are expected well under
 	// 45 degrees, so gimbal order is not a practical concern.  Reference
@@ -2049,12 +2096,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 	function updateControllers(frame,pose)
 	{
 		var viewerQuat=pose.transform.orientation;
+		var viewerPos=pose.transform.position;
 		// Reset both hands' grip pose before the loop: a hand with no source
 		// (or no pose) this frame leaves its entry null, telling
 		// updateHelpLayers to skip that hand's placard transform update
 		// rather than snapping it to a stale position.
 		vr.ctl.gripPose.right=null;
 		vr.ctl.gripPose.left=null;
+		// Same reasoning for the right hand's hand-pose-block grabbed flag
+		// (writeHandPoseBlock's [7]): a controller that loses tracking this
+		// frame must not leave a stale "still grabbed" stick glued to its
+		// last known position forever -- see fsvr.h's FsVrHandPoseDataPointer
+		// doc comment. (The left hand has no such flag in this block -- the
+		// engine gates it on FsVrControlDataPointer[4] instead, which is
+		// left untouched here, matching its own existing hold-last-value
+		// behaviour on release.)
+		HEAPF32[(_YsfwVrHandPoseDataPointer()>>2)+7]=0;
 		var sources=frame.session.inputSources;
 		for(var i=0; i<sources.length; ++i)
 		{
@@ -2106,6 +2163,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 					stick:!!(gp.buttons[3] && gp.buttons[3].pressed)
 				}
 			},viewerQuat,src);
+			// See fsvr.h's FsVrHandPoseDataPointer doc comment: written AFTER
+			// processControllerPlain so st.grabbed/th.grabbed (set
+			// synchronously inside it) reflect this frame's effective grab
+			// (physical squeeze OR sticky latch) by the time we read it here.
+			var grabbedNow=('right'===hand ? vr.ctl.stick.grabbed : vr.ctl.thr.grabbed);
+			writeHandPoseBlock(hand,gpos,gori,viewerPos,viewerQuat,grabbedNow);
 		}
 	}
 
@@ -3798,24 +3861,49 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//         processControllerPlain)}}
 	//   viewerQuat: optional [x,y,z,w] headset orientation (default identity,
 	//         forward -Z).
+	//   viewerPos: optional [x,y,z] headset position (default [0,0,0]) --
+	//         used only to derive the FsVrHandPoseDataPointer block (see
+	//         writeHandPoseBlock) exactly as updateControllers does; the
+	//         flight-control math in processControllerPlain never reads it.
 	// Goes through the exact same processControllerPlain as the real XR path
 	// (updateControllers) -- no duplicated control logic.
-	vr.pokeControllerFrame=function(list,viewerQuat)
+	vr.pokeControllerFrame=function(list,viewerQuat,viewerPos)
 	{
 		var vq=viewerQuat ? {x:viewerQuat[0],y:viewerQuat[1],z:viewerQuat[2],w:viewerQuat[3]} : {x:0,y:0,z:0,w:1};
+		var vp=viewerPos ? {x:viewerPos[0],y:viewerPos[1],z:viewerPos[2]} : {x:0,y:0,z:0};
 		for(var i=0; i<list.length; ++i)
 		{
 			var e=list[i];
+			var gp={x:e.pos[0],y:e.pos[1],z:e.pos[2]};
+			var gq={x:e.quat[0],y:e.quat[1],z:e.quat[2],w:e.quat[3]};
 			processControllerPlain({
 				hand:e.hand,
-				pos:{x:e.pos[0],y:e.pos[1],z:e.pos[2]},
-				quat:{x:e.quat[0],y:e.quat[1],z:e.quat[2],w:e.quat[3]},
+				pos:gp,
+				quat:gq,
 				squeeze:(undefined!==e.squeeze ? e.squeeze : 0),
 				trigger:(undefined!==e.trigger ? e.trigger : 0),
 				thumb:e.thumb,
 				buttons:e.buttons||{}
 			},vq,null);
+			// See updateControllers' identical write for the real XR path.
+			var grabbedNow=('right'===e.hand ? vr.ctl.stick.grabbed : vr.ctl.thr.grabbed);
+			writeHandPoseBlock(e.hand,gp,gq,vp,vq,grabbedNow);
 		}
+	};
+	// Headless test hook: read the hand-pose block back as a plain array
+	// (see fsvr.h's FsVrHandPoseDataPointer doc comment for the layout) --
+	// the read-side counterpart of pokeControllerFrame's write, for scripts
+	// that want to assert the viewer-space re-basing math directly instead
+	// of only checking the rendered result.
+	vr.readHandPoseBlock=function()
+	{
+		var ptr=_YsfwVrHandPoseDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<16; ++i)
+		{
+			out.push(HEAPF32[ptr+i]);
+		}
+		return out;
 	};
 	// Headless test hooks for the N-way GUI dial guide (scripts/
 	// smoke-vrgui.mjs), fabricating a dialog the real engine has no easy
