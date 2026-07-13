@@ -286,6 +286,45 @@ await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0,
 keys = await readKeys();
 check('left dial sector 5 (トリム): KeyT keyup on trigger release (hold mode)', keys.includes('up:KeyT'), 'keys=' + JSON.stringify(keys));
 
+// ---- Group 9b: stale-highlight regression (Bug 1 fix) --------------------
+// Field report: confirm Gun (sector 0, "up") on the right dial, let the
+// stick return fully to rest until the dial itself goes fully hidden
+// (dial.visible=false, DIAL_HIDE_DELAY_MS after re-centring -- fabricated
+// below via dial.hideAt, same pattern as vr.ctl.aBtn.pressAt elsewhere in
+// this suite), then deflect toward a DIFFERENT sector -- the picked sector
+// must be the NEW one immediately on the very first pick, not still read
+// Gun. Root cause was pickDialSector's boundary hysteresis: dial.sel
+// survived the hide, so the first pick after reactivation still measured
+// the new angle against the OLD (Gun) sector's hysteresis band instead of
+// starting fresh -- see updateDialStick's fix comment in fswebxr.cpp. The
+// angle picked below (34deg clockwise from up, via sectorThumb's own
+// (i*60) formula fed a fractional i=34/60) is deliberately INSIDE what
+// sector 0's hysteresis band would still cover (half=30deg +
+// DIAL_HYSTERESIS_DEG=6deg = 36deg) even though its own NATURAL nearest
+// sector is 1 -- exactly the angle where the pre-fix bug kept reading
+// sector 0 instead of 1.
+await resetKeys();
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: sectorThumb(0), buttons: {} }]); // select Gun (sector 0)
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 1, thumb: [0, 0], buttons: {} }]); // confirm: trigger edge 0->1 (hold)
+const selConfirmed = await page.evaluate(() => globalThis.Module.ysfwVr.ctl.dial.right.sel);
+check('Group 9b setup: Gun (sector 0) confirmed on the right dial', 0 === selConfirmed, 'sel=' + selConfirmed);
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release trigger, stick at rest
+
+// Force the dial fully hidden without a real 1200ms wait: push hideAt into
+// the past, then poke once more at rest so updateDialStick's own decay
+// check (dial.visible && now>=dial.hideAt) flips visible to false.
+await page.evaluate(() => { globalThis.Module.ysfwVr.ctl.dial.right.hideAt = performance.now() - 10; });
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]);
+const hiddenNow = await page.evaluate(() => globalThis.Module.ysfwVr.ctl.dial.right.visible);
+check('Group 9b setup: dial is fully hidden (visible=false) before the re-deflection', false === hiddenNow, 'visible=' + hiddenNow);
+
+// Re-deflect toward 34deg -- the first pick after reactivation.
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: sectorThumb(34 / 60), buttons: {} }]);
+const selAfterReactivate = await page.evaluate(() => globalThis.Module.ysfwVr.ctl.dial.right.sel);
+check('stale-highlight fix: re-deflecting after the dial fully hid picks the NEW sector (1) on the first pick, not the old stale one (Gun/0)', 1 === selAfterReactivate, 'sel=' + selAfterReactivate);
+await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // back to rest for the next group
+
 // ---- Group 10: left dial sector 2 (120deg) = 無線 (Enter, TAP) -----------
 // FSBTF_OPENRADIOCOMMMENU opens the radio-comm dialog on the press edge --
 // dispatched LAST in this suite (per fswebxr.cpp's per-entry comment on
