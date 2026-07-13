@@ -49,6 +49,8 @@
     "color": "wing",
     "thickness": 1.1,
     "sections": [
+      { "x": 2.0,   "znLE": 23.41, "chord": 15.38, "y": -2.55,
+        "comment": "synthetic buried root (first-segment slopes extrapolated inboard): at the real root's height (y=-2.4) the hull side sits at x~2.4, not the max half-width 3.25, so a loft starting at 3.24 floats off the body" },
       { "x": 3.24,  "znLE": 24.55, "chord": 14.65, "y": -2.4 },
       { "x": 12.0,  "znLE": 32.62, "chord": 9.5,   "y": -1.35 },
       { "x": 21.03, "znLE": 40.93, "chord": 6.19,  "y": -0.15 },
@@ -67,6 +69,8 @@
     "color": "wing",
     "thickness": 0.55,
     "sections": [
+      { "x": 0.3,   "znLE": 62.73, "chord": 10.24, "y": 0.335,
+        "comment": "synthetic buried root (colinear extrapolation): the tailcone narrows to w~0.6 under the stab, so the x=0.9 root floats there too" },
       { "x": 0.9,   "znLE": 63.3, "chord": 9.8, "y": 0.4 },
       { "x": 11.01, "znLE": 72.9, "chord": 2.4, "y": 1.5 }
     ],

@@ -318,36 +318,55 @@ function fixedWithCuts(sections, cuts, thickness, colorT, colorB, spanAxis) {
 
 // --- flap track fairings (spec.wing.fairings, optional) -------------------------------
 
-function fairings(wingSecs) {
-  const g = mkGeo();
+// Each canoe is SPLIT at the flap hinge: the forward part stays on the wing,
+// the aft part is merged into its flap's geometry so it tilts down with the
+// flap (the real 747 motion).  Same 5cm gap trick at the split as the hinge.
+function fairings(wingSecs, flapCuts) {
   const FA = spec.wing.fairings;
-  if (!FA) return g;
+  const fixed = mkGeo(), moving = flapCuts.map(() => mkGeo());
+  if (!FA) return { fixed, moving };
   const R = FA.radius || 0.36, len = FA.length || 4.5, drop = FA.drop || 0.52;
+  const N = 8;
+  const prof = [[0, 0.28], [0.16, 0.75], [0.42, 1.0], [0.7, 0.83], [0.9, 0.44], [1, 0.08]];
+  const radiusAt = (f) => {
+    for (let i = 0; i + 1 < prof.length; i++) {
+      const [f0, r0] = prof[i], [f1, r1] = prof[i + 1];
+      if (f >= f0 && f <= f1) return r0 + ((f - f0) / (f1 - f0)) * (r1 - r0);
+    }
+    return prof[prof.length - 1][1];
+  };
   for (const sp of FA.spans) {
     const s = sectionAt(wingSecs, sp);
     if (!s) continue;
     const te = s.znLE + s.chord, y = (s.off || 0) - drop;
     const zn0 = te - len * 0.69;
-    const prof = [[0, 0.28], [0.16, 0.75], [0.42, 1.0], [0.7, 0.83], [0.9, 0.44], [1, 0.08]];
-    const N = 8;
-    const rings = prof.map(([f, rr]) => {
-      const ring = [];
-      for (let i = 0; i < N; i++) {
-        const th = (i / N) * Math.PI * 2;
-        ring.push(addV(g, sp + R * rr * Math.cos(th) * 0.85, y + R * rr * Math.sin(th), zys(zn0 + len * f), true));
+    const build = (g, fr) => {
+      const rings = fr.map(([f, rr]) => {
+        const ring = [];
+        for (let i = 0; i < N; i++) {
+          const th = (i / N) * Math.PI * 2;
+          ring.push(addV(g, sp + R * rr * Math.cos(th) * 0.85, y + R * rr * Math.sin(th), zys(zn0 + len * f), true));
+        }
+        return ring;
+      });
+      for (let r = 0; r + 1 < rings.length; r++) {
+        for (let i = 0; i < N; i++) {
+          const j = (i + 1) % N;
+          addFace(g, [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]], COL.fair);
+        }
       }
-      return ring;
-    });
-    for (let r = 0; r + 1 < rings.length; r++) {
-      for (let i = 0; i < N; i++) {
-        const j = (i + 1) % N;
-        addFace(g, [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]], COL.fair);
-      }
-    }
-    addFace(g, rings[0], COL.fair);                                  // front cap (+z)
-    addFace(g, rings[rings.length - 1].slice().reverse(), COL.fair); // rear cap (-z)
+      addFace(g, rings[0], COL.fair);                                  // front cap (+z)
+      addFace(g, rings[rings.length - 1].slice().reverse(), COL.fair); // rear cap (-z)
+    };
+    const ci = flapCuts.findIndex((c) => sp >= c.spanFrom - 0.5 && sp <= c.spanTo + 0.5);
+    const hingeF = ci < 0 ? 2 : (s.znLE + s.chord * (1 - flapCuts[ci].chordFrac) + 0.05 - zn0) / len;
+    if (hingeF <= 0.02) { build(moving[ci], prof); continue; }
+    if (hingeF >= 0.98) { build(fixed, prof); continue; }
+    const eps = 0.05 / len;
+    build(fixed, [...prof.filter(([f]) => f < hingeF), [hingeF, radiusAt(hingeF)]]);
+    build(moving[ci], [[hingeF + eps, radiusAt(hingeF + eps)], ...prof.filter(([f]) => f > hingeF + eps)]);
   }
-  return g;
+  return { fixed, moving };
 }
 
 // --- engines ---------------------------------------------------------------------------
@@ -537,10 +556,11 @@ const dorsal = (() => {
 
 const tipSec = spec.wing.sections[spec.wing.sections.length - 1];
 const lastSt = ST[ST.length - 1];
+const fairs = fairings(wingSecs, flapCuts);
 const staticGeo = merge(
   fuselage(), decals(),
   wingFixed, mirrorX(wingFixed),
-  fairings(wingSecs), mirrorX(fairings(wingSecs)),
+  fairs.fixed, mirrorX(fairs.fixed),
   hsFixed, mirrorX(hsFixed),
   finFixed, dorsal,
   ...spec.engines.positions.map((p) => engine(p, wingSecs)),
@@ -559,8 +579,9 @@ P('Fuselage', 0, staticGeo, null, null, [
   ...gearLabels, 'Beacon',
 ]);
 flaps.forEach((f, i) => {
-  P(flapLabel(i, 'L'), 5, f.geo, f.hinge, [zero, hingeSta(f.line, 22)]);
-  P(flapLabel(i, 'R'), 5, mirrorX(f.geo), [-f.hinge[0], f.hinge[1], f.hinge[2]], [zero, hingeSta(mirrorLine(f.line), -22)]);
+  const geo = merge(f.geo, fairs.moving[i]); // aft canoe sections ride the flap
+  P(flapLabel(i, 'L'), 5, geo, f.hinge, [zero, hingeSta(f.line, 22)]);
+  P(flapLabel(i, 'R'), 5, mirrorX(geo), [-f.hinge[0], f.hinge[1], f.hinge[2]], [zero, hingeSta(mirrorLine(f.line), -22)]);
 });
 P('AileronL', 7, ail.geo, ail.hinge, [zero, hingeSta(ail.line, -12), hingeSta(ail.line, 12)]);
 P('AileronR', 7, mirrorX(ail.geo), [-ail.hinge[0], ail.hinge[1], ail.hinge[2]], [zero, hingeSta(mirrorLine(ail.line), -12), hingeSta(mirrorLine(ail.line), 12)]);
