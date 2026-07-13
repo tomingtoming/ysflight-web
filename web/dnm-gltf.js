@@ -244,6 +244,23 @@ export function dnmToGlb(dnmBytes) {
       const sR = anim.samplers.length;
       anim.samplers.push({ input, output: pushAcc(qs, 'VEC4'), interpolation: 'LINEAR' });
       anim.channels.push({ sampler: sR, target: { node: ix, path: 'rotation' } });
+      // STA visibility (7th field, 0 = hidden — retracted gear) has no glTF
+      // equivalent, so mirror the engine with a STEP scale channel: 0 at a
+      // hidden keyframe, snapping back to 1 a hair inside the transit (the
+      // engine shows the part while it moves, ysshelldnmtemplate.h ~1009).
+      // Round-trip safe: gltf2dnm restores STA from extras.ysflight verbatim.
+      const vis = staList.map((s) => (s[6] === undefined || s[6] !== 0 ? 1 : 0));
+      if (vis.some((v) => !v)) {
+        const st = [], sv = [];
+        for (let i = 0; i < staList.length; i++) {
+          st.push(times[i]); sv.push(vis[i]);
+          if (!vis[i] && i + 1 < staList.length && vis[i + 1]) { st.push(times[i] + 0.01); sv.push(1); }
+        }
+        const sIn = pushAcc(st, 'SCALAR', { minmax: [[st[0]], [st[st.length - 1]]] });
+        const sS = anim.samplers.length;
+        anim.samplers.push({ input: sIn, output: pushAcc(sv.flatMap((v) => [v, v, v]), 'VEC3'), interpolation: 'STEP' });
+        anim.channels.push({ sampler: sS, target: { node: ix, path: 'scale' } });
+      }
     };
     if (SPIN_SLOT[n.cla] !== undefined) {
       const slot = SPIN_SLOT[n.cla];

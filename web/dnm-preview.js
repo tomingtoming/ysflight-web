@@ -323,6 +323,11 @@ export function setMovable(group, t) {
   const staT = [0, 1, 2, 3, 4, 5].map((i) => a[i] + (b[i] - a[i]) * t);
   group.matrix.copy(nodeMatrix(THREE, pos, staT, cnt));
   group.matrixWorldNeedsUpdate = true;
+  // Engine parity (ysshelldnmtemplate.h SetClassStateRecursive): STA's 7th
+  // field is a visibility flag — parked within 1% of a hidden endpoint the
+  // node disappears (retracted gear), but stays visible through the transit.
+  const va = a[6] === undefined || a[6] !== 0, vb = b[6] === undefined || b[6] !== 0;
+  group.visible = (va || t > 0.01) && (vb || t < 0.99);
 }
 
 // --- live paint -----------------------------------------------------------------
