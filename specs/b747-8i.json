@@ -16,6 +16,8 @@
       { "zn": 1.0,  "top": 1.06,  "bottom": -1.1,  "w": 1.05 },
       { "zn": 2.5,  "top": 1.88,  "bottom": -1.82, "w": 1.65 },
       { "zn": 4.0,  "top": 2.61,  "bottom": -2.32, "w": 2.06 },
+      { "zn": 4.7,  "top": 3.15,  "bottom": -2.49, "w": 2.21,
+        "comment": "on-curve insert (ring seam): splits the 4.0-5.5 ring row so the cockpit glass paints a thin band, not a 1.5m square" },
       { "zn": 5.5,  "top": 3.76,  "bottom": -2.68, "w": 2.37 },
       { "zn": 8.0,  "top": 4.3,   "bottom": -3.08, "w": 2.76 },
       { "zn": 12.0, "top": 4.36,  "bottom": -3.41, "w": 3.14 },
@@ -42,7 +44,7 @@
       { "znFrom": 7.6, "znTo": 25.6, "y0": 2.72, "y1": 3.06, "pitch": 1.15 }
     ],
     "doors": { "zn": [9.2, 17.8, 27.0, 44.5, 57.5], "y0": -0.15, "y1": 1.75, "halfW": 0.55 },
-    "cockpit": { "znFrom": 4.35, "znTo": 5.35, "y0": 3.05, "y1": 3.6, "front": { "zn": 4.15, "y0": 3.02, "y1": 3.58, "dz": 0.75 } }
+    "cockpit": { "znFrom": 4.6, "znTo": 5.4, "y0": 3.0, "y1": 3.6 }
   },
   "wing": {
     "comment": "L11 planform vertices verbatim; TE from scanlines 39.2@3.3 .. 54.4@33.  Dihedral linear root -2.4 -> tip 1.55 (face view).  Flaps in two sections like the real wing (inboard / outboard, gap behind the inner engine at x11.9 where the hinge polyline also kinks at the span-12 wing section) so each hinges about its own local LE line.",

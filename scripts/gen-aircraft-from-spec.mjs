@@ -154,7 +154,7 @@ function fuselage() {
       const avgY = quad.reduce((s_, q) => s_ + q.y, 0) / 4;
       let color = avgY < bellyY ? COL.belly : COL.body;
       if (ck && znq >= ck.znFrom && znq <= ck.znTo &&
-          Math.min(Math.sin((2 * Math.PI * i) / N), Math.sin((2 * Math.PI * j) / N)) >= 0.6 &&
+          Math.min(Math.sin((2 * Math.PI * i) / N), Math.sin((2 * Math.PI * j) / N)) >= 0.82 &&
           avgY >= ck.y0 - 0.15 && avgY <= ck.y1 + 0.05) color = COL.glass;
       addFace(g, quad.map((q) => q.i), color);
     }
