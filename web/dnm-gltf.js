@@ -560,15 +560,26 @@ export function glbToDnm(glbBytes) {
         if (tri.some((p) => !p)) continue;
         const ids = tri.map(vix);
         if (nrms) {
-          const [a, b, c] = tri;
-          let fx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
-          let fy = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
-          let fz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-          const fl = Math.hypot(fx, fy, fz) || 1;
-          fx /= fl; fy /= fl; fz /= fl;
-          for (let k = 0; k < 3; k++) {
-            const n = nrms[idx[t + k]];
-            if (n && Math.abs(n[0] * fx + n[1] * fy + n[2] * fz) < 0.9995) smoothV.add(ids[k]);
+          // Gate on INTRA-triangle normal variance first: a flat-shaded face
+          // exports one identical normal on all three corners, so any spread
+          // between corners is the modeler's smooth shading.  Without the
+          // gate, fanning a flat-but-twisted quad (a tapered wing panel) makes
+          // each tri's geometric normal deviate from the authored face normal
+          // and sprays spurious R over surfaces meant to stay flat — which the
+          // engine then shades with edge-on averaged normals (dark patches).
+          const n0 = nrms[idx[t]], n1 = nrms[idx[t + 1]], n2 = nrms[idx[t + 2]];
+          const same = (u, v) => !u || !v || (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) > 0.99999;
+          if (!(same(n0, n1) && same(n1, n2) && same(n0, n2))) {
+            const [a, b, c] = tri;
+            let fx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1]);
+            let fy = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+            let fz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            const fl = Math.hypot(fx, fy, fz) || 1;
+            fx /= fl; fy /= fl; fz /= fl;
+            for (let k = 0; k < 3; k++) {
+              const n = nrms[idx[t + k]];
+              if (n && Math.abs(n[0] * fx + n[1] * fy + n[2] * fz) < 0.9995) smoothV.add(ids[k]);
+            }
           }
         }
         faces.push({ idx: ids, color, unlit, alpha, tri });

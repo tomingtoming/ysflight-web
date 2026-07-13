@@ -65,10 +65,14 @@ test('template glb converts and keeps its movable wiring', { skip: !glbToDnm }, 
 
 test('R (round vertex) flags survive dnm -> glb -> dnm', { skip: !dnmToGlb }, () => {
   // Synthetic model: an octagonal prism whose 16 vertices are all R (smooth),
-  // plus one flat quad with plain vertices.  Through the round trip the prism
-  // vertices' baked smooth normals deviate from their face normals (22.5deg),
-  // so the converter must re-emit R on them — and must NOT invent R on the
-  // flat quad, whose corner normals equal the face normal exactly.
+  // plus one flat-shaded but TWISTED quad with plain vertices.  Through the
+  // round trip the prism vertices' baked smooth normals deviate from their
+  // face normals (22.5deg), so the converter must re-emit R on them — and
+  // must NOT invent R on the flat quad: fanning a twisted quad makes each
+  // triangle's geometric normal deviate from the authored face normal, which
+  // is exactly how flat tapered wing panels once grew spurious R (dark
+  // patches in flight).  The intra-triangle normal-variance gate keeps them
+  // flat.
   const V = [], F = [];
   for (const z of [0, 2]) for (let k = 0; k < 8; k++) {
     const a = (k * Math.PI) / 4;
@@ -80,8 +84,8 @@ test('R (round vertex) flags survive dnm -> glb -> dnm', { skip: !dnmToGlb }, ()
       'N 0 0 1 ' + Math.cos(a).toFixed(4) + ' ' + Math.sin(a).toFixed(4) + ' 0',
       'V ' + k + ' ' + k2 + ' ' + (8 + k2) + ' ' + (8 + k), 'E');
   }
-  V.push('V -1 -1 -4', 'V 1 -1 -4', 'V 1 1 -4', 'V -1 1 -4');
-  F.push('F', 'C 200 200 200', 'N 0 0 -4 0 0 -1', 'V 16 17 18 19', 'E');
+  V.push('V -1 -1 -4', 'V 1 -1 -4', 'V 1 1 -4', 'V -1 1 -3.6'); // twisted!
+  F.push('F', 'C 200 200 200', 'N 0 0 -3.9 0 0 -1', 'V 16 17 18 19', 'E');
   const srfLines = ['SURF', ...V, ...F, 'E'];
   const dnm = ['DYNAMODEL', 'DNMVER 2', 'PCK prism.srf ' + srfLines.length, ...srfLines,
     'SRF "Body"', 'FIL prism.srf', 'CLA 0', 'NST 1', 'STA 0 0 0 0 0 0 1',
