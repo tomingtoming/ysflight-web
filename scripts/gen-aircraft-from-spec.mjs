@@ -204,27 +204,33 @@ function decals() {
   const g = mkGeo();
   const D = spec.decals;
   if (!D) return g;
-  // y0/y1 may be functions of zn (sloped bands).  Tall bands are sliced
-  // vertically (<=0.45m): a single flat quad spanning the hull's equator lets
-  // the widest part of the ellipse bulge through mid-quad.
+  // y0/y1 may be functions of zn (sloped bands).  Each band side is ONE
+  // WELDED GRID of R (smooth) vertices: tall bands must subdivide vertically
+  // (a single flat quad across the hull's equator lets the widest point of
+  // the ellipse bulge through mid-quad), but flat-shaded slices show their
+  // normal steps as evenly-spaced horizontal lines.  Shared verts marked R
+  // shade smoothly in the engine, and the smoothing survives the studio's
+  // glb->dnm round trip (position-weld + normal-variance R recovery).
   const strip = (zn0, zn1, y0, y1, color, step, off = 0.04) => {
     const Y = (v, zn) => (typeof v === 'function' ? v(zn) : v);
-    const n = Math.max(1, Math.round((zn1 - zn0) / step));
-    for (let k = 0; k < n; k++) {
-      const a = zn0 + ((zn1 - zn0) * k) / n, b = zn0 + ((zn1 - zn0) * (k + 1)) / n;
-      const [y0a, y0b, y1a, y1b] = [Y(y0, a), Y(y0, b), Y(y1, a), Y(y1, b)];
-      const slices = Math.max(1, Math.ceil(Math.max(y1a - y0a, y1b - y0b) / 0.45));
-      for (let sl = 0; sl < slices; sl++) {
-        const f0 = sl / slices, f1 = (sl + 1) / slices;
-        const [ya0, ya1] = [y0a + (y1a - y0a) * f0, y0a + (y1a - y0a) * f1];
-        const [yb0, yb1] = [y0b + (y1b - y0b) * f0, y0b + (y1b - y0b) * f1];
-        for (const sgn of [1, -1]) {
-          const q = [
-            addV(g, sgn * (skinX(a, ya0) + off), ya0, zys(a)),
-            addV(g, sgn * (skinX(b, yb0) + off), yb0, zys(b)),
-            addV(g, sgn * (skinX(b, yb1) + off), yb1, zys(b)),
-            addV(g, sgn * (skinX(a, ya1) + off), ya1, zys(a)),
-          ];
+    const nSeg = Math.max(1, Math.round((zn1 - zn0) / step));
+    const spanMax = Math.max(Y(y1, zn0) - Y(y0, zn0), Y(y1, zn1) - Y(y0, zn1));
+    const nSl = Math.max(1, Math.ceil(spanMax / 0.45));
+    for (const sgn of [1, -1]) {
+      const grid = [];
+      for (let k = 0; k <= nSeg; k++) {
+        const zn = zn0 + ((zn1 - zn0) * k) / nSeg;
+        const ya = Y(y0, zn), yb = Y(y1, zn);
+        const row = [];
+        for (let s = 0; s <= nSl; s++) {
+          const y = ya + ((yb - ya) * s) / nSl;
+          row.push(addV(g, sgn * (skinX(zn, y) + off), y, zys(zn), true));
+        }
+        grid.push(row);
+      }
+      for (let k = 0; k < nSeg; k++) {
+        for (let s = 0; s < nSl; s++) {
+          const q = [grid[k][s], grid[k + 1][s], grid[k + 1][s + 1], grid[k][s + 1]];
           addFace(g, sgn > 0 ? q : q.slice().reverse(), color);
         }
       }
