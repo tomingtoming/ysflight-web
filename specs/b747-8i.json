@@ -45,7 +45,7 @@
     "cockpit": { "znFrom": 4.35, "znTo": 5.35, "y0": 3.05, "y1": 3.6, "front": { "zn": 4.15, "y0": 3.02, "y1": 3.58, "dz": 0.75 } }
   },
   "wing": {
-    "comment": "L11 planform vertices verbatim; TE from scanlines 39.2@3.3 .. 54.4@33.  Dihedral linear root -2.4 -> tip 1.55 (face view).",
+    "comment": "L11 planform vertices verbatim; TE from scanlines 39.2@3.3 .. 54.4@33.  Dihedral linear root -2.4 -> tip 1.55 (face view).  Flaps in two sections like the real wing (inboard / outboard, gap behind the inner engine at x11.9 where the hinge polyline also kinks at the span-12 wing section) so each hinges about its own local LE line.",
     "color": "wing",
     "thickness": 1.1,
     "sections": [
@@ -55,7 +55,10 @@
       { "x": 29.0,  "znLE": 47.61, "chord": 4.21,  "y": 0.88 },
       { "x": 34.26, "znLE": 54.45, "chord": 0.55,  "y": 1.55 }
     ],
-    "flaps":    { "spanFrom": 4.5,  "spanTo": 20.5, "chordFrac": 0.28 },
+    "flaps": [
+      { "spanFrom": 4.5,  "spanTo": 11.4, "chordFrac": 0.28 },
+      { "spanFrom": 12.6, "spanTo": 20.5, "chordFrac": 0.28 }
+    ],
     "ailerons": { "spanFrom": 23.5, "spanTo": 31.5, "chordFrac": 0.26 },
     "fairings": { "spans": [6.8, 11.2, 15.8, 19.9], "radius": 0.36, "length": 4.5, "drop": 0.52 }
   },

@@ -45,7 +45,9 @@ test('control surfaces hinge about their own swept leading edge', { skip: !parse
   // Wedge verts are [LEup, LEdn, TE] per section: the four LE end verts sit
   // half-thickness (~0.3 m) off the hinge line, so a correct axis moves them
   // at most 2·0.3·sin(deflection/2) ≈ 0.12 m.  A wrong axis throws meters.
-  for (const label of ['FlapL', 'FlapR', 'AileronL', 'AileronR', 'ElevatorL', 'ElevatorR', 'Rudder']) {
+  const surfaces = [...dnm.nodes.keys()].filter((l) => /^(Flap|Aileron|Elevator|Rudder)/.test(l));
+  assert.ok(surfaces.length >= 9, 'two flap sections per side: ' + surfaces.join(','));
+  for (const label of surfaces) {
     const n = dnm.nodes.get(label);
     const srf = dnm.srfByName.get(n.srf);
     const nsec = srf.vertices.length / 3;

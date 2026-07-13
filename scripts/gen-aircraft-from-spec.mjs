@@ -502,8 +502,13 @@ const wingSecs = [];
     }
   }
 }
-const wingFixed = fixedWithCuts(wingSecs, [spec.wing.flaps, spec.wing.ailerons], spec.wing.thickness, COL[spec.wing.color] || COL.wing, COL.wingB, 'x');
-const flap = wedge(wingSecs, spec.wing.flaps, spec.wing.thickness, COL.wingB, 'x');
+// spec.wing.flaps: one cut or an array of cuts (inboard/outboard sections) —
+// each section gets its own node and hinges about its own local LE line, so a
+// kinked flap polyline deflects naturally instead of about one long chord.
+const flapCuts = [].concat(spec.wing.flaps);
+const wingFixed = fixedWithCuts(wingSecs, [...flapCuts, spec.wing.ailerons], spec.wing.thickness, COL[spec.wing.color] || COL.wing, COL.wingB, 'x');
+const flaps = flapCuts.map((c) => wedge(wingSecs, c, spec.wing.thickness, COL.wingB, 'x'));
+const flapLabel = (i, side) => (flapCuts.length > 1 ? 'Flap' + (i + 1) : 'Flap') + side;
 const ail = wedge(wingSecs, spec.wing.ailerons, spec.wing.thickness, COL[spec.wing.color] || COL.wing, 'x');
 
 const hsSecs = spec.hstab.sections.map((s) => ({ span: s.x, znLE: s.znLE, chord: s.chord, off: s.y }));
@@ -549,11 +554,14 @@ const beaconGeo = lightBox(0, stationAt(spec.beacon.zn).top + 0.1, zys(spec.beac
 
 const gearLabels = gearPosts.flatMap((p) => (p.mirror ? [p.label + 'L', p.label + 'R'] : [p.label]));
 P('Fuselage', 0, staticGeo, null, null, [
-  'FlapL', 'FlapR', 'AileronL', 'AileronR', 'ElevatorL', 'ElevatorR', 'Rudder',
+  ...flaps.flatMap((_, i) => [flapLabel(i, 'L'), flapLabel(i, 'R')]),
+  'AileronL', 'AileronR', 'ElevatorL', 'ElevatorR', 'Rudder',
   ...gearLabels, 'Beacon',
 ]);
-P('FlapL', 5, flap.geo, flap.hinge, [zero, hingeSta(flap.line, 22)]);
-P('FlapR', 5, mirrorX(flap.geo), [-flap.hinge[0], flap.hinge[1], flap.hinge[2]], [zero, hingeSta(mirrorLine(flap.line), -22)]);
+flaps.forEach((f, i) => {
+  P(flapLabel(i, 'L'), 5, f.geo, f.hinge, [zero, hingeSta(f.line, 22)]);
+  P(flapLabel(i, 'R'), 5, mirrorX(f.geo), [-f.hinge[0], f.hinge[1], f.hinge[2]], [zero, hingeSta(mirrorLine(f.line), -22)]);
+});
 P('AileronL', 7, ail.geo, ail.hinge, [zero, hingeSta(ail.line, -12), hingeSta(ail.line, 12)]);
 P('AileronR', 7, mirrorX(ail.geo), [-ail.hinge[0], ail.hinge[1], ail.hinge[2]], [zero, hingeSta(mirrorLine(ail.line), -12), hingeSta(mirrorLine(ail.line), 12)]);
 P('ElevatorL', 6, elev.geo, elev.hinge, [zero, hingeSta(elev.line, -18), hingeSta(elev.line, 18)]);
