@@ -238,6 +238,20 @@ console.log('library: delete works (back to 3 creations)');
   }
   console.log('blender bridge: template .glb -> DNM -> .glb in-browser ' + JSON.stringify(glbCheck));
 
+  // The compiled B747-8I sample is staged alongside the template and converts
+  // in-browser too, keeping its smooth-shading R vertices through the trip.
+  const b747Check = await page.evaluate(async () => {
+    const { glbToDnm } = await import('./dnm-gltf.js');
+    const glb = new Uint8Array(await (await fetch('./b747-8i.glb')).arrayBuffer());
+    const res = glbToDnm(glb);
+    const text = new TextDecoder().decode(res.dnm);
+    return { tris: res.triangles, rVerts: (text.match(/^V .+ R$/gm) || []).length };
+  });
+  if (b747Check.tris !== 8220 || !(b747Check.rVerts > 3000)) {
+    die('b747 sample conversion failed: ' + JSON.stringify(b747Check));
+  }
+  console.log('b747-8i sample: .glb -> DNM in-browser ' + JSON.stringify(b747Check));
+
   if ((await bootStudio('studio-scenery.html', { edit: isl.id })) !== 'scenery') die('scenery studio wrong page id');
   const scCounts = await page.evaluate(() => window.ysfwStudio.counts());
   if (!scCounts || !(scCounts.islands >= 1)) die('scenery studio did not restore islands from ?edit: ' + JSON.stringify(scCounts));

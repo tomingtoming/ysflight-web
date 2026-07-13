@@ -35,6 +35,8 @@ const S = ({
     blIntro: 'Blenderが主役のモデリング経路。テンプレから始めて、書き出した .glb を上のドロップ欄に入れるだけ。',
     blTemplate: '📥 機体テンプレをダウンロード (.glb)',
     blTemplateTitle: '可動部（脚・フラップ・プロペラ・VTOLノズル等）が配線済みの箱組み機体。Blenderで箱を彫り替えれば飛ばせます',
+    blSample: '📥 サンプル機 B747-8I をダウンロード (.glb)',
+    blSampleTitle: 'Boeing公式三面図から起こした8,220三角形の完成機（舵面・脚が可動、曲面はスムーズシェーディング）。そのまま上のドロップ欄に入れても、Blenderの参考にしてもOK',
     blExport: '⬇ 選択中の外観を .glb で書き出す',
     blExportTitle: '外観モデル (.dnm) をBlender用glTFに変換してダウンロード（階層・可動アニメ・YSFLIGHT情報つき）',
     blExportNone: '書き出すには外観モデル (.dnm) を選んでください',
@@ -106,6 +108,8 @@ const S = ({
     blIntro: 'The Blender-first modeling path: start from the template, drop the exported .glb into the file drop above.',
     blTemplate: '📥 Download the aircraft template (.glb)',
     blTemplateTitle: 'A boxy airframe with every movable part (gear, flaps, propeller, VTOL nozzles, ...) pre-wired — carve the boxes and it flies',
+    blSample: '📥 Download the B747-8I sample (.glb)',
+    blSampleTitle: 'A finished 8,220-triangle airliner compiled from the official Boeing three-view (movable control surfaces and gear, smooth-shaded curves). Drop it into the file drop as-is, or use it as a Blender reference',
     blExport: '⬇ Export the selected visual as .glb',
     blExportTitle: 'Convert the visual model (.dnm) to Blender-ready glTF (hierarchy, movable-part animations, YSFLIGHT metadata)',
     blExportNone: 'Select a visual model (.dnm) to export',
@@ -612,13 +616,20 @@ async function buildDatSection(rail) {
 function buildBlenderSection(rail) {
   rail.appendChild(el('h2', null, S.blTitle));
   rail.appendChild(el('p', 'intro', S.blIntro));
+  const linkCss = 'display:inline-block;margin:0 8px 8px 0;padding:6px 12px;border:1px solid #4da3ff;' +
+    'border-radius:6px;color:#4da3ff;font-size:12.5px;text-decoration:none;background:rgba(77,163,255,.14)';
   const tpl = el('a', null, S.blTemplate);
   tpl.href = './aircraft-starter.glb';
   tpl.download = 'aircraft-starter.glb';
   tpl.title = S.blTemplateTitle;
-  tpl.style.cssText = 'display:inline-block;margin:0 0 8px;padding:6px 12px;border:1px solid #4da3ff;' +
-    'border-radius:6px;color:#4da3ff;font-size:12.5px;text-decoration:none;background:rgba(77,163,255,.14)';
+  tpl.style.cssText = linkCss;
   rail.appendChild(tpl);
+  const smp = el('a', null, S.blSample);
+  smp.href = './b747-8i.glb';
+  smp.download = 'b747-8i.glb';
+  smp.title = S.blSampleTitle;
+  smp.style.cssText = linkCss;
+  rail.appendChild(smp);
   const expBtn = el('button', null, S.blExport);
   expBtn.title = S.blExportTitle;
   const btnR = el('div', 'btnrow');

@@ -124,9 +124,9 @@ cp "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" "$ROOT/web/dnm-previ
    "$ROOT/web/studio-aircraft.html" "$ROOT/web/studio-aircraft.js" \
    "$ROOT/web/studio-scenery.html" "$ROOT/web/studio-scenery.js" \
    "$ROOT/web/studio-pack.html" "$ROOT/web/studio-pack.js" "$DIST_DIR/"
-# Blender bridge: the from-scratch aircraft template (download link in the
-# aircraft studio's Blender section).
-cp "$ROOT/templates/aircraft-starter.glb" "$DIST_DIR/"
+# Blender bridge: the from-scratch aircraft template plus the compiled
+# B747-8I sample (download links in the aircraft studio's Blender section).
+cp "$ROOT/templates/aircraft-starter.glb" "$ROOT/templates/b747-8i.glb" "$DIST_DIR/"
 cp "$ROOT/web/vendor/three.module.js" "$DIST_DIR/vendor/"
 node "$ROOT/scripts/gen-stock-index.mjs" "$ROOT/upstream/YSFLIGHT/runtime" "$DIST_DIR/stock"
 
@@ -135,7 +135,7 @@ sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',dat
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
 
 # Service worker: build id + precache list.
-PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"aircraft-starter.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"studio-pack.html\",\"studio-pack.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"aircraft-starter.glb\",\"b747-8i.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"studio-pack.html\",\"studio-pack.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 
