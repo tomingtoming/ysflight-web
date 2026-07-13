@@ -266,6 +266,17 @@ extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrHudDataPointer(void)
 	return FsVrHudDataPointer();
 }
 
+// Forwards to the engine's VR multiview shadow-map render-target block
+// (fsvr.h, 8 floats): the JS runtime writes [enable,mvFbo,readFbo,texW,texH]
+// here when single-pass stereo engages (setupShadowFbo below); the gl2.0
+// back-end's shadow-map path reads it to render each shadow cascade into the
+// two-layer depth-array FBO (a multiview-compiled program cannot legally
+// draw into the cascades' own single-layer FBOs) and blit layer 0 back out.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrShadowFboDataPointer(void)
+{
+	return FsVrShadowFboDataPointer();
+}
+
 // Forwards to the engine's VR aircraft-state block (fsvr.h, 8 floats): the
 // engine writes gear/brake/flap/selected-weapon state here once per sim frame
 // while VR is active; the dial-rendering code below (drawDial /
@@ -383,6 +394,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// multiview framebuffer the engine renders the flat HUD into, plus the
 		// emscripten GL-table ids so the C++ side can bind them by integer name.
 		hud:null,
+		// VR multiview shadow-map render target (fsvr.h
+		// FsVrShadowFboDataPointer): the shared two-layer depth-array FBO the
+		// engine's VR shadow pass renders each cascade into, plus a layer-0
+		// read FBO it blits from -- see setupShadowFbo/teardownShadowFbo.
+		shadowFbo:null,
 		// In-flight-dialog quad composite (fsvr.h FsVrGuiDataPointer): same
 		// shape as hud above (vr.gui, set once setupGui allocates it), but
 		// default OFF -- guiForced latches true the first time the guide
@@ -525,9 +541,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 			//   edge (see processControllerPlain) -- kept for the whole press
 			//   so a mid-press dial flick can't retarget an already-firing
 			//   trigger. visible/hideAt drive the quad layer's on/off fade.
+			// picking: true while the stick is deflected past
+			//   DIAL_SELECT_THRESHOLD -- its rising edge marks the start of a
+			//   FRESH gesture, at which the routed sel/guiSel field is
+			//   cleared before the first pick so the previous gesture's
+			//   sector cannot bias the new pick through the hysteresis band
+			//   (see updateDialStick's stale-highlight fix comment).
 			dial:{
-				right:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0},
-				left:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0}
+				right:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0,picking:false},
+				left:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0,picking:false}
 			},
 			// Last known grip pose per hand, plain-copied out of this frame's
 			// XRPose each frame in updateControllers (real XR path only --
@@ -535,7 +557,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// tracking). Consumed by updateHelpLayers to reposition the help
 			// placard quads; a null entry means "skip this hand's transform
 			// update this frame" per the feature spec.
-			gripPose:{right:null,left:null}
+			gripPose:{right:null,left:null},
+			// Frozen HOTAS-prop console anchor per hand ({pos,quat} in the XR
+			// REFERENCE space, or null while that hand is not grabbing):
+			// captured on each grab's rising edge, held for the whole grab
+			// (sticky latch included), cleared on release -- see
+			// updateHandPropAnchor/handPropAnchorQuat.
+			propAnchor:{right:null,left:null}
 		}
 	};
 	Module.ysfwVr=vr;
@@ -848,6 +876,110 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GL.framebuffers[vr.hud.fbId]=null;
 		GL.textures[vr.hud.texId]=null;
 		vr.hud=null;
+	}
+
+	// ---- VR multiview shadow-map render target ----------------------------
+	// Same allocate-and-publish shape as setupHud above, but a DEPTH-only
+	// two-layer array (2048x2048x2 DEPTH_COMPONENT24 -- 2048 matches the
+	// engine's cascade textures, FsCommonTexture::ReadyShadowMap; the depth
+	// blit that moves layer 0 into each cascade requires equal rectangles),
+	// plus a second, read-only FBO with that array's layer 0 attached
+	// (framebufferTextureLayer) as the blit SOURCE.  WHY this exists at all:
+	// multiview-compiled programs (num_views=2) cannot legally draw into the
+	// cascades' own single-layer FBOs (OVR_multiview2 INVALID_OPERATION,
+	// verified on ANGLE), so the engine's VR shadow pass renders into this
+	// shared target and blits out -- see fsvr.h's FsVrShadowFboDataPointer
+	// doc comment and FsSimulation::SimDrawShadowMap.  Kill switch:
+	// Module.ysfwVrOptions.shadow===false leaves the block zero, which the
+	// engine reads as "no target" and falls back to shadows-off (the pre-fix
+	// behaviour, sampling disabled) rather than erroring.
+	function setupShadowFbo()
+	{
+		var opts=Module.ysfwVrOptions||{};
+		if(false===opts.shadow)
+		{
+			return;
+		}
+		if(vr.shadowFbo)
+		{
+			return;
+		}
+		var ext=vr.mvExt||GLctx.getExtension('OCULUS_multiview')||GLctx.getExtension('OVR_multiview2');
+		if(!ext)
+		{
+			return;
+		}
+		var W=2048,H=2048;
+
+		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
+		GLctx.activeTexture(GLctx.TEXTURE15);
+		var dep=GLctx.createTexture();
+		GLctx.bindTexture(GLctx.TEXTURE_2D_ARRAY,dep);
+		GLctx.texStorage3D(GLctx.TEXTURE_2D_ARRAY,1,GLctx.DEPTH_COMPONENT24,W,H,2);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_MIN_FILTER,GLctx.NEAREST);
+		GLctx.texParameteri(GLctx.TEXTURE_2D_ARRAY,GLctx.TEXTURE_MAG_FILTER,GLctx.NEAREST);
+		GLctx.bindTexture(GLctx.TEXTURE_2D_ARRAY,null);
+		GLctx.activeTexture(prevActive);
+
+		var prevFb=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
+		// Render target: both layers via the multiview attachment.  Depth-only
+		// (no color): the shadow pass only needs depth, same as the engine's
+		// own single-layer cascade FBOs (ystexturemanager_gl.cpp).
+		var mvFb=GLctx.createFramebuffer();
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,mvFb);
+		ext.framebufferTextureMultiviewOVR(GLctx.FRAMEBUFFER,GLctx.DEPTH_ATTACHMENT,dep,0,0,2);
+		var stMv=GLctx.checkFramebufferStatus(GLctx.FRAMEBUFFER);
+		// Blit source: layer 0 of the same array on a plain framebuffer.
+		var readFb=GLctx.createFramebuffer();
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,readFb);
+		GLctx.framebufferTextureLayer(GLctx.FRAMEBUFFER,GLctx.DEPTH_ATTACHMENT,dep,0,0);
+		var stRead=GLctx.checkFramebufferStatus(GLctx.FRAMEBUFFER);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prevFb);
+		if(stMv!==GLctx.FRAMEBUFFER_COMPLETE || stRead!==GLctx.FRAMEBUFFER_COMPLETE)
+		{
+			console.warn('[vr] multiview shadow framebuffer incomplete (mv 0x'+stMv.toString(16)+', read 0x'+stRead.toString(16)+') -- VR shadows disabled');
+			GLctx.deleteFramebuffer(mvFb);
+			GLctx.deleteFramebuffer(readFb);
+			GLctx.deleteTexture(dep);
+			return;
+		}
+
+		var mvFbId=GL.getNewId(GL.framebuffers);
+		GL.framebuffers[mvFbId]=mvFb;
+		mvFb.name=mvFbId;
+		var readFbId=GL.getNewId(GL.framebuffers);
+		GL.framebuffers[readFbId]=readFb;
+		readFb.name=readFbId;
+
+		var p=_YsfwVrShadowFboDataPointer()>>2;
+		HEAPF32[p+0]=1;        // enable
+		HEAPF32[p+1]=mvFbId;   // two-layer multiview depth FBO (render target)
+		HEAPF32[p+2]=readFbId; // layer-0 view (blit source)
+		HEAPF32[p+3]=W;
+		HEAPF32[p+4]=H;
+		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
+
+		vr.shadowFbo={mvFb:mvFb,readFb:readFb,dep:dep,mvFbId:mvFbId,readFbId:readFbId,w:W,h:H};
+		console.log('[vr] multiview shadow target '+W+'x'+H+'x2 (mvFbId='+mvFbId+' readFbId='+readFbId+')');
+	}
+
+	function teardownShadowFbo()
+	{
+		var p=_YsfwVrShadowFboDataPointer()>>2;
+		for(var i=0; i<8; ++i)
+		{
+			HEAPF32[p+i]=0;
+		}
+		if(!vr.shadowFbo)
+		{
+			return;
+		}
+		try{ GLctx.deleteFramebuffer(vr.shadowFbo.mvFb); }catch(e){}
+		try{ GLctx.deleteFramebuffer(vr.shadowFbo.readFb); }catch(e){}
+		try{ GLctx.deleteTexture(vr.shadowFbo.dep); }catch(e){}
+		GL.framebuffers[vr.shadowFbo.mvFbId]=null;
+		GL.framebuffers[vr.shadowFbo.readFbId]=null;
+		vr.shadowFbo=null;
 	}
 
 	// ---- VR in-flight-GUI-dialog composite resources ---------------------
@@ -1234,6 +1366,110 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 	}
 
+	// ---- Anchored HOTAS-prop console pose ---------------------------------
+	// Device feedback on the first hand-prop revision: streaming the LIVE
+	// grip pose into the hand-pose block made the whole console (base plate
+	// included) follow every wobble of the hand -- "feels bad".  A real
+	// stick/throttle console is bolted to the airframe: only its ARTICULATED
+	// part moves.  The articulation already comes for free (the engine's
+	// DrawJoystick/DrawThrottle animate the rod/lever from the LIVE
+	// ctlAileron/ctlElevator/ctlThrottle, which this same VR grab drives), so
+	// the whole fix is to freeze the CONSOLE pose at the grab point instead
+	// of streaming the hand: on each grab's rising edge, capture the grip
+	// position in the REFERENCE space (room-fixed == cockpit-fixed) and pair
+	// it with a SYNTHETIC upright orientation (below); while the grab holds
+	// (sticky latch included), re-base that frozen reference-space pose onto
+	// each frame's viewer pose (the same inverse(viewer)*pose re-basing
+	// gripPoseInViewerSpace always did) so the engine keeps consuming plain
+	// viewer-space data with no change on its side.  Release clears the
+	// anchor; a re-grab re-anchors at the new grab point.
+	//
+	// quatFromBasis: quaternion for the rotation matrix whose COLUMNS are the
+	// given (orthonormal, right-handed) basis vectors -- i.e. q maps
+	// (1,0,0)->ex, (0,1,0)->ey, (0,0,1)->ez.  Standard Shepperd's method
+	// (largest-diagonal branch for numerical safety), plain JS, no libs.
+	function quatFromBasis(ex,ey,ez)
+	{
+		var m00=ex.x,m01=ey.x,m02=ez.x;
+		var m10=ex.y,m11=ey.y,m12=ez.y;
+		var m20=ex.z,m21=ey.z,m22=ez.z;
+		var t=m00+m11+m22,s;
+		if(0<t)
+		{
+			s=Math.sqrt(t+1)*2;
+			return {x:(m21-m12)/s,y:(m02-m20)/s,z:(m10-m01)/s,w:0.25*s};
+		}
+		if(m00>m11 && m00>m22)
+		{
+			s=Math.sqrt(1+m00-m11-m22)*2;
+			return {x:0.25*s,y:(m01+m10)/s,z:(m02+m20)/s,w:(m21-m12)/s};
+		}
+		if(m11>m22)
+		{
+			s=Math.sqrt(1+m11-m00-m22)*2;
+			return {x:(m01+m10)/s,y:0.25*s,z:(m12+m21)/s,w:(m02-m20)/s};
+		}
+		s=Math.sqrt(1+m22-m00-m11)*2;
+		return {x:(m02+m20)/s,y:(m12+m21)/s,z:0.25*s,w:(m10-m01)/s};
+	}
+
+	// The synthetic anchor orientation: chosen so that after the ENGINE's
+	// fixed grip-basis mapping (fssimulation.cpp's hand-prop block reads
+	// fwd_model=q*(0,-1,0), up_model=q*(0,0,-1), then the WebXR->engine
+	// z-negation), the console stands UPRIGHT and FACES the pilot:
+	//   up_model  = reference-space up (0,1,0), and
+	//   fwd_model = h, the horizontal unit vector from the grab point AWAY
+	//               from the pilot's head at grab time (grip -Y points
+	//               roughly away from the face in a natural hold, so this
+	//               reproduces the pre-anchor facing).
+	// Solving q*(0,-1,0)=h and q*(0,0,-1)=(0,1,0) gives the rotation matrix
+	// columns ex=(-h.z,0,h.x), ey=(-h.x,0,-h.z), ez=(0,-1,0) (right-handed:
+	// ey x ez == ex).  Degenerate case (grip on the head's vertical axis, no
+	// horizontal offset): fall back to the viewer's own horizontal facing,
+	// then to reference -Z.
+	function handPropAnchorQuat(gripPos,viewerPos,viewerQuat)
+	{
+		var hx=gripPos.x-viewerPos.x,hz=gripPos.z-viewerPos.z;
+		var len=Math.sqrt(hx*hx+hz*hz);
+		if(len<1e-4)
+		{
+			var f=rotateVecByQuat({x:0,y:0,z:-1},viewerQuat);
+			hx=f.x; hz=f.z;
+			len=Math.sqrt(hx*hx+hz*hz);
+			if(len<1e-4)
+			{
+				hx=0; hz=-1; len=1;
+			}
+		}
+		hx/=len; hz/=len;
+		return quatFromBasis({x:-hz,y:0,z:hx},{x:-hx,y:0,z:-hz},{x:0,y:-1,z:0});
+	}
+
+	// Per-frame anchor bookkeeping for one hand.  Returns the anchor to feed
+	// writeHandPoseBlock while grabbed (a {pos,quat} in REFERENCE space), or
+	// null while not grabbed (the caller then passes the live grip pose
+	// through unchanged -- the block's pose slots keep their established
+	// hold-last-value behaviour on release, and the engine's grabbed gates
+	// hide the prop anyway).
+	function updateHandPropAnchor(hand,gripPos,viewerPos,viewerQuat,grabbed)
+	{
+		if(!grabbed)
+		{
+			vr.ctl.propAnchor[hand]=null;
+			return null;
+		}
+		var a=vr.ctl.propAnchor[hand];
+		if(!a)
+		{
+			a={
+				pos:{x:gripPos.x,y:gripPos.y,z:gripPos.z},
+				quat:handPropAnchorQuat(gripPos,viewerPos,viewerQuat)
+			};
+			vr.ctl.propAnchor[hand]=a;
+		}
+		return a;
+	}
+
 	// Decompose the grip rotation since grab-begin (deltaQ = q*conjugate(q0))
 	// into pitch/yaw/roll deflection.  Deflections are expected well under
 	// 45 degrees, so gimbal order is not a practical concern.  Reference
@@ -1541,44 +1777,47 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var upY=(thumb ? -thumb[1] : 0)||0;
 		var mag=Math.sqrt(x*x+upY*upY);
 		var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
-		// Bug fix (stale highlight on re-activation): captured BEFORE this
-		// call can flip dial.visible below, so a deflection that crosses
-		// BOTH thresholds in the same frame (a swift flick, not a slow
-		// ramp-up) still sees the pre-activation state here.  If the dial
-		// was fully at rest (hidden) the instant before this deflection,
-		// clear BOTH remembered sectors so the very first pick this
-		// activation starts fresh from the CURRENT stick angle, with no
-		// hysteresis bias toward wherever the stick pointed last time the
-		// dial was active (see pickDialSector: cur===null skips the
-		// hysteresis branch entirely and just takes the freshly computed
-		// idx). Without this, a confirmed pick (e.g. GUN on the right dial)
-		// stuck around in dial.sel across a return-to-rest, and the NEXT
-		// activation's first pickDialSector call still measured the new
-		// stick angle against that stale sector's hysteresis band -- so the
-		// highlight only caught up once the stick escaped the OLD sector's
-		// band, reading as "the highlight didn't move". Both dial.sel and
-		// dial.guiSel are cleared (not just whichever field this call is
-		// about to use) since the SAME dial object's visible flag is shared
-		// across the normal-dial and GUI-guide faces (a dialog can open
-		// after the dial already went to rest in normal-dial mode, or vice
-		// versa), so either field could be the stale one by the time this
-		// dial next reactivates.
-		var wasVisible=dial.visible;
+		// Bug fix (stale highlight on re-deflection), round 2: EVERY fresh
+		// deflection from center is a fresh gesture, so on the RISING edge
+		// of (mag > DIAL_SELECT_THRESHOLD) -- tracked in dial.picking, set
+		// false whenever mag is at/below the threshold -- clear the
+		// remembered sector before the pick, so it starts fresh from the
+		// CURRENT stick angle with no hysteresis bias toward wherever the
+		// stick pointed during the PREVIOUS gesture (see pickDialSector:
+		// cur==null skips the hysteresis branch entirely and just takes the
+		// freshly computed idx).  Hysteresis exists solely to stop
+		// boundary-flicker WITHIN one continuous deflection; it must never
+		// arbitrate ACROSS gestures.  Round 1 of this fix cleared only when
+		// the dial had gone fully INVISIBLE first -- but dial.visible
+		// lingers for DIAL_HIDE_DELAY_MS (1200 ms) after return-to-rest
+		// (the fade timer below), and the on-device gesture re-deflects
+		// well inside that window, so nothing cleared and the old sector's
+		// band still won (the "stale highlight STILL reproduces" field
+		// report).  The threshold edge has no such latency.  Note this also
+		// clears when a swing from one sector to the opposite one passes
+		// THROUGH the center (mag dips below the threshold mid-swing):
+		// correct and desirable -- the moment the stick re-emerges it
+		// points somewhere definite, and that pick should win immediately.
+		// Only the field THIS gesture routes into is cleared (not both):
+		// the pick that immediately follows repopulates it within this same
+		// call, so null never outlives the function -- whereas clearing the
+		// OTHER face's field would leave it null across a dialog interlude
+		// and break its sticky-selection contract (e.g. rdial.sel=null
+		// would kill the trigger's fire-last-selected/default-Gun dispatch,
+		// RIGHT_DIAL[rdial.sel], until the next normal-face gesture).
 		if(DIAL_SELECT_THRESHOLD<mag)
 		{
-			if(!wasVisible)
+			var pickField=(guiSectorN ? 'guiSel' : 'sel');
+			if(!dial.picking)
 			{
-				dial.sel=null;
-				dial.guiSel=null;
+				dial.picking=true;
+				dial[pickField]=null;
 			}
-			if(guiSectorN)
-			{
-				pickDialSector(dial,'guiSel',x,upY,guiSectorN,rawSrc);
-			}
-			else
-			{
-				pickDialSector(dial,'sel',x,upY,sectorN,rawSrc);
-			}
+			pickDialSector(dial,pickField,x,upY,(guiSectorN ? guiSectorN : sectorN),rawSrc);
+		}
+		else
+		{
+			dial.picking=false;
 		}
 		if(DIAL_VISIBLE_THRESHOLD<mag)
 		{
@@ -2233,8 +2472,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// processControllerPlain so st.grabbed/th.grabbed (set
 			// synchronously inside it) reflect this frame's effective grab
 			// (physical squeeze OR sticky latch) by the time we read it here.
+			// While grabbed, the block carries the frozen ANCHOR console
+			// pose (grab-start point, synthetic upright orientation --
+			// see updateHandPropAnchor), not the live grip pose: the
+			// console stays put and only its articulated rod/lever follows
+			// the hand, via the live control deflections.
 			var grabbedNow=('right'===hand ? vr.ctl.stick.grabbed : vr.ctl.thr.grabbed);
-			writeHandPoseBlock(hand,gpos,gori,viewerPos,viewerQuat,grabbedNow);
+			var anchor=updateHandPropAnchor(hand,gpos,viewerPos,viewerQuat,grabbedNow);
+			writeHandPoseBlock(hand,(anchor ? anchor.pos : gpos),(anchor ? anchor.quat : gori),viewerPos,viewerQuat,grabbedNow);
 		}
 	}
 
@@ -3849,9 +4094,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.leftY=false;
 					vr.ctl.leftYSwallow=false;
 					vr.ctl.leftTrigger=false;
-					vr.ctl.dial.right={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
-					vr.ctl.dial.left={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
+					vr.ctl.dial.right={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0,picking:false};
+					vr.ctl.dial.left={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0,picking:false};
 					vr.ctl.gripPose={right:null,left:null};
+					vr.ctl.propAnchor={right:null,left:null};
 					vr.viewerSpace=null;
 					vr.dialRes={right:undefined,left:undefined};
 					vr.helpRes={right:undefined,left:undefined};
@@ -3860,6 +4106,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 					teardownHud();
 					teardownGui();
+					teardownShadowFbo();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -3874,6 +4121,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				{
 					setupHud();
 					setupGui();
+					setupShadowFbo();
 				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
@@ -3959,9 +4207,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 				thumb:e.thumb,
 				buttons:e.buttons||{}
 			},vq,null);
-			// See updateControllers' identical write for the real XR path.
+			// See updateControllers' identical write for the real XR path,
+			// anchor handling included.
 			var grabbedNow=('right'===e.hand ? vr.ctl.stick.grabbed : vr.ctl.thr.grabbed);
-			writeHandPoseBlock(e.hand,gp,gq,vp,vq,grabbedNow);
+			var anchor=updateHandPropAnchor(e.hand,gp,vp,vq,grabbedNow);
+			writeHandPoseBlock(e.hand,(anchor ? anchor.pos : gp),(anchor ? anchor.quat : gq),vp,vq,grabbedNow);
 		}
 	};
 	// Headless test hook: read the hand-pose block back as a plain array
@@ -3978,6 +4228,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 			out.push(HEAPF32[ptr+i]);
 		}
 		return out;
+	};
+	// Headless test hook for the anchored-HOTAS-prop math
+	// (scripts/smoke-vrctl.mjs): the EXACT synthetic anchor orientation the
+	// real grab path captures (handPropAnchorQuat -- same function object,
+	// not a reimplementation), as a plain [x,y,z,w] array from plain array
+	// inputs.  Lets a test assert the upright/facing-away construction
+	// (q*(0,0,-1)==reference up, q*(0,-1,0)==horizontal away vector) in
+	// isolation, while the anchor-invariance property itself is asserted
+	// end-to-end through pokeControllerFrame + readHandPoseBlock.
+	vr.handPropAnchorQuat=function(gripPos,viewerPos,viewerQuat)
+	{
+		var q=handPropAnchorQuat(
+			{x:gripPos[0],y:gripPos[1],z:gripPos[2]},
+			{x:viewerPos[0],y:viewerPos[1],z:viewerPos[2]},
+			{x:viewerQuat[0],y:viewerQuat[1],z:viewerQuat[2],w:viewerQuat[3]});
+		return [q.x,q.y,q.z,q.w];
 	};
 	// Headless test hooks for the N-way GUI dial guide (scripts/
 	// smoke-vrgui.mjs), fabricating a dialog the real engine has no easy
@@ -4099,6 +4365,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		_YsfwVrSetMultiview(1);
 		setupHud();
 		setupGui();
+		setupShadowFbo();
 		_YsfwVrSetPresenting(1);
 		// Headless stand-in for a real session start (see vr.enter): also
 		// auto-shows the help placards, so scripts/smoke-vrctl.mjs can drive

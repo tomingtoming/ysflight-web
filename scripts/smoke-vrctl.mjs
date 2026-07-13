@@ -445,6 +445,115 @@ check('yawOnlyQuatFromOrientation: pitch mixed into the input is stripped, yaw s
   Math.abs(yawExtractCombined[1] - pureYaw15[1]) < 0.01 && Math.abs(yawExtractCombined[0]) < 1e-9 && Math.abs(yawExtractCombined[2]) < 1e-9,
   'out=' + JSON.stringify(yawExtractCombined) + ' expectedY=' + pureYaw15[1]);
 
+// ---- Group 10b: anchored HOTAS console pose (hand-pose block) -------------
+// Round-3 device feedback: the whole console followed the hand -- now the
+// pose written to FsVrHandPoseDataPointer must be FROZEN at the grab-start
+// point (reference space) with a synthetic upright orientation, re-based
+// onto the head pose each frame (see fswebxr.cpp updateHandPropAnchor/
+// handPropAnchorQuat).  pokeControllerFrame's optional viewerQuat/viewerPos
+// arguments drive the head; readHandPoseBlock reads what the engine would
+// consume.  Quat comparisons allow the double-cover sign (|dot| ~ 1).
+function quatRot(q, v) { // rotate vec3 by quat (arrays), local math for recomposition
+  const [x, y, z, w] = q;
+  const qv = quatMul([x, y, z, w], [v[0], v[1], v[2], 0]);
+  const r = quatMul(qv, [-x, -y, -z, w]);
+  return [r[0], r[1], r[2]];
+}
+function quatAgree(a, b) {
+  return Math.abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]) > 0.9999;
+}
+const ANCHOR_POS = [0.2, -0.3, -0.5];
+// Reset the sticky-latch bookkeeping so this group's grab/release cycles
+// can't accidentally engage the double-squeeze latch left armed by earlier
+// groups (lastReleaseAt is a plain, test-visible field).
+await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.ctl.stick.sticky = { latched: false, disengageArmed: false, prevPhys: false, lastReleaseAt: 0 };
+  vr.ctl.thr.sticky = { latched: false, disengageArmed: false, prevPhys: false, lastReleaseAt: 0 };
+  vr.pokeControllerFrame([
+    { hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} },
+    { hand: 'left', pos: [0, 0, -0.1], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }
+  ]);
+});
+// Grab the right hand at ANCHOR_POS, identity grip quat, identity viewer.
+const anchorBlock0 = await page.evaluate((p) => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: p, quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }], [0, 0, 0, 1], [0, 0, 0]);
+  return vr.readHandPoseBlock();
+}, ANCHOR_POS);
+check('anchor: grabbed flag set in the hand-pose block', 1 === anchorBlock0[7], 'block=' + JSON.stringify(anchorBlock0));
+check('anchor: block position == grab-start point (identity viewer)',
+  Math.abs(anchorBlock0[0] - ANCHOR_POS[0]) < 1e-5 && Math.abs(anchorBlock0[1] - ANCHOR_POS[1]) < 1e-5 && Math.abs(anchorBlock0[2] - ANCHOR_POS[2]) < 1e-5,
+  'pos=' + JSON.stringify(anchorBlock0.slice(0, 3)));
+// (b) The synthetic orientation: must equal the pure helper's output, and
+// its engine-side upLocal (0,0,-1) must map to reference-space up (0,1,0),
+// its engine-side fwdLocal (0,-1,0) to the horizontal away vector.
+const anchorQuatPure = await page.evaluate((p) => globalThis.Module.ysfwVr.handPropAnchorQuat(p, [0, 0, 0], [0, 0, 0, 1]), ANCHOR_POS);
+check('anchor: block orientation == the synthetic anchor quat (identity viewer)',
+  quatAgree(anchorBlock0.slice(3, 7), anchorQuatPure),
+  'block=' + JSON.stringify(anchorBlock0.slice(3, 7)) + ' pure=' + JSON.stringify(anchorQuatPure));
+const upMapped = quatRot(anchorQuatPure, [0, 0, -1]);
+check('anchor: synthetic quat maps the engine upLocal (0,0,-1) to reference up (0,1,0)',
+  Math.abs(upMapped[0]) < 1e-6 && Math.abs(upMapped[1] - 1) < 1e-6 && Math.abs(upMapped[2]) < 1e-6,
+  'up=' + JSON.stringify(upMapped));
+const awayLen = Math.hypot(ANCHOR_POS[0], ANCHOR_POS[2]);
+const awayExpect = [ANCHOR_POS[0] / awayLen, 0, ANCHOR_POS[2] / awayLen];
+const fwdMapped = quatRot(anchorQuatPure, [0, -1, 0]);
+check('anchor: synthetic quat maps the engine fwdLocal (0,-1,0) to the horizontal away vector',
+  Math.abs(fwdMapped[0] - awayExpect[0]) < 1e-6 && Math.abs(fwdMapped[1]) < 1e-6 && Math.abs(fwdMapped[2] - awayExpect[2]) < 1e-6,
+  'fwd=' + JSON.stringify(fwdMapped) + ' expect=' + JSON.stringify(awayExpect));
+// Move the HAND while still grabbed: the block pose must NOT follow.
+const anchorBlockHandMoved = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const s = Math.sin(15 * Math.PI / 180), c = Math.cos(15 * Math.PI / 180);
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0.35, -0.15, -0.35], quat: [s, 0, 0, c], squeeze: 1, trigger: 0, buttons: {} }], [0, 0, 0, 1], [0, 0, 0]);
+  return vr.readHandPoseBlock();
+});
+check('anchor: moving the HAND mid-grab does not move the console pose',
+  Math.abs(anchorBlockHandMoved[0] - ANCHOR_POS[0]) < 1e-5 && Math.abs(anchorBlockHandMoved[1] - ANCHOR_POS[1]) < 1e-5 && Math.abs(anchorBlockHandMoved[2] - ANCHOR_POS[2]) < 1e-5 &&
+  quatAgree(anchorBlockHandMoved.slice(3, 7), anchorQuatPure),
+  'block=' + JSON.stringify(anchorBlockHandMoved.slice(0, 7)));
+// (a) Move the HEAD while still grabbed: the emitted viewer-space pose must
+// recompose (viewer x blockPose) back to the SAME reference-space anchor.
+const HEAD_QUAT = yawQuat(30);
+const HEAD_POS = [0.1, 0.05, -0.1];
+const anchorBlockHeadMoved = await page.evaluate((args) => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0.35, -0.15, -0.35], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }], args.q, args.p);
+  return vr.readHandPoseBlock();
+}, { q: HEAD_QUAT, p: HEAD_POS });
+const recomposedPos = (() => {
+  const r = quatRot(HEAD_QUAT, anchorBlockHeadMoved.slice(0, 3));
+  return [r[0] + HEAD_POS[0], r[1] + HEAD_POS[1], r[2] + HEAD_POS[2]];
+})();
+const recomposedQuat = quatMul(HEAD_QUAT, anchorBlockHeadMoved.slice(3, 7));
+check('anchor: with a MOVED head, viewer-space block pos recomposes to the same reference anchor point',
+  Math.abs(recomposedPos[0] - ANCHOR_POS[0]) < 1e-5 && Math.abs(recomposedPos[1] - ANCHOR_POS[1]) < 1e-5 && Math.abs(recomposedPos[2] - ANCHOR_POS[2]) < 1e-5,
+  'recomposed=' + JSON.stringify(recomposedPos));
+check('anchor: with a MOVED head, viewer-space block quat recomposes to the same reference anchor orientation',
+  quatAgree(recomposedQuat, anchorQuatPure),
+  'recomposed=' + JSON.stringify(recomposedQuat) + ' pure=' + JSON.stringify(anchorQuatPure));
+// Release clears; a re-grab at a NEW point re-anchors there.
+const anchorReGrab = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0.35, -0.15, -0.35], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }], [0, 0, 0, 1], [0, 0, 0]); // release
+  const releasedBlock = vr.readHandPoseBlock();
+  const releasedAnchor = vr.ctl.propAnchor.right;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0.0, -0.25, -0.6], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }], [0, 0, 0, 1], [0, 0, 0]); // re-grab elsewhere
+  const reBlock = vr.readHandPoseBlock();
+  // Tidy: release + clear the latch state this quick re-grab just armed/engaged.
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0.0, -0.25, -0.6], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }], [0, 0, 0, 1], [0, 0, 0]);
+  vr.ctl.stick.sticky = { latched: false, disengageArmed: false, prevPhys: false, lastReleaseAt: 0 };
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0.0, -0.25, -0.6], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }], [0, 0, 0, 1], [0, 0, 0]);
+  return { releasedGrabbed: releasedBlock[7], releasedAnchor, rePos: reBlock.slice(0, 3) };
+});
+check('anchor: release drops the grabbed flag and clears the anchor',
+  0 === anchorReGrab.releasedGrabbed && null === anchorReGrab.releasedAnchor,
+  'grabbed=' + anchorReGrab.releasedGrabbed + ' anchor=' + JSON.stringify(anchorReGrab.releasedAnchor));
+check('anchor: re-grab re-anchors at the NEW grab point',
+  Math.abs(anchorReGrab.rePos[0] - 0.0) < 1e-5 && Math.abs(anchorReGrab.rePos[1] - (-0.25)) < 1e-5 && Math.abs(anchorReGrab.rePos[2] - (-0.6)) < 1e-5,
+  'pos=' + JSON.stringify(anchorReGrab.rePos));
+
 // NOTE ON THE "HOLD TO START" BONUS CHECK (spec's optional bonus item):
 // deliberately not attempted.  The pre-flight "CENTER JOYSTICK... TO GO!"
 // screen is a separate state machine (FsCenterJoystick, fscontrol.cpp) that
