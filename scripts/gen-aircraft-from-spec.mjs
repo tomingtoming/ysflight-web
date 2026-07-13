@@ -455,7 +455,10 @@ function decals() {
           const pl = Math.hypot(px, py) || 1;
           px = (px / pl) * (t / 2); py = (py / pl) * (t / 2);
           const pts = [[zA + px, yA + py], [zB + px, yB + py], [zB - px, yB - py], [zA - px, yA - py]];
-          const q = pts.map(([zz, yy]) => [sgn * (skinX(zz, yy) + toff), yy, zys(zz)]);
+          // on: 'fin' floats the strokes off the fin's flat sides instead of
+          // the fuselage skin (tail numbers live at the fin root)
+          const q = pts.map(([zz, yy]) => [
+            sgn * (tt.on === 'fin' ? (tt.off ?? 0.2) : skinX(zz, yy) + toff), yy, zys(zz)]);
           // wind to face outward (+-x): a stroke drawn "backwards" would
           // otherwise get an inward Newell normal and light black in-game
           let nx = 0;
