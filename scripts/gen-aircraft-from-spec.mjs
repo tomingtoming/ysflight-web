@@ -291,11 +291,12 @@ function wedge(sections, cut, thickness, color, spanAxis) {
   }
   addFace(g, flipped ? rows[0].slice().reverse() : rows[0], color);
   addFace(g, flipped ? rows[rows.length - 1] : rows[rows.length - 1].slice().reverse(), color);
-  const mid = sectionAt(secs, (cut.spanFrom + cut.spanTo) / 2) || secs[0];
-  const hinge = spanAxis === 'x'
-    ? [(cut.spanFrom + cut.spanTo) / 2, mid.off || 0, zys(mid.znLE)]
-    : [0, (cut.spanFrom + cut.spanTo) / 2, zys(mid.znLE)];
-  return { geo: g, hinge };
+  // The hinge is the wedge's OWN swept leading edge (inner end -> outer end),
+  // not a model axis — hingeSta() rotates about this actual line.
+  const le = (s) => (spanAxis === 'x' ? [s.span, s.off || 0, zys(s.znLE)] : [0, s.span, zys(s.znLE)]);
+  const p0 = le(secs[0]), p1 = le(secs[secs.length - 1]);
+  const hinge = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, (p0[2] + p1[2]) / 2];
+  return { geo: g, hinge, line: [p0, p1] };
 }
 
 // Fixed surface with the cut regions' chords shortened.  Epsilon-doubled
@@ -453,10 +454,39 @@ function lightBox(x, y, z, s, color) {
   return g;
 }
 
+// --- movable-part kinematics -------------------------------------------------------------
+
+// Decompose "rotate deg about the unit axis u through CNT" into the engine's
+// Euler order R = RotateXZ(h)·RotateZY(p)·RotateXY(b) = Ry(-h)·Rx(-p)·Rz(b)
+// (ysshelldnmtemplate.h CacheTransformation).  A swept control surface hinged
+// about plain pitch swings off its own leading edge — the flap-axis bug.
+function axisEuler(u, deg) {
+  const th = (deg * Math.PI) / 180, c = Math.cos(th), s = Math.sin(th), t = 1 - c;
+  const [x, y, z] = u;
+  const m02 = t * x * z + s * y, m22 = t * z * z + c;
+  const m12 = t * y * z - s * x;
+  const m10 = t * x * y + s * z, m11 = t * y * y + c;
+  const U = 32768 / Math.PI;
+  return [
+    Math.round(-Math.atan2(m02, m22) * U),                          // h
+    Math.round(Math.asin(Math.max(-1, Math.min(1, m12))) * U),      // p
+    Math.round(Math.atan2(m10, m11) * U),                           // b
+  ];
+}
+// STA row deflecting a wedge about its hinge line; deg keeps the sign
+// convention of the old single-axis rot() (flap +22 = trailing edge down).
+function hingeSta(line, deg, vis = 1) {
+  const [a, b] = line;
+  const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const l = Math.hypot(d[0], d[1], d[2]) || 1;
+  const [h, p, bk] = axisEuler([d[0] / l, d[1] / l, d[2] / l], -deg);
+  return [0, 0, 0, h, p, bk, vis];
+}
+const mirrorLine = (ln) => ln.map(([x, y, z]) => [-x, y, z]);
+
 // --- assemble ----------------------------------------------------------------------------
 
 const zero = [0, 0, 0, 0, 0, 0, 1];
-const rot = (h, p, b, vis = 1) => [0, 0, 0, h, p, b, vis];
 const parts = [];
 const P = (label, cla, geo, hinge, sta, children) =>
   parts.push({ label, cla, geo, hinge: hinge || [0, 0, 0], sta: sta || [zero, zero], children: children || [] });
@@ -522,22 +552,31 @@ P('Fuselage', 0, staticGeo, null, null, [
   'FlapL', 'FlapR', 'AileronL', 'AileronR', 'ElevatorL', 'ElevatorR', 'Rudder',
   ...gearLabels, 'Beacon',
 ]);
-P('FlapL', 5, flap.geo, flap.hinge, [zero, rot(0, DEG(22), 0)]);
-P('FlapR', 5, mirrorX(flap.geo), [-flap.hinge[0], flap.hinge[1], flap.hinge[2]], [zero, rot(0, DEG(22), 0)]);
-P('AileronL', 7, ail.geo, ail.hinge, [zero, rot(0, DEG(-12), 0), rot(0, DEG(12), 0)]);
-P('AileronR', 7, mirrorX(ail.geo), [-ail.hinge[0], ail.hinge[1], ail.hinge[2]], [zero, rot(0, DEG(12), 0), rot(0, DEG(-12), 0)]);
-P('ElevatorL', 6, elev.geo, elev.hinge, [zero, rot(0, DEG(-18), 0), rot(0, DEG(18), 0)]);
-P('ElevatorR', 6, mirrorX(elev.geo), [-elev.hinge[0], elev.hinge[1], elev.hinge[2]], [zero, rot(0, DEG(-18), 0), rot(0, DEG(18), 0)]);
-P('Rudder', 8, rud.geo, rud.hinge, [zero, rot(DEG(-18), 0, 0), rot(DEG(18), 0, 0)]);
+P('FlapL', 5, flap.geo, flap.hinge, [zero, hingeSta(flap.line, 22)]);
+P('FlapR', 5, mirrorX(flap.geo), [-flap.hinge[0], flap.hinge[1], flap.hinge[2]], [zero, hingeSta(mirrorLine(flap.line), -22)]);
+P('AileronL', 7, ail.geo, ail.hinge, [zero, hingeSta(ail.line, -12), hingeSta(ail.line, 12)]);
+P('AileronR', 7, mirrorX(ail.geo), [-ail.hinge[0], ail.hinge[1], ail.hinge[2]], [zero, hingeSta(mirrorLine(ail.line), -12), hingeSta(mirrorLine(ail.line), 12)]);
+P('ElevatorL', 6, elev.geo, elev.hinge, [zero, hingeSta(elev.line, -18), hingeSta(elev.line, 18)]);
+P('ElevatorR', 6, mirrorX(elev.geo), [-elev.hinge[0], elev.hinge[1], elev.hinge[2]], [zero, hingeSta(mirrorLine(elev.line), 18), hingeSta(mirrorLine(elev.line), -18)]);
+P('Rudder', 8, rud.geo, rud.hinge, [zero, hingeSta(rud.line, -18), hingeSta(rud.line, 18)]);
 
-const gearRetract = rot(0, DEG(-100), 0, 0);
+// Retract kinematics (spec.gear.posts[].retract = {h,p,b, dx,dy,dz} — degrees
+// and meters, authored for the +x post; the mirrored post flips x-translation,
+// heading and bank).  bank ±90 folds a bogie inboard so the wheels lie flat in
+// the belly (the 747 wing-gear motion); dx/dy/dz then park it fully inside the
+// skin.  Default: the legacy aft pitch swing.
+const retractSta = (r, sgn) => [
+  (r.dx || 0) * sgn, r.dy || 0, r.dz || 0,
+  DEG((r.h || 0) * sgn), DEG(r.p || 0), DEG((r.b || 0) * sgn), 0,
+];
 for (const post of gearPosts) {
+  const ret = post.retract || { p: -100 };
   const mk = (x) => (post.type === 'nose' ? noseGear(x, post.zn, post.topY, post.axleY) : bogie(x, post.zn, post.topY, post.axleY));
   if (post.mirror) {
-    P(post.label + 'L', 0, mk(-post.x), [-post.x, post.topY, zys(post.zn)], [gearRetract, zero]);
-    P(post.label + 'R', 0, mk(post.x), [post.x, post.topY, zys(post.zn)], [gearRetract, zero]);
+    P(post.label + 'L', 0, mk(-post.x), [-post.x, post.topY, zys(post.zn)], [retractSta(ret, -1), zero]);
+    P(post.label + 'R', 0, mk(post.x), [post.x, post.topY, zys(post.zn)], [retractSta(ret, 1), zero]);
   } else {
-    P(post.label, 0, mk(post.x), [post.x, post.topY, zys(post.zn)], [gearRetract, zero]);
+    P(post.label, 0, mk(post.x), [post.x, post.topY, zys(post.zn)], [retractSta(ret, 1), zero]);
   }
 }
 P('Beacon', 30, beaconGeo, null, [zero, zero]);

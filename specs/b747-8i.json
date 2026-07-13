@@ -93,11 +93,14 @@
     ]
   },
   "gear": {
-    "comment": "the drawing's real 5-post layout: nose wheel circle at zn7.75, wing gear x±5.5 zn35.9, body gear x±1.92 zn39.0 (top-view wheel circles).  {nose, mains} kept for the old 3-post schema fallback.",
+    "comment": "the drawing's real 5-post layout: nose wheel circle at zn7.75, wing gear x±5.5 zn35.9, body gear x±1.92 zn39.0 (top-view wheel circles).  retract: nose swings forward into the nose bay; both main bogies fold inboard (bank -90, the real wing-gear motion) with dx/dy/dz parking the wheels flat inside the belly (bottom -3.55) clear of the wing root underside (~-2.9) and of each other (BodyGear staggers aft).  {nose, mains} kept for the old 3-post schema fallback.",
     "posts": [
-      { "type": "nose",  "label": "NoseGear", "x": 0,    "zn": 7.75, "topY": -2.8, "axleY": -5.0 },
-      { "type": "bogie", "label": "WingGear", "x": 5.5,  "zn": 35.9, "topY": -3.1, "axleY": -5.14, "mirror": true },
-      { "type": "bogie", "label": "BodyGear", "x": 1.92, "zn": 39.0, "topY": -3.4, "axleY": -5.14, "mirror": true }
+      { "type": "nose",  "label": "NoseGear", "x": 0,    "zn": 7.75, "topY": -2.8, "axleY": -5.0,
+        "retract": { "p": 100, "dy": 0.35 } },
+      { "type": "bogie", "label": "WingGear", "x": 5.5,  "zn": 35.9, "topY": -3.1, "axleY": -5.14, "mirror": true,
+        "retract": { "b": -90, "dx": -2.3, "dy": 0.4 } },
+      { "type": "bogie", "label": "BodyGear", "x": 1.92, "zn": 39.0, "topY": -3.4, "axleY": -5.14, "mirror": true,
+        "retract": { "b": -90, "dx": 0.6, "dy": 0.7, "dz": -0.9 } }
     ],
     "nose":  { "x": 0.0, "zn": 7.75, "topY": -2.8, "bottomY": -5.5 },
     "mains": { "x": 5.5, "zn": 37.4, "topY": -3.0, "bottomY": -5.72 }
