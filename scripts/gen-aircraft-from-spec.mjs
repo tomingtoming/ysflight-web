@@ -259,7 +259,9 @@ function decals() {
     const skipR = (D.doors && D.doors.halfW || 0.55) + 0.35;
     for (let zn = row.znFrom; zn < row.znTo; zn += row.pitch || 1.15) {
       if (row.skipDoors && doors.some((d) => Math.abs(zn + w / 2 - d) < skipR)) continue;
-      strip(zn, zn + w, row.y0, row.y1, COL.win, 1);
+      // 7cm float: windows may ride ON a cheatline band (4cm) — same-offset
+      // decals overlap coplanar and z-fight
+      strip(zn, zn + w, row.y0, row.y1, COL.win, 1, 0.07);
     }
   }
   if (D.doors) {
