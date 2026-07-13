@@ -376,7 +376,13 @@ export function mountPreview(container, bytes) {
   const center = box.getCenter(new THREE.Vector3());
   const radius = Math.max(size.x, size.y, size.z, 1) * 0.8 + 2;
   built.object3d.position.sub(center); // recenter at origin
-  scene.add(built.object3d);
+  // The engine's world is left-handed; three.js is right-handed.  Mirror the
+  // DISPLAY (not the data) so the preview matches the in-game view — without
+  // this, liveries and titles read as their mirror image.
+  const mirror = new THREE.Group();
+  mirror.scale.x = -1;
+  mirror.add(built.object3d);
+  scene.add(mirror);
 
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
   const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(1, 2, 1.5); scene.add(key);
