@@ -160,38 +160,97 @@ function fuselage() {
   return g;
 }
 
+// --- dorsal blisters (spec.fuselage.blisters: [{zn, len, halfW, h, color?}]) ----------
+// SATCOM radomes and antenna fairings: half-ellipsoid domes on the crown,
+// base buried 8cm into the hull so the seam follows the curved skin.
+
+function blisters() {
+  const g = mkGeo();
+  for (const b of spec.fuselage.blisters || []) {
+    // base at the LOWEST crown within the footprint: on a sloping spine (the
+    // hump tail) a base taken at the center would leave the downhill rim
+    // floating above the skin
+    const NP = 10, zc = zys(b.zn);
+    const base = Math.min(...[-1, 0, 1].map((k) => stationAt(b.zn + (k * b.len) / 2).top)) - 0.06;
+    const lats = [0, 0.5, 0.82];
+    const rings = lats.map((sl) => {
+      const cl = Math.sqrt(1 - sl * sl);
+      const ring = [];
+      for (let i = 0; i < NP; i++) {
+        const th = (i / NP) * Math.PI * 2;
+        ring.push(addV(g, b.halfW * cl * Math.cos(th), base + b.h * sl, zc + (b.len / 2) * cl * Math.sin(th), true));
+      }
+      return ring;
+    });
+    const apex = addV(g, 0, base + b.h, zc, true);
+    const color = COL[b.color] || COL.body;
+    for (let r = 0; r + 1 < rings.length; r++) {
+      for (let i = 0; i < NP; i++) {
+        const j = (i + 1) % NP;
+        addFace(g, [rings[r][i], rings[r][j], rings[r + 1][j], rings[r + 1][i]], color);
+      }
+    }
+    for (let i = 0; i < NP; i++) {
+      const j = (i + 1) % NP;
+      addFace(g, [rings[rings.length - 1][i], rings[rings.length - 1][j], apex], color);
+    }
+  }
+  return g;
+}
+
 // --- decals (spec.decals: cheatline / windows / doors / cockpit) ---------------------
 
 function decals() {
   const g = mkGeo();
   const D = spec.decals;
   if (!D) return g;
+  // y0/y1 may be functions of zn (sloped bands — the AF1-style nose sweep)
   const strip = (zn0, zn1, y0, y1, color, step, off = 0.04) => {
+    const Y = (v, zn) => (typeof v === 'function' ? v(zn) : v);
     const n = Math.max(1, Math.round((zn1 - zn0) / step));
     for (let k = 0; k < n; k++) {
       const a = zn0 + ((zn1 - zn0) * k) / n, b = zn0 + ((zn1 - zn0) * (k + 1)) / n;
+      const [y0a, y0b, y1a, y1b] = [Y(y0, a), Y(y0, b), Y(y1, a), Y(y1, b)];
       for (const sgn of [1, -1]) {
         const q = [
-          addV(g, sgn * (skinX(a, y0) + off), y0, zys(a)),
-          addV(g, sgn * (skinX(b, y0) + off), y0, zys(b)),
-          addV(g, sgn * (skinX(b, y1) + off), y1, zys(b)),
-          addV(g, sgn * (skinX(a, y1) + off), y1, zys(a)),
+          addV(g, sgn * (skinX(a, y0a) + off), y0a, zys(a)),
+          addV(g, sgn * (skinX(b, y0b) + off), y0b, zys(b)),
+          addV(g, sgn * (skinX(b, y1b) + off), y1b, zys(b)),
+          addV(g, sgn * (skinX(a, y1a) + off), y1a, zys(a)),
         ];
         addFace(g, sgn > 0 ? q : q.slice().reverse(), color);
       }
     }
   };
   const doors = D.doors ? D.doors.zn : [];
-  if (D.cheatline) {
-    const c = D.cheatline;
+  // one band or an array of bands (a two-tone livery is stacked cheatlines);
+  // per-band color names resolve through COL (default 'stripe').  noseRise =
+  // {znEnd, dy1, dy0}: forward of znEnd the band sweeps up toward the nose
+  // (the AF1 swoosh) — dy1 lifts the top edge, dy0 the bottom (0 keeps the
+  // bottom level so the region below stays in the band color).
+  for (const c of [].concat(D.cheatline || [])) {
+    const nr = c.noseRise;
+    const lift = (zn, dy) => (nr && dy && zn < nr.znEnd
+      ? dy * Math.pow((nr.znEnd - zn) / (nr.znEnd - c.znFrom), 1.6) : 0);
+    const yB = (zn) => c.y0 + lift(zn, nr && nr.dy0);
+    const yT = (zn) => c.y1 + lift(zn, nr && nr.dy1);
+    if (nr) {
+      // the sweep rides the doubly-curved nose — paint it ON the hull facets
+      // (an x-offset strip tears there); the flat part stays a cheap strip
+      const zs = [];
+      for (let z = c.znFrom; z < nr.znEnd - 1e-6; z += 0.7) zs.push(z);
+      zs.push(nr.znEnd);
+      const outline = [...zs.map((z) => [z, yB(z)]), ...zs.slice().reverse().map((z) => [z, yT(z)])];
+      paintOnHull(outline, (zn) => ({ halfW: 99, y0: yB(zn), y1: yT(zn) }), COL[c.color] || COL.stripe);
+    }
     // the stripe yields to the doors — both are skin decals at the same
     // offset, so overlapping spans would be exactly coplanar (z-fight)
     const hw = D.doors ? D.doors.halfW : 0;
     const cuts = (D.doors && D.doors.y1 > c.y0 && D.doors.y0 < c.y1)
       ? doors.map((d) => [d - hw, d + hw]).sort((p, q) => p[0] - q[0]) : [];
-    let a = c.znFrom;
+    let a = nr ? nr.znEnd : c.znFrom;
     for (const [s, e] of [...cuts, [c.znTo, c.znTo]]) {
-      if (s > a) strip(a, Math.min(s, c.znTo), c.y0, c.y1, COL.stripe, 2.2);
+      if (s > a) strip(a, Math.min(s, c.znTo), c.y0, c.y1, COL[c.color] || COL.stripe, 2.2);
       a = Math.max(a, e);
     }
   }
@@ -212,20 +271,20 @@ function decals() {
       if (dw) strip(d + (dw.dz || 0) - (dw.w || 0.27) / 2, d + (dw.dz || 0) + (dw.w || 0.27) / 2, dw.y0, dw.y1, COL.win, 1, 0.07);
     }
   }
-  // Cockpit glass: the drawing's side-view window outline, clipped per hull
-  // facet and laid ON each facet's plane (+2.5cm along its normal).  A flat
-  // floated decal sinks into the doubly-curved dome somewhere; a whole-facet
-  // repaint is too chunky (a 1.5m black square) and rows break the band.
-  // Clipping the EXACT outline onto the planar facets gives the drawing's
-  // shape — raked leading edge and all — with sinking structurally impossible.
-  if (D.cockpit) {
-    const ck = D.cockpit;
+  // Paint an arbitrary side-view outline ONTO the hull facets (+2.5cm along
+  // each facet's plane normal) — the only decal technique that survives the
+  // doubly-curved nose: a flat floated strip sinks into (or tears on) the
+  // dome somewhere, and whole-facet repaints are chunky and break across
+  // ring rows.  frontBand(zn) -> {halfW, y0, y1} optionally covers the
+  // front-facing dome facets (|nz| > |nx|), where the side projection
+  // degenerates to slivers.  Used by the cockpit glass and by rising
+  // cheatline sweeps.
+  function paintOnHull(outline, frontBand, color) {
     const N = spec.fuselage.ringPoints || 32;
-    const rk = ck.rake || 0;
-    const outline = [
-      [ck.znFrom, ck.y0], [ck.znTo, ck.y0],
-      [ck.znTo, ck.y1], [ck.znFrom + rk * (ck.y1 - ck.y0), ck.y1],
-    ];
+    const znMin = Math.min(...outline.map((p) => p[0])) - 0.01;
+    const znMax = Math.max(...outline.map((p) => p[0])) + 0.01;
+    const oy0 = Math.min(...outline.map((p) => p[1]));
+    const oy1 = Math.max(...outline.map((p) => p[1]));
     const clip = (poly, f) => {  // Sutherland-Hodgman: keep f(p) >= 0
       const out = [];
       for (let i = 0; i < poly.length; i++) {
@@ -245,12 +304,12 @@ function decals() {
     }, 0)) / 2;
     for (let r = 0; r + 1 < denseZn.length; r++) {
       const zn0 = denseZn[r], zn1 = denseZn[r + 1];
-      if (zn1 < ck.znFrom - 0.01 || zn0 > ck.znTo + 0.01) continue;
+      if (zn1 < znMin || zn0 > znMax) continue;
       for (let i = 0; i < N; i++) {
         const A0 = ringPt(zn0, i, N), B0 = ringPt(zn0, i + 1, N);
         const A1 = ringPt(zn1, i, N), B1 = ringPt(zn1, i + 1, N);
-        if (Math.max(A0[1], B0[1], A1[1], B1[1]) < ck.y0 ||
-            Math.min(A0[1], B0[1], A1[1], B1[1]) > ck.y1) continue;
+        if (Math.max(A0[1], B0[1], A1[1], B1[1]) < oy0 ||
+            Math.min(A0[1], B0[1], A1[1], B1[1]) > oy1) continue;
         // facet plane normal (outward: same winding as the fuselage quad)
         const F = [[A1[0], A1[1], zys(zn1)], [B1[0], B1[1], zys(zn1)],
                    [B0[0], B0[1], zys(zn0)], [A0[0], A0[1], zys(zn0)]];
@@ -286,12 +345,12 @@ function decals() {
           });
         } else {
           // FRONT-facing dome facet: the side view can't see this region (it
-          // ends at the crown silhouette) — the FACE view says the panes run
-          // to ~0.06m off the centerline.  Clip a front rectangle in (x, y)
+          // ends at the crown silhouette).  Clip a front rectangle in (x, y)
           // against the facet's own (x, y) quad, then invert affinely.
-          const fw = ck.frontHalfW || 0;
-          if (!fw) continue;
-          const rect = [[-fw, ck.frontY0 ?? ck.y0], [fw, ck.frontY0 ?? ck.y0], [fw, ck.y1], [-fw, ck.y1]];
+          const fb = frontBand && frontBand((zn0 + zn1) / 2);
+          if (!fb) continue;
+          const fw = fb.halfW;
+          const rect = [[-fw, fb.y0], [fw, fb.y0], [fw, fb.y1], [-fw, fb.y1]];
           const Q = [A0, B0, B1, A1];
           const qa = Q.reduce((s, p, k) => {
             const q = Q[(k + 1) % 4];
@@ -322,9 +381,19 @@ function decals() {
           px += (y0 - y1) * (z0 + z1); py += (z0 - z1) * (x0 + x1); pz += (x0 - x1) * (y0 + y1);
         }
         if (px * nx + py * ny + pz * nz < 0) pts.reverse();
-        addFace(g, pts.map((p) => addV(g, ...p)), COL.glass);
+        addFace(g, pts.map((p) => addV(g, ...p)), color);
       }
     }
+  }
+  // Cockpit glass: the drawing's side-view window outline (raked LE and all)
+  // + the face-view front panes, painted on the hull.
+  if (D.cockpit) {
+    const ck = D.cockpit;
+    const rk = ck.rake || 0;
+    paintOnHull(
+      [[ck.znFrom, ck.y0], [ck.znTo, ck.y0], [ck.znTo, ck.y1], [ck.znFrom + rk * (ck.y1 - ck.y0), ck.y1]],
+      ck.frontHalfW ? () => ({ halfW: ck.frontHalfW, y0: ck.frontY0 ?? ck.y0, y1: ck.y1 }) : null,
+      COL.glass);
   }
   return g;
 }
@@ -736,7 +805,7 @@ const tipSec = spec.wing.sections[spec.wing.sections.length - 1];
 const lastSt = ST[ST.length - 1];
 const fairs = fairings(wingSecs, flapCuts);
 const staticGeo = merge(
-  fuselage(), decals(),
+  fuselage(), decals(), blisters(),
   wingFixed, mirrorX(wingFixed),
   fairs.fixed, mirrorX(fairs.fixed),
   hsFixed, mirrorX(hsFixed),
