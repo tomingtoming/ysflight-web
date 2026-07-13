@@ -3258,7 +3258,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		ctx.fillText('tick '+s.tick.toFixed(1)+'ms  sim '+s.sim.toFixed(1)+'  draw '+s.draw.toFixed(1),24,50);
 		ctx.fillText('scene '+s.scene.toFixed(1)+'  hud '+s.hud.toFixed(1)+'  gui '+s.gui.toFixed(1)+'  ret '+s.reticle.toFixed(1),24,102);
 		ctx.fillStyle='rgba(160,200,255,0.95)';
-		ctx.fillText('js: ctl '+s.ctl.toFixed(1)+'  dial '+s.dial.toFixed(1)+'  layers '+s.layers.toFixed(1)+'   '+s.fps.toFixed(1)+'fps',24,154);
+		// session.frameRate: the compositor rate actually GRANTED (see the
+		// updateTargetFrameRate negotiation) -- fps vs this rate is the
+		// pacing readout: fps well below a granted 72 means missed vsyncs,
+		// not a wrong target.
+		var hz=(vr.session && vr.session.frameRate) ? ('@'+Math.round(vr.session.frameRate)+'Hz') : '';
+		ctx.fillText('js: ctl '+s.ctl.toFixed(1)+'  dial '+s.dial.toFixed(1)+'  layers '+s.layers.toFixed(1)+'   '+s.fps.toFixed(1)+'fps'+hz,24,154);
 	}
 	function ensurePerfResources()
 	{
@@ -3548,18 +3553,36 @@ EM_JS(void,YsfwInstallWebXR,(),
 				try
 				{
 					// Prefer the highest supported rate not above the request.
-					if(session.frameRates && session.updateTargetFrameRate)
+					// The spec attribute is supportedFrameRates -- an earlier
+					// revision read the nonexistent session.frameRates, so this
+					// whole block silently no-oped and the session stayed at
+					// the browser default (90Hz on Quest 3S). Missing 90Hz's
+					// 11.1ms deadline by a little dropped the effective rate
+					// to ~60fps even with the engine tick at 7ms -- the pacing
+					// gap this negotiation exists to close (72Hz = 13.9ms).
+					var rates=session.supportedFrameRates||session.frameRates;
+					if(rates && rates.length && session.updateTargetFrameRate)
 					{
 						var best=0;
-						session.frameRates.forEach(function(r){ if(r<=frameRate && best<r){ best=r; } });
+						rates.forEach(function(r){ if(r<=frameRate && best<r){ best=r; } });
 						if(0===best)
 						{
-							session.frameRates.forEach(function(r){ if(0===best || r<best){ best=r; } });
+							rates.forEach(function(r){ if(0===best || r<best){ best=r; } });
 						}
 						if(0<best)
 						{
-							session.updateTargetFrameRate(best).catch(function(){});
+							session.updateTargetFrameRate(best).then(function()
+							{
+								console.log('[vr] target frame rate '+best+'Hz (granted '+(session.frameRate||'?')+'Hz) of ['+Array.prototype.join.call(rates,',')+']');
+							}).catch(function(e)
+							{
+								console.warn('[vr] updateTargetFrameRate('+best+') rejected: '+(e&&e.message?e.message:e));
+							});
 						}
+					}
+					else
+					{
+						console.log('[vr] frame-rate negotiation unavailable (supportedFrameRates absent); staying at browser default'+(session.frameRate ? ' '+session.frameRate+'Hz' : ''));
 					}
 				}catch(e){}
 				if(!vr.mvLayer)
@@ -3620,6 +3643,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 						var pf=readVrPerfSnapshot();
 						st.phases={sim:pf.sim,draw:pf.draw,scene:pf.scene,hud:pf.hud,gui:pf.gui,reticle:pf.reticle,
 						           ctl:pf.ctl,dial:pf.dial,layers:pf.layers};
+						// The GRANTED compositor rate, for the chip: avg fps
+						// vs this is the frame-pacing verdict (see the
+						// updateTargetFrameRate negotiation above).
+						st.grantedHz=(vr.session && vr.session.frameRate) ? Math.round(vr.session.frameRate) : 0;
 					}
 					vr.session=null;
 					vr.refSpace=null;

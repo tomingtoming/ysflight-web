@@ -1265,7 +1265,11 @@
         // is CPU-bound (resolution won't help); if far below, it's not.
         var cpu = (st.cpuMs ? ', ' + st.cpuMs.toFixed(0) + 'ms CPU/frame' : '');
         var line1 = document.createElement('div');
-        line1.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps (avg, ' + st.seconds.toFixed(0) + 's)' + cpu;
+        // grantedHz: the compositor rate the session actually ran at -- avg
+        // fps right below it means clean pacing; well under it means missed
+        // vsyncs (see fswebxr.cpp's updateTargetFrameRate negotiation).
+        var hz = (st.grantedHz ? ' @' + st.grantedHz + 'Hz' : '');
+        line1.textContent = 'VR: ' + st.avgFps.toFixed(1) + ' fps' + hz + ' (avg, ' + st.seconds.toFixed(0) + 's)' + cpu;
         n.appendChild(line1);
         // Phase-breakdown second line (fswebxr.cpp's vr.stats.phases,
         // snapshotted at session end from the same engine/JS perf numbers
