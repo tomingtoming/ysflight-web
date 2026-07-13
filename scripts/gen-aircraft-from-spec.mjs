@@ -204,21 +204,29 @@ function decals() {
   const g = mkGeo();
   const D = spec.decals;
   if (!D) return g;
-  // y0/y1 may be functions of zn (sloped bands — the AF1-style nose sweep)
+  // y0/y1 may be functions of zn (sloped bands).  Tall bands are sliced
+  // vertically (<=0.45m): a single flat quad spanning the hull's equator lets
+  // the widest part of the ellipse bulge through mid-quad.
   const strip = (zn0, zn1, y0, y1, color, step, off = 0.04) => {
     const Y = (v, zn) => (typeof v === 'function' ? v(zn) : v);
     const n = Math.max(1, Math.round((zn1 - zn0) / step));
     for (let k = 0; k < n; k++) {
       const a = zn0 + ((zn1 - zn0) * k) / n, b = zn0 + ((zn1 - zn0) * (k + 1)) / n;
       const [y0a, y0b, y1a, y1b] = [Y(y0, a), Y(y0, b), Y(y1, a), Y(y1, b)];
-      for (const sgn of [1, -1]) {
-        const q = [
-          addV(g, sgn * (skinX(a, y0a) + off), y0a, zys(a)),
-          addV(g, sgn * (skinX(b, y0b) + off), y0b, zys(b)),
-          addV(g, sgn * (skinX(b, y1b) + off), y1b, zys(b)),
-          addV(g, sgn * (skinX(a, y1a) + off), y1a, zys(a)),
-        ];
-        addFace(g, sgn > 0 ? q : q.slice().reverse(), color);
+      const slices = Math.max(1, Math.ceil(Math.max(y1a - y0a, y1b - y0b) / 0.45));
+      for (let sl = 0; sl < slices; sl++) {
+        const f0 = sl / slices, f1 = (sl + 1) / slices;
+        const [ya0, ya1] = [y0a + (y1a - y0a) * f0, y0a + (y1a - y0a) * f1];
+        const [yb0, yb1] = [y0b + (y1b - y0b) * f0, y0b + (y1b - y0b) * f1];
+        for (const sgn of [1, -1]) {
+          const q = [
+            addV(g, sgn * (skinX(a, ya0) + off), ya0, zys(a)),
+            addV(g, sgn * (skinX(b, yb0) + off), yb0, zys(b)),
+            addV(g, sgn * (skinX(b, yb1) + off), yb1, zys(b)),
+            addV(g, sgn * (skinX(a, ya1) + off), ya1, zys(a)),
+          ];
+          addFace(g, sgn > 0 ? q : q.slice().reverse(), color);
+        }
       }
     }
   };
@@ -229,31 +237,43 @@ function decals() {
   // (the AF1 swoosh) — dy1 lifts the top edge, dy0 the bottom (0 keeps the
   // bottom level so the region below stays in the band color).
   for (const c of [].concat(D.cheatline || [])) {
-    const nr = c.noseRise;
-    // pow shapes the sweep: ~1.6 = gentle ramp, ~3 = hug the line then kick
-    // up hard at the nose (the AF1 J-curve).  Clamp at 1 so front-dome
-    // facets forward of znFrom don't extrapolate the lift past the crest.
-    const lift = (zn, dy) => (nr && dy && zn < nr.znEnd
-      ? dy * Math.pow(Math.min(1, (nr.znEnd - zn) / (nr.znEnd - c.znFrom)), nr.pow || 1.6) : 0);
-    const yB = (zn) => c.y0 + lift(zn, nr && nr.dy0);
-    const yT = (zn) => c.y1 + lift(zn, nr && nr.dy1);
-    if (nr) {
-      // the sweep rides the doubly-curved nose — paint it ON the hull facets
-      // (an x-offset strip tears there); the flat part stays a cheap strip
+    // noseRise / tailRise = {znEnd|znStart, dy1, dy0, pow}: the band lifts
+    // toward the nose (AF1 swoosh; pow ~3 hugs then kicks up) or rides up the
+    // tailcone (a level band ends up UNDER the upswept tail otherwise).  With
+    // no dy the band stays level but the end run is still painted ON the hull
+    // facets — x-offset strips tear on the nose/tail double curvature.  Lift
+    // factors clamp at 1 so dome facets beyond the ends don't extrapolate.
+    const nr = c.noseRise, tr = c.tailRise;
+    const lift = (zn, dN, dT) => {
+      let v = 0;
+      if (nr && dN && zn < nr.znEnd) v += dN * Math.pow(Math.min(1, (nr.znEnd - zn) / (nr.znEnd - c.znFrom)), nr.pow || 1.6);
+      if (tr && dT && zn > tr.znStart) v += dT * Math.pow(Math.min(1, (zn - tr.znStart) / (c.znTo - tr.znStart)), tr.pow || 1.6);
+      return v;
+    };
+    const yB = (zn) => c.y0 + lift(zn, nr && nr.dy0, tr && tr.dy0);
+    const yT = (zn) => c.y1 + lift(zn, nr && nr.dy1, tr && tr.dy1);
+    const col = COL[c.color] || COL.stripe;
+    const paint = (z0, z1) => {
       const zs = [];
-      for (let z = c.znFrom; z < nr.znEnd - 1e-6; z += 0.7) zs.push(z);
-      zs.push(nr.znEnd);
+      for (let z = z0; z < z1 - 1e-6; z += 0.7) zs.push(z);
+      zs.push(z1);
       const outline = [...zs.map((z) => [z, yB(z)]), ...zs.slice().reverse().map((z) => [z, yT(z)])];
-      paintOnHull(outline, (zn) => ({ halfW: 99, y0: yB(zn), y1: yT(zn) }), COL[c.color] || COL.stripe);
-    }
+      paintOnHull(outline, (zn) => ({ halfW: 99, y0: yB(zn), y1: yT(zn) }), col);
+    };
+    if (nr) paint(c.znFrom, nr.znEnd);
+    if (tr) paint(tr.znStart, c.znTo);
     // the stripe yields to the doors — both are skin decals at the same
     // offset, so overlapping spans would be exactly coplanar (z-fight)
     const hw = D.doors ? D.doors.halfW : 0;
     const cuts = (D.doors && D.doors.y1 > c.y0 && D.doors.y0 < c.y1)
       ? doors.map((d) => [d - hw, d + hw]).sort((p, q) => p[0] - q[0]) : [];
     let a = nr ? nr.znEnd : c.znFrom;
-    for (const [s, e] of [...cuts, [c.znTo, c.znTo]]) {
-      if (s > a) strip(a, Math.min(s, c.znTo), c.y0, c.y1, COL[c.color] || COL.stripe, 2.2);
+    const stripTo = tr ? tr.znStart : c.znTo;
+    for (const [s, e] of [...cuts, [stripTo, stripTo]]) {
+      // 1.4m segments at 5cm: the strip interpolates linearly between samples
+      // while the hull follows the Catmull-Rom width curve — coarse segments
+      // let the hull bulge through mid-span (white blotches in the band)
+      if (s > a) strip(a, Math.min(s, stripTo), c.y0, c.y1, col, 1.4, 0.05);
       a = Math.max(a, e);
     }
   }
@@ -262,9 +282,9 @@ function decals() {
     const skipR = (D.doors && D.doors.halfW || 0.55) + 0.35;
     for (let zn = row.znFrom; zn < row.znTo; zn += row.pitch || 1.15) {
       if (row.skipDoors && doors.some((d) => Math.abs(zn + w / 2 - d) < skipR)) continue;
-      // 7cm float: windows may ride ON a cheatline band (4cm) — same-offset
+      // 8cm float: windows may ride ON a cheatline band (5cm) — same-offset
       // decals overlap coplanar and z-fight
-      strip(zn, zn + w, row.y0, row.y1, COL.win, 1, 0.07);
+      strip(zn, zn + w, row.y0, row.y1, COL.win, 1, 0.08);
     }
   }
   if (D.doors) {
