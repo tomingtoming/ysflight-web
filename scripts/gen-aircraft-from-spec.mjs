@@ -309,8 +309,11 @@ function decals() {
       const outline = [...zs.map((z) => [z, yB(z)]), ...zs.slice().reverse().map((z) => [z, yT(z)])];
       paintOnHull(outline, (zn) => ({ halfW: 99, y0: yB(zn), y1: yT(zn) }), col);
     };
-    if (nr) paint(c.znFrom, nr.znEnd);
-    if (tr) paint(tr.znStart, c.znTo);
+    // overlap the painted run 1.2m UNDER the strip (strip floats 5cm, paint
+    // 2.5cm): a butt joint at the same zn plane flashes a white sliver of
+    // hull between the two offsets at glancing angles
+    if (nr) paint(c.znFrom, Math.min(nr.znEnd + 1.2, c.znTo));
+    if (tr) paint(Math.max(tr.znStart - 1.2, c.znFrom), c.znTo);
     // the stripe yields to the doors — both are skin decals at the same
     // offset, so overlapping spans would be exactly coplanar (z-fight)
     const hw = D.doors ? D.doors.halfW : 0;
@@ -355,6 +358,7 @@ function decals() {
   // cheatline sweeps.
   function paintOnHull(outline, frontBand, color) {
     const N = spec.fuselage.ringPoints || 32;
+    const weld = new Map();
     // Smooth skin normals on the ring grid (central differences).  Pieces
     // offset along the SHARED per-point normal instead of each facet's own
     // plane normal: on the doubly-curved nose adjacent facets tilt ~20deg,
@@ -501,7 +505,15 @@ function decals() {
           px += (y0 - y1) * (z0 + z1); py += (z0 - z1) * (x0 + x1); pz += (x0 - x1) * (y0 + y1);
         }
         if (px * nx + py * ny + pz * nz < 0) pts.reverse();
-        addFace(g, pts.map((p) => addV(g, ...p)), color);
+        // weld shared edge points (pieces on adjacent facets land on exactly
+        // the same offset positions) and mark them R: the engine then shades
+        // the paint as one smooth skin instead of a faceted patchwork
+        addFace(g, pts.map((p) => {
+          const k = p[0].toFixed(4) + ',' + p[1].toFixed(4) + ',' + p[2].toFixed(4);
+          let id = weld.get(k);
+          if (id === undefined) { id = addV(g, p[0], p[1], p[2], true); weld.set(k, id); }
+          return id;
+        }), color);
       }
     }
   }
