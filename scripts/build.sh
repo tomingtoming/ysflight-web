@@ -15,6 +15,20 @@ DIST_DIR="$ROOT/dist"
 EMSDK_VERSION="${EMSDK_VERSION:-6.0.0}"
 EMSDK_AUTO_INSTALL="${EMSDK_AUTO_INSTALL:-1}"
 
+# --- Profiling build (measurement only) -----------------------------------
+# PROFILING=1 keeps wasm function names in the name section (--profiling-funcs)
+# for CPU-profile symbolication, WITHOUT touching the normal build: it uses a
+# separate build dir (so the normal build's cmake cache is untouched) and
+# stages into a separate dist-prof/ (so dist/ stays a normal, unprofiled
+# build).  No-op when PROFILING is unset.
+PROFILING="${PROFILING:-0}"
+EXTRA_LINKER_FLAGS=""
+if [[ "$PROFILING" == "1" ]]; then
+    BUILD_DIR="${BUILD_DIR}-prof"
+    DIST_DIR="${DIST_DIR}-prof"
+    EXTRA_LINKER_FLAGS=" --profiling-funcs"
+fi
+
 # --- Emscripten environment -------------------------------------------------
 if ! command -v emcmake >/dev/null 2>&1; then
     EMSDK_DIR="${EMSDK:-$HOME/opt/emsdk}"
@@ -71,7 +85,7 @@ git -C "$ROOT" submodule update --init --depth 1 2>/dev/null || true
 emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DYSFLIGHT_WEB_PORT_DIR="$ROOT/src/port" \
-    -DCMAKE_EXE_LINKER_FLAGS="-Oz"
+    -DCMAKE_EXE_LINKER_FLAGS="-Oz${EXTRA_LINKER_FLAGS}"
 
 cmake --build "$BUILD_DIR" --target ysflight32_gl2 -j"$(nproc)"
 # Polygon Crest (ysgebl_web) is DORMANT: the Blender bridge (web/dnm-gltf.js)
@@ -166,4 +180,4 @@ cat > "$DIST_DIR/_headers" <<EOF
 EOF
 
 echo
-echo "Done.  build=$BUILD_ID  Serve with:  node scripts/serve.mjs"
+echo "Done.  build=$BUILD_ID  Serve with:  node scripts/serve.mjs <port> $(basename "$DIST_DIR")"

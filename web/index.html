@@ -801,6 +801,60 @@
     });
   }
 
+  // ---- WebGL state shadow ---------------------------------------------------
+  // The engine (ysgl) brackets nearly every draw with save/restore state
+  // queries: YsGLSLUse3DRenderer reads GL_CURRENT_PROGRAM on EVERY renderer
+  // activation (1-4 per shell node per frame, ysglsl3ddrawing.c:860) and
+  // YsHasShellExtVboSet::Render reads GL_FRONT_FACE once per node
+  // (ysshellextgl_gl2.cpp:40), plus viewport/blend-func reads elsewhere
+  // (fsopengl2.0.cpp, fsparticlegl2.0.cpp, ysglslplain2ddrawing.c).  In
+  // WebGL, getParameter is a synchronous round trip toward the GPU process
+  // -- profiled at ~78% of ALL engine CPU time in VR (docs/perf-vr-72hz.md).
+  // Shadow the handful of states the engine actually queries: record them in
+  // the setter wrappers, answer those getParameter enums from the shadow.
+  // Every other pname falls through to the real getParameter untouched.
+  // (Correct because ALL writes to these states go through the same wrapped
+  // methods, whoever the caller is; the engine only ever uses sane viewport/
+  // blend arguments, so GL's clamp/invalid-arg edge cases don't diverge.)
+  (function () {
+    function installShadow(gl) {
+      if (gl.__ysfwStateShadow) return;
+      gl.__ysfwStateShadow = true;
+      var st = {
+        program: null,
+        frontFace: 0x0901, // GL_CCW -- the GL default
+        viewport: [0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight], // GL default at creation
+        srcRGB: 1, dstRGB: 0, srcA: 1, dstA: 0 // GL_ONE / GL_ZERO defaults
+      };
+      var useProgram = gl.useProgram, frontFace = gl.frontFace,
+          viewport = gl.viewport, blendFunc = gl.blendFunc,
+          blendFuncSeparate = gl.blendFuncSeparate, getParameter = gl.getParameter;
+      gl.useProgram = function (p) { st.program = p || null; return useProgram.call(this, p); };
+      gl.frontFace = function (m) { st.frontFace = m; return frontFace.call(this, m); };
+      gl.viewport = function (x, y, w, h) { st.viewport = [x | 0, y | 0, w | 0, h | 0]; return viewport.call(this, x, y, w, h); };
+      gl.blendFunc = function (s, d) { st.srcRGB = st.srcA = s; st.dstRGB = st.dstA = d; return blendFunc.call(this, s, d); };
+      gl.blendFuncSeparate = function (sr, dr, sa, da) { st.srcRGB = sr; st.dstRGB = dr; st.srcA = sa; st.dstA = da; return blendFuncSeparate.call(this, sr, dr, sa, da); };
+      gl.getParameter = function (pname) {
+        switch (pname) {
+          case 0x8B8D: return st.program;                 // CURRENT_PROGRAM (emscripten's glue maps the object back to its GL id)
+          case 0x0B46: return st.frontFace;               // FRONT_FACE
+          case 0x0BA2: return new Int32Array(st.viewport); // VIEWPORT -- fresh copy, like the real call
+          case 0x80C9: return st.srcRGB;                  // BLEND_SRC_RGB
+          case 0x80C8: return st.dstRGB;                  // BLEND_DST_RGB
+          case 0x80CB: return st.srcA;                    // BLEND_SRC_ALPHA
+          case 0x80CA: return st.dstA;                    // BLEND_DST_ALPHA
+        }
+        return getParameter.call(this, pname);
+      };
+    }
+    var getCtx = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+      var ctx = getCtx.call(this, type, attrs);
+      if (ctx && ('webgl2' === type || 'webgl' === type || 'experimental-webgl' === type)) installShadow(ctx);
+      return ctx;
+    };
+  })();
+
   function loadEngine() {
     var s = document.createElement('script');
     s.async = true;
