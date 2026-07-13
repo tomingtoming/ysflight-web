@@ -527,24 +527,41 @@ function fairings(wingSecs, flapCuts) {
 function engine(p, wingSecs) {
   const g = mkGeo();
   const N = 18, R = spec.engines.diameter / 2, EL = spec.engines.length;
-  const ring = (zf, rf, smooth = true) => {
+  const ring = (zf, rf, smooth = true, chev = 0) => {
     const out = [];
     for (let i = 0; i < N; i++) {
       const th = (i / N) * Math.PI * 2;
-      out.push(addV(g, p.x + R * rf * Math.cos(th), p.y + R * rf * Math.sin(th), zys(p.zn + EL * zf), smooth));
+      // chevron serration: alternate vertices forward/aft of the ring plane
+      const z = zf + (chev ? (i % 2 ? -chev : chev) : 0);
+      out.push(addV(g, p.x + R * rf * Math.cos(th), p.y + R * rf * Math.sin(th), zys(p.zn + EL * z), smooth));
     }
     return out;
   };
-  const shape = [[0, 0.86], [0.1, 1.0], [0.5, 0.97], [0.7, 0.84], [0.71, 0.52], [0.93, 0.33], [1.0, 0.15], [1.1, 0.02]];
-  // the intake lip ring is NOT smooth: it joins the outward cowl to the
-  // REVERSED inner-lip surface, so the engine's averaged normal there goes
-  // edge-on and the cowl front shades inside-out in flight
-  const rings = shape.map(([zf, rf], k) => ring(zf, rf, k > 0));
+  // GEnx chevron nozzles: the fan-cowl TE (zf 0.7) and the core-nozzle TE
+  // (zf 1.0) are serrated — N=18 ring points give 9 chevron teeth each.  The
+  // cowl ends as a thin LIP: after the chevron ring the profile doubles back
+  // forward-and-inward (0.66, 0.78) so the notches open to AIR at the
+  // silhouette (sky shows through the V's), then the duct wall runs aft to
+  // the recessed core.  A step annulus right behind the teeth just reads as
+  // a starburst painted on the tail — no serrated silhouette.
+  const shape = [
+    [0, 0.86], [0.1, 1.0], [0.5, 0.97], [0.7, 0.84, 0.05], // fan cowl, serrated TE
+    [0.66, 0.78],                                          // lip doubles back inward
+    [0.84, 0.44],                                          // duct wall down to the core
+    [0.98, 0.30],                                          // exposed core cowl taper
+    [1.04, 0.18, 0.03],                                    // core nozzle, serrated TE
+    [1.18, 0.02],                                          // exhaust plug point
+  ];
+  // the intake lip ring and the chevron edges are NOT smooth: the lip joins
+  // the outward cowl to the REVERSED inner-lip surface (averaged normals go
+  // edge-on -> cowl shades inside-out in flight), and serrated edges want
+  // crisp teeth, not Gouraud-rounded ones
+  const rings = shape.map(([zf, rf, chev], k) => ring(zf, rf, k > 0 && !chev, chev || 0));
   for (let r = 0; r + 1 < rings.length; r++) {
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
       addFace(g, [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]],
-        r >= 4 ? COL.engDark : COL.engine);
+        r >= 3 ? COL.engDark : COL.engine);
     }
   }
   // intake: inner lip ring + fan disc (both face forward, +z) — flat verts,
