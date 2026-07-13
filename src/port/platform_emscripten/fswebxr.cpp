@@ -29,22 +29,30 @@ that owns the session and fills that state every frame:
     throttle), and the face buttons fire synthetic KeyboardEvents on the
     default key bindings (gear, spoiler/brake, flaps).
   - Each hand's trigger is a SaccFlight-style radial "function dial":
-    pushing that hand's thumbstick past a deadzone picks one of 4 sectors
-    (up/right/down/left), the pick sticks after the stick recentres, and
-    the trigger then dispatches whichever function is currently selected
-    (see RIGHT_DIAL/LEFT_DIAL below). While a session uses the WebXR
-    layers path (single-pass stereo, see YsfwVrSetMultiview above), each
-    hand also gets a small head-locked XRQuadLayer showing the dial so the
-    selection is visible in-headset; without layers the dial still works,
-    it is just invisible.
-  - The dial quads also show LIVE aircraft state (fsvr.h /
-    FsVrAircraftStateDataPointer), not just static labels: the right dial's
-    Gear/Brake sectors show the current UP/DOWN (or transitional %) and
-    ON/OFF, its centre shows the selected weapon short-name + remaining
-    count; the left dial's Flap+/Flap- sectors and centre show the current
-    flap %. The canvas is only redrawn when the sticky sector selection OR
-    this state changes (see updateDialLayers/aircraftStateSig below), not
-    every frame.
+    pushing that hand's thumbstick past a deadzone picks one of N evenly-
+    spaced sectors (N=RIGHT_DIAL.length/LEFT_DIAL.length, 6 today, sector i
+    centred at i*(360/N) degrees clockwise from up -- see updateDialStick),
+    the pick sticks after the stick recentres, and the trigger then
+    dispatches whichever function is currently selected (see RIGHT_DIAL/
+    LEFT_DIAL below). While a session uses the WebXR layers path (single-
+    pass stereo, see YsfwVrSetMultiview above), each hand also gets a small
+    head-locked XRQuadLayer showing the dial so the selection is visible
+    in-headset; without layers the dial still works, it is just invisible.
+  - The dial quads use the same fully-transparent, radial-spoke-label
+    visual language as the in-flight-GUI guide below (drawDial reuses
+    drawSpokeSpan/fitSpokeLabel -- see drawGuiDialGuide's doc comment for
+    the design rationale): a thin tick per sector (longer/amber + a small
+    arrowhead for the selected one) and the function's label text running
+    outward along that sector's spoke -- no wedge fill, no centre hub.
+    LIVE aircraft state (fsvr.h / FsVrAircraftStateDataPointer) still
+    shows on the face: gear UP/DOWN/%, brake ON/OFF, flap %, and the
+    selected weapon + remaining count are drawn as a dimmer second span
+    chained past the owning entry's label along its spoke, keyed off the
+    entry's key code rather than the old fixed up/right/down/left slots
+    (see dialEntryStateText) so the tables can be reordered freely. The
+    canvas is only redrawn when the sticky sector selection OR this state
+    changes (see updateDialLayers/aircraftStateSig below), not every
+    frame.
   - Four on-device-tested control refinements (SaccFlight-style), all
     implemented in processControllerPlain/deflectionFromDeltaQ below:
       - Recenter: holding right A for >=1s re-offsets the reference space
@@ -114,16 +122,18 @@ that owns the session and fills that state every frame:
     to a generic Escape/cancel tap otherwise (GUI_ESCAPE_ACTION); the owner
     hand's thumbstick click is repurposed as a truthful cancel/Escape
     binding. That is the WHOLE dialog grammar: sector pick + trigger
-    confirm + stick-click cancel, nothing else. Unlike the normal RIGHT_DIAL/LEFT_DIAL (always exactly 4
-    sectors), the drivable guide dial is N-WAY: it shows one sector PER REAL
-    OPTION the open dialog reports (N=guiMenu.options.length, up to
-    GUI_DIAL_CAPACITY=8), evenly dividing the circle starting at up (12
-    o'clock) and going clockwise, sector i dispatching guiMenu.options[i]'s
-    OWN real hotkey (read positionally off the engine's label text via
-    parseMenuLabel -- see guiDialEngagedFor/hotkeyCode below) -- NOT a fixed
-    Digit1..4 table, so a 6- or 7-option menu (radio-comm's wingman-command
-    dialog has 7 numbered commands plus an explicit "0...Don't send" option,
-    8 total) is fully dial-selectable without ever needing the on-quad panel.
+    confirm + stick-click cancel, nothing else. Like the normal RIGHT_DIAL/
+    LEFT_DIAL (a fixed table, N=6 sectors today, see updateDialStick), the
+    drivable guide dial is also N-WAY, but its N is DYNAMIC instead of
+    fixed: it shows one sector PER REAL OPTION the open dialog reports
+    (N=guiMenu.options.length, up to GUI_DIAL_CAPACITY=8), evenly dividing
+    the circle starting at up (12 o'clock) and going clockwise, sector i
+    dispatching guiMenu.options[i]'s OWN real hotkey (read positionally off
+    the engine's label text via parseMenuLabel -- see guiDialEngagedFor/
+    hotkeyCode below) -- NOT a fixed Digit1..4 table, so a 6- or 7-option
+    menu (radio-comm's wingman-command dialog has 7 numbered commands plus
+    an explicit "0...Don't send" option, 8 total) is fully dial-selectable
+    without ever needing the on-quad panel.
     The owner hand's A/B (X/Y on the left hand) are simply PARKED while the
     dialog is open: their normal flight taps (gear/brake, flaps) are
     suppressed so a face-button fumble mid-dialog can't drop the gear, and
@@ -143,10 +153,11 @@ that owns the session and fills that state every frame:
     falls back to the normal dial the instant the dialog closes. Grip-stick
     (aileron/elevator/rudder) and the throttle grip are NEVER affected, on
     EITHER hand: the plane keeps flying regardless of any open dialog. A
-    haptic pulse fires on every sector change in guide mode too (same
-    updateDialStick call the normal 4-way pick uses, just quantized to N
-    wedges instead of 4 -- see its doc comment), standing in for the visual
-    feedback a pilot not looking at the guide quad would otherwise miss.
+    haptic pulse fires on every sector change in guide mode too (the SAME
+    updateDialStick pick the normal dial uses, just quantized to the
+    dialog's own N wedges instead of the fixed table's N -- see its doc
+    comment), standing in for the visual feedback a pilot not looking at
+    the guide quad would otherwise miss.
 
 Copyright (c) 2026 ysflight-web contributors.
 Follows the same BSD-style license as the rest of the port layer.
@@ -385,12 +396,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 			leftTrigger:false,
 			keys:{},
 			// Radial function-dial state per hand (see RIGHT_DIAL/LEFT_DIAL).
-			// sel: sticky selected sector ('up'|'right'|'down'|'left') for
-			//   the NORMAL 4-way flight-function dial (and the generic/ESC
-			//   GUI-guide face, which is also uniform 4-way -- see
-			//   updateDialStick). guiSel: sticky selected sector INDEX
-			//   (0..N-1, numeric) for the N-way GUI-guide dial ONLY, reset to
-			//   0 every time a dialog freshly opens (see
+			// sel: sticky selected sector INDEX (0..N-1, numeric, N=that
+			//   hand's table length -- 6 today) for the NORMAL flight-
+			//   function dial, using the SAME continuous-angle + hysteresis
+			//   N-way pick as guiSel below (see updateDialStick) -- just
+			//   quantized to the table's fixed N instead of a dialog's
+			//   dynamic one. Also harmlessly updated (but never read for
+			//   anything user-visible) while the generic/ESC GUI-guide face
+			//   is showing, since that face's uniform "every sector = ESC"
+			//   dispatch doesn't key off sel at all. guiSel: sticky selected
+			//   sector INDEX (0..N-1, numeric) for the N-way GUI-guide dial
+			//   ONLY, reset to 0 every time a dialog freshly opens (see
 			//   processControllerPlain's guiOwner-assignment block) --
 			//   entirely separate state from sel so the normal dial can never
 			//   be left holding a stale numeric value once a dialog closes.
@@ -399,8 +415,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 			//   so a mid-press dial flick can't retarget an already-firing
 			//   trigger. visible/hideAt drive the quad layer's on/off fade.
 			dial:{
-				right:{sel:'up',guiSel:0,engaged:null,visible:false,hideAt:0},
-				left:{sel:'up',guiSel:0,engaged:null,visible:false,hideAt:0}
+				right:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0},
+				left:{sel:0,guiSel:0,engaged:null,visible:false,hideAt:0}
 			},
 			// Last known grip pose per hand, plain-copied out of this frame's
 			// XRPose each frame in updateControllers (real XR path only --
@@ -414,52 +430,81 @@ EM_JS(void,YsfwInstallWebXR,(),
 	Module.ysfwVr=vr;
 
 	// ---- Radial function-dial tables (SaccFlightAndVehicles-style) ------
-	// One function per sector per hand.  keyCode is the DOM KeyboardEvent
-	// code dispatched (see fssimplewindow_emscripten.cpp's keyCodeMapping
-	// for the code->FSKEY table); mode 'hold' mirrors the trigger's raw
-	// press/release (key held as long as the trigger is), mode 'tap' fires
-	// one keydown+keyup pulse on the trigger's press edge only. Every key
-	// below is cross-checked against FsControlAssignment::SetDefaultKeyAssign
-	// (upstream/YSFLIGHT/src/core/fscontrol.cpp) -- see the per-entry notes.
-	var RIGHT_DIAL={
-		// FSBTF_FIREWEAPON (Space): a level-sensed virtual button in the
-		// engine (fscontrol.cpp's "implemented through virtual buttons of
-		// FsAirplaneProperty" switch) -- fires while held, so 'hold'.
-		up:   {label:'Gun',    code:'Space', mode:'hold'},
-		// FSBTF_SELECTWEAPON (Digit2): cycles the selected weapon
+	// One function per sector per hand, ARRAYS now (not up/right/down/left
+	// keyed objects): entry i sits at canvas/stick angle i*(360/N) degrees
+	// clockwise from up (N=array length, 6 today for both hands -- the SAME
+	// convention updateDialStick's N-way pick and drawDial's rendering both
+	// use, and the SAME convention the GUI-guide dial already used for its
+	// dynamic N -- see computeGuiMenuLayout/drawGuiDialGuide). keyCode is
+	// the DOM KeyboardEvent code dispatched (see fssimplewindow_emscripten.
+	// cpp's keyCodeMapping for the code->FSKEY table); mode 'hold' mirrors
+	// the trigger's raw press/release (key held as long as the trigger is,
+	// used for level-sensed virtual buttons), mode 'tap' fires one
+	// keydown+keyup pulse on the trigger's press edge only (used for
+	// toggles/cycles/edge actions). Every key below is cross-checked against
+	// FsControlAssignment::SetDefaultKeyAssign (upstream/YSFLIGHT/src/core/
+	// fscontrol.cpp) -- see the per-entry notes.
+	var RIGHT_DIAL=[
+		// [0] up (0deg). FSBTF_FIREWEAPON (Space): a level-sensed virtual
+		// button in the engine (fscontrol.cpp's "implemented through virtual
+		// buttons of FsAirplaneProperty" switch) -- fires while held, so
+		// 'hold'.
+		{label:'Gun',     code:'Space', mode:'hold'},
+		// [1] 60deg. FSBTF_SELECTWEAPON (Digit2): cycles the selected weapon
 		// (FsGroundProperty::CycleWeaponOfChoiceByUser / ctlCycleWeaponButtonExt)
 		// on the press edge -- a 'tap', not a hold, and matches the touch UI's
 		// own weapon-select button (web/index.html's tap('Digit2')).
-		right:{label:'武器切替',code:'Digit2',mode:'tap'},
-		// FSBTF_LANDINGGEAR (KeyG): fscontrol.cpp toggles
+		{label:'武器切替', code:'Digit2',mode:'tap'},
+		// [2] 120deg. FSBTF_DISPENSEFLARE (Digit4): another level-sensed
+		// virtual button (same fscontrol.cpp switch as FSBTF_FIREWEAPON
+		// above) -- fires while held, so 'hold', same as Gun.
+		{label:'フレア',   code:'Digit4',mode:'hold'},
+		// [3] 180deg (down). FSBTF_LANDINGGEAR (KeyG): fscontrol.cpp toggles
 		// ctlGear=(ctlGear<0.5?1.0:0.0) on each press -- a toggle, so 'tap'
 		// (one edge per trigger pull, not a sustained hold).
-		down: {label:'Gear',   code:'KeyG',  mode:'tap'},
-		// FSBTF_SPOILERBRAKE (KeyB): same toggle pattern as gear
+		{label:'Gear',    code:'KeyG',  mode:'tap'},
+		// [4] 240deg. FSBTF_SPOILERBRAKE (KeyB): same toggle pattern as gear
 		// (ctlSpoiler=(ctlSpoiler<0.5?1.0:0.0) in fscontrol.cpp) -- 'tap',
 		// not 'hold', despite the name "brake" suggesting a held button.
-		left: {label:'Brake',  code:'KeyB',  mode:'tap'}
-	};
-	var LEFT_DIAL={
-		// FSBTF_FLAPUP (KeyR): steps one flap position per press -- 'tap'.
-		up:   {label:'Flap+',  code:'KeyR', mode:'tap'},
-		// FSBTF_FLAPDOWN (KeyF): steps one flap position per press -- 'tap'.
-		down: {label:'Flap-',  code:'KeyF', mode:'tap'},
-		// No default key targets FSBTF_SMOKE itself (SetDefaultKeyAssign
-		// binds only FSKEY_P -> FSBTF_CYCLESMOKESELECTOR); that cycle
-		// function advances the smoke-generator channel on the press edge
-		// (FsAirplaneProperty::CycleSmokeSelector, called from
-		// IsCycleSmokeSelectorButtonJustPressed) -- an edge action, so
-		// 'tap' here (deviates from the brief's "hold" guess: there is no
-		// holdable smoke key in the shipped defaults).
-		right:{label:'Smoke',  code:'KeyP', mode:'tap'},
-		// Free slot: FSBTF_OPENAUTOPILOTMENU (Backspace) opens the
+		{label:'Brake',   code:'KeyB',  mode:'tap'},
+		// [5] 300deg. FSBTF_RADAR (Digit3): toggles the radar display on the
+		// press edge (fscontrol.cpp's toggle-switch pattern, same shape as
+		// gear/brake above) -- 'tap'.
+		{label:'レーダー', code:'Digit3',mode:'tap'}
+	];
+	var LEFT_DIAL=[
+		// [0] up (0deg). FSBTF_FLAPUP (KeyR): steps one flap position per
+		// press -- 'tap'.
+		{label:'Flap+',  code:'KeyR',     mode:'tap'},
+		// [1] 60deg. No default key targets FSBTF_SMOKE itself
+		// (SetDefaultKeyAssign binds only FSKEY_P -> FSBTF_CYCLESMOKESELECTOR);
+		// that cycle function advances the smoke-generator channel on the
+		// press edge (FsAirplaneProperty::CycleSmokeSelector, called from
+		// IsCycleSmokeSelectorButtonJustPressed) -- an edge action, so 'tap'
+		// here (deviates from an earlier "hold" guess: there is no holdable
+		// smoke key in the shipped defaults).
+		{label:'Smoke',  code:'KeyP',     mode:'tap'},
+		// [2] 120deg. FSBTF_OPENRADIOCOMMMENU (Enter): opens the radio-comm
+		// dialog on the press edge -- 'tap' (opens a dialog, same as AP
+		// below; the existing GUI-guide machinery -- guiOwner/guiMenu/
+		// drawGuiDialGuide -- takes over this hand automatically the instant
+		// dialogVisible flips true, exactly as it does for AP).
+		{label:'無線',    code:'Enter',    mode:'tap'},
+		// [3] 180deg (down). FSBTF_FLAPDOWN (KeyF): steps one flap position
+		// per press -- 'tap'.
+		{label:'Flap-',  code:'KeyF',     mode:'tap'},
+		// [4] 240deg. FSBTF_OPENAUTOPILOTMENU (Backspace) opens the
 		// autopilot dialog -- a deliberately calm, occasional action (the
 		// tablet touch UI already treats it as a tap), which fits the left
 		// hand well since that hand's grip already owns the continuous
 		// throttle control and its trigger is otherwise idle.
-		left: {label:'AP',     code:'Backspace',mode:'tap'}
-	};
+		{label:'AP',     code:'Backspace',mode:'tap'},
+		// [5] 300deg. FSBTF_AUTOTRIM (KeyT): a level-sensed virtual button
+		// (same fscontrol.cpp switch as FIREWEAPON/DISPENSEFLARE) -- fires
+		// while held, so 'hold' (holding it trims continuously; releasing
+		// stops).
+		{label:'トリム',  code:'KeyT',     mode:'hold'}
+	];
 
 	// GUI-dialog stick mapping (see SimDrawVrGui's doc comment / fsvr.h's
 	// FsVrGuiDataPointer): while a modal in-flight dialog is open (guiData[5]
@@ -482,18 +527,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// FsGuiDialog Tab-focus/mouse-click machinery that the remaining,
 	// mouse-only in-flight dialogs rely on instead.
 	//
-	// Unlike RIGHT_DIAL/LEFT_DIAL (a fixed table, always exactly 4 sectors),
-	// there is no fixed GUI_DIAL table any more: the dial guide is N-WAY,
-	// one sector per REAL option the currently-open dialog reports
+	// Unlike RIGHT_DIAL/LEFT_DIAL (a fixed table, N=6 sectors today, the
+	// SAME for every dialog/no-dialog state), there is no fixed GUI_DIAL
+	// table any more: the dial guide is N-WAY with a DYNAMIC N, one sector
+	// per REAL option the currently-open dialog reports
 	// (guiMenu.options.length, up to GUI_DIAL_CAPACITY -- see
 	// computeGuiMenuLayout), and sector i dispatches guiMenu.options[i]'s OWN
 	// hotkey, read positionally off the engine's label text (parseMenuLabel
 	// already extracted it into .hotkey) -- see hotkeyCode/
 	// guiDialEngagedFor below. This is what lets a 6- or 7-option dialog
 	// (the autopilot menu; radio-comm's wingman-command menu) be fully
-	// dial-selectable without the on-quad panel, where the old fixed-4
-	// table needed the owner hand's A/B buttons to reach options 5/6 (see
-	// GUI_DIAL_CAPACITY's doc comment) and forced the panel on above that.
+	// dial-selectable without the on-quad panel, where an old fixed-4-sector
+	// design would have needed the owner hand's A/B buttons to reach options
+	// 5/6 (see GUI_DIAL_CAPACITY's doc comment) and forced the panel on
+	// above that.
 	// With every real option reachable by a sector, the owner hand's A/B
 	// (X/Y on the left hand) carry NO dialog meaning at all any more --
 	// they are parked while a dialog is open (see processControllerPlain),
@@ -1265,17 +1312,60 @@ EM_JS(void,YsfwInstallWebXR,(),
 	var DIAL_HYSTERESIS_DEG=6;  // Extra angle past a sector boundary before the pick switches (anti-flicker).  // magnitude to (re)pick a sector.
 	var DIAL_VISIBLE_THRESHOLD=0.3; // magnitude to fade the dial layer in.
 	var DIAL_HIDE_DELAY_MS=1200;    // time after re-centring before it hides.
-	// guiSectorN: 0/undefined runs the NORMAL 4-way pick (dial.sel, a
-	// direction string -- RIGHT_DIAL/LEFT_DIAL and the generic/ESC GUI-guide
-	// face both key off this, unchanged from before this dial was made
-	// N-way-aware). A positive integer instead runs the GUI-guide's N-way
-	// pick (dial.guiSel, a numeric 0..N-1 sector index -- see
-	// guiDialEngagedFor/drawGuiDialGuide) using the SAME underlying stick
-	// reading, just quantized to N even wedges instead of a fixed 4. Kept as
-	// two entirely separate fields (not one field that changes type) so a
-	// dialog closing can never leave the normal dial holding a stale numeric
-	// value -- see vr.ctl.dial's doc comment.
-	function updateDialStick(dial,thumb,rawSrc,guiSectorN)
+	// Shared N-way sector pick: quantizes the stick angle (x,upY already in
+	// plain screen terms, see updateDialStick's doc comment) to sectorN even
+	// wedges -- sector i's centre is at i*(360/sectorN) degrees clockwise
+	// from up (0deg=up, matching Canvas/atan2 convention: 0deg=up (x=0,
+	// upY=1), 90deg=right, +-180deg=down, -90deg=left) -- and writes the
+	// result into dial[field] (either 'sel', the normal fixed-table pick, or
+	// 'guiSel', the GUI-guide's dynamic-N pick; see updateDialStick below).
+	// Boundary hysteresis: keeps the current sector until the stick points
+	// DIAL_HYSTERESIS_DEG past the shared boundary, so aiming near a
+	// boundary doesn't flicker (and buzz) between two sectors. Sweeping the
+	// stick around the rim still re-selects continuously, sector by sector.
+	// A haptic pulse fires on every actual sector change (used by both the
+	// normal dial and the GUI guide -- see their respective doc comments).
+	function pickDialSector(dial,field,x,upY,sectorN,rawSrc)
+	{
+		var deg=Math.atan2(x,upY)*180/Math.PI;
+		if(deg<0)
+		{
+			deg+=360;
+		}
+		var idx=Math.round(deg/(360/sectorN))%sectorN;
+		var cur=dial[field];
+		if(idx!==cur && null!=cur && cur<sectorN)
+		{
+			var half=180/sectorN;
+			var curCen=cur*(360/sectorN);
+			var away=Math.abs(((deg-curCen)%360+540)%360-180);
+			if(away<=half+DIAL_HYSTERESIS_DEG)
+			{
+				idx=cur;
+			}
+		}
+		if(idx!==cur)
+		{
+			dial[field]=idx;
+			vrHapticPulse(rawSrc);
+		}
+	}
+	// sectorN: this hand's NORMAL flight-function dial's sector count
+	// (RIGHT_DIAL.length/LEFT_DIAL.length, 6 today -- the caller passes the
+	// table length; see processControllerPlain's call sites), quantized via
+	// pickDialSector into dial.sel (a numeric 0..sectorN-1 index). Also runs
+	// (harmlessly) while the generic/ESC GUI-guide face is showing, since
+	// that face's uniform "every sector = ESC" dispatch doesn't key off sel
+	// at all -- see vr.ctl.dial's doc comment. guiSectorN: 0/undefined
+	// leaves the GUI-guide's pick untouched this call; a positive integer
+	// instead runs that SAME pickDialSector helper into dial.guiSel (a
+	// numeric 0..guiSectorN-1 sector index -- see guiDialEngagedFor/
+	// drawGuiDialGuide), quantized to guiSectorN even wedges instead of the
+	// fixed table's sectorN. Kept as two entirely separate fields (not one
+	// field reused for both) so a dialog closing can never leave the normal
+	// dial holding a stale numeric value picked under a different N -- see
+	// vr.ctl.dial's doc comment.
+	function updateDialStick(dial,thumb,rawSrc,sectorN,guiSectorN)
 	{
 		var x=(thumb ? thumb[0] : 0)||0;
 		var upY=(thumb ? -thumb[1] : 0)||0;
@@ -1285,61 +1375,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			if(guiSectorN)
 			{
-				// N-way GUI-guide pick: same atan2 convention as the 4-way
-				// pick below (0deg=up, clockwise), normalized to [0,360) and
-				// quantized to guiSectorN even wedges -- sector i's centre is
-				// at i*(360/guiSectorN) degrees, matching drawGuiDialGuide's
-				// wedge layout exactly so the visible wedge under the stick
-				// is always the one that actually gets selected.
-				var deg2=Math.atan2(x,upY)*180/Math.PI;
-				if(deg2<0)
-				{
-					deg2+=360;
-				}
-				var idx=Math.round(deg2/(360/guiSectorN))%guiSectorN;
-				// Boundary hysteresis: keep the current sector until the
-				// stick points DIAL_HYSTERESIS_DEG past the shared boundary,
-				// so aiming near a boundary doesn't flicker (and buzz)
-				// between two sectors.  Sweeping the stick around the rim
-				// still re-selects continuously, sector by sector.
-				if(idx!==dial.guiSel && null!=dial.guiSel && dial.guiSel<guiSectorN)
-				{
-					var half=180/guiSectorN;
-					var curCen=dial.guiSel*(360/guiSectorN);
-					var away=Math.abs(((deg2-curCen)%360+540)%360-180);
-					if(away<=half+DIAL_HYSTERESIS_DEG)
-					{
-						idx=dial.guiSel;
-					}
-				}
-				if(idx!==dial.guiSel)
-				{
-					dial.guiSel=idx;
-					vrHapticPulse(rawSrc);
-				}
+				pickDialSector(dial,'guiSel',x,upY,guiSectorN,rawSrc);
 			}
 			else
 			{
-				// Canvas/atan2 convention: 0deg=up (x=0,upY=1), 90deg=right,
-				// +-180deg=down, -90deg=left.
-				var deg=Math.atan2(x,upY)*180/Math.PI;
-				var sector=(-45<=deg && deg<45) ? 'up' : (45<=deg && deg<135) ? 'right' : (-135<=deg && deg<-45) ? 'left' : 'down';
-				// Same boundary hysteresis as the N-way pick above.
-				if(sector!==dial.sel && dial.sel)
-				{
-					var cen4={up:0,right:90,down:180,left:270}[dial.sel];
-					var degN=(deg%360+360)%360;
-					var away4=Math.abs(((degN-cen4)%360+540)%360-180);
-					if(away4<=45+DIAL_HYSTERESIS_DEG)
-					{
-						sector=dial.sel;
-					}
-				}
-				if(sector!==dial.sel)
-				{
-					dial.sel=sector;
-					vrHapticPulse(rawSrc);
-				}
+				pickDialSector(dial,'sel',x,upY,sectorN,rawSrc);
 			}
 		}
 		if(DIAL_VISIBLE_THRESHOLD<mag)
@@ -1512,9 +1552,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// timer) runs unconditionally -- it is harmless bystander state
 			// when the OTHER hand owns an open dialog. guiSectorN>0 routes
 			// this call to the N-way GUI-guide pick (rdial.guiSel) instead of
-			// the normal 4-way one (rdial.sel) -- see updateDialStick's doc
-			// comment; the SAME underlying stick geometry drives both.
-			updateDialStick(rdial,entry.thumb,rawSrc,guiSectorN);
+			// the normal fixed-table one (rdial.sel, RIGHT_DIAL.length
+			// sectors) -- see updateDialStick's doc comment; the SAME
+			// underlying stick geometry and pickDialSector helper drive both.
+			updateDialStick(rdial,entry.thumb,rawSrc,RIGHT_DIAL.length,guiSectorN);
 
 			// Dialog-guide takeover: ONLY while this hand is the dialog's
 			// owner (rActive -- see vr.ctl.guiOwner above) does this dial
@@ -1786,7 +1827,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// pick (ldial.guiSel) knows N=guiMenuL.options.length this call.
 			var guiMenuL=(lActive ? computeGuiMenuLayout(guiState.apMenu) : null);
 			var guiSectorNL=(guiMenuL && guiMenuL.drivable) ? guiMenuL.options.length : 0;
-			updateDialStick(ldial,entry.thumb,rawSrc,guiSectorNL);
+			updateDialStick(ldial,entry.thumb,rawSrc,LEFT_DIAL.length,guiSectorNL);
 			// Dialog-guide takeover on the left dial, symmetric to the right
 			// dial's rActive branch above: only while lActive, this dial
 			// becomes the dialog's selection guide (forced visible,
@@ -2011,33 +2052,43 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// the dial logic (selection + trigger routing, above) fully working,
 	// just without the in-headset visual -- every step is try/catch-guarded
 	// and callers treat "no resource" as "draw nothing this frame".
-	var DIAL_LABELS={
-		right:{up:RIGHT_DIAL.up.label,right:RIGHT_DIAL.right.label,down:RIGHT_DIAL.down.label,left:RIGHT_DIAL.left.label},
-		left: {up:LEFT_DIAL.up.label, right:LEFT_DIAL.right.label, down:LEFT_DIAL.down.label, left:LEFT_DIAL.left.label}
-	};
 	// Canvas-space angle (0deg=east/+x, 90deg=south/+y, clockwise, matching
-	// CanvasRenderingContext2D.arc's convention) for each sector's wedge
-	// centre -- "up" is drawn at the top of the texture (-90deg).
+	// CanvasRenderingContext2D.arc's convention) for each of the 4 CARDINAL
+	// direction keys -- "up" is drawn at the top of the texture (-90deg).
+	// Only the generic/ESC GUI-guide face (drawGuiDialGuide's fixed
+	// GUI_GUIDE_SECTORS spokes) uses this any more: the normal dial
+	// (drawDial) and the drivable GUI-guide's N-way face both compute their
+	// own sector angles directly as -90+i*(360/N) (i, N numeric), matching
+	// updateDialStick's pick -- see their own comments.
 	var DIAL_SECTOR_CANVAS_DEG={up:-90,right:0,down:90,left:180};
 	// Per-hand dial canvas/quad-layer texture resolution, in px (square).
 	// Raised from the original 256 to 384 (2026-07 radial-label redesign):
-	// the GUI guide now draws FULL option text (not clipped to ~5-9 chars)
+	// the GUI guide draws FULL option text (not clipped to ~5-9 chars)
 	// rotated along each sector's spoke, so crisp small text at the outer
-	// radius matters far more than it did for the old fixed 4-word normal
-	// dial labels. 384 is still a trivial per-frame 2D-canvas-plus-
-	// texSubImage2D cost (same code path as the old 256, just more texels)
-	// and the physical quad size (ensureDialResources's width/height:0.12,
-	// unchanged) stays the same, so this is resolution-only, not layout.
-	// drawDial/drawGuiDialGuide/ensureDialResources/dumpDialLayer all derive
-	// their w/h/cx/cy/rOuter from the ACTUAL canvas size (ctx.canvas.width),
-	// not this constant directly, so the normal 4-way dial's proportions are
-	// bit-for-bit the same design, just rendered at higher resolution.
+	// radius matters far more than it did for the old fixed-wedge normal
+	// dial labels; the normal dial face was subsequently brought onto the
+	// SAME radial-spoke-label design (drawDial) and now shares this exact
+	// 384px baseline (k=w/384 in both). 384 is still a trivial per-frame
+	// 2D-canvas-plus-texSubImage2D cost (same code path as the old 256,
+	// just more texels) and the physical quad size (ensureDialResources's
+	// width/height:0.12, unchanged) stays the same, so this is
+	// resolution-only, not layout. drawDial/drawGuiDialGuide/
+	// ensureDialResources/dumpDialLayer all derive their w/h/cx/cy/rOuter
+	// from the ACTUAL canvas size (ctx.canvas.width), not this constant
+	// directly, so both faces' proportions are bit-for-bit the same design
+	// regardless of canvas support/fallback size.
 	var DIAL_CANVAS_PX=384;
 
-	// Weapon short-name map for the right dial's centre readout (fsdef.h's
-	// FSWEAPON_* enum -- see FsVrAircraftStateDataPointer's doc comment in
-	// fsvr.h for the full mapping this mirrors). Anything not in this table
-	// (including FSWEAPON_NULL=127, no weapon selected) reads as 'WPN'.
+	// Live aircraft-state readouts on the normal dial face (fsvr.h /
+	// FsVrAircraftStateDataPointer): the pre-redesign face keyed these off
+	// the fixed up/right/down/left slots (gear/brake lines under those
+	// sectors) plus a centre-hub weapon/flap readout. The transparent-radial
+	// redesign has no fixed slots and no hub, so the state is now keyed off
+	// each table ENTRY's key code instead (dialEntryStateText below) and
+	// drawn as a second, dimmer span chained outward along that entry's own
+	// spoke -- position-independent, so RIGHT_DIAL/LEFT_DIAL can be
+	// reordered freely without touching this. The weapon readout rides the
+	// weapon-select (Digit2) spoke now that there is no hub.
 	var WEAPON_LABELS={
 		0:'GUN',    // FSWEAPON_GUN
 		1:'AAM-S',  // FSWEAPON_AIM9    (short-range AAM)
@@ -2059,51 +2110,33 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return WEAPON_LABELS.hasOwnProperty(t) ? WEAPON_LABELS[t] : 'WPN';
 	}
 	function fmtPct(v){ return Math.round(clamp(v,0,1)*100)+'%'; }
-
-	// Per-sector live-state line drawn under a sector's label (null = none).
-	// Right dial: Gear (down) shows UP/DOWN or a transitional %; Brake (left)
-	// shows ON/OFF (KeyB toggles ctlBrake+ctlSpoiler together, see fsvr.h).
-	// Left dial: Flap+/Flap- (up/down) both show the current flap %, so
-	// either sector tells the pilot where the flaps already are.
-	function dialSectorStateLine(hand,dir,state)
+	// Live-state text for one dial-table entry, keyed off entry.code (NOT a
+	// sector position): KeyG = gear UP/DOWN or transitional %, KeyB = brake
+	// ON/OFF (KeyB toggles ctlBrake+ctlSpoiler together, see fsvr.h), KeyR/
+	// KeyF = current flap % (either flap sector tells the pilot where the
+	// flaps already are), Digit2 = selected weapon short-name + remaining
+	// count. null = this entry has no live state to show.
+	function dialEntryStateText(entry,state)
 	{
 		if(!state || !state.valid)
 		{
 			return null;
 		}
-		if('right'===hand)
+		switch(entry.code)
 		{
-			if('down'===dir)
-			{
-				if(state.gear<=0.02){ return 'UP'; }
-				if(state.gear>=0.98){ return 'DOWN'; }
-				return fmtPct(state.gear);
-			}
-			if('left'===dir)
-			{
-				return state.brake>=0.5 ? 'ON' : 'OFF';
-			}
-		}
-		else if('up'===dir || 'down'===dir)
-		{
+		case 'KeyG':
+			if(state.gear<=0.02){ return 'UP'; }
+			if(state.gear>=0.98){ return 'DOWN'; }
+			return fmtPct(state.gear);
+		case 'KeyB':
+			return state.brake>=0.5 ? 'ON' : 'OFF';
+		case 'KeyR':
+		case 'KeyF':
 			return fmtPct(state.flap);
-		}
-		return null;
-	}
-	// Centre readout: right dial shows the selected weapon + remaining count
-	// (replaces the plain dot); left dial shows the flap % (replaces it too).
-	// Returns null (draw the plain dot) when there is no valid player state.
-	function dialCenterText(hand,state)
-	{
-		if(!state || !state.valid)
-		{
-			return null;
-		}
-		if('right'===hand)
-		{
+		case 'Digit2':
 			return weaponLabel(state.wpnType)+' '+Math.max(0,Math.round(state.wpnCount));
 		}
-		return 'FLP '+fmtPct(state.flap);
+		return null;
 	}
 	// ---- GUI-dialog guide (drawn on whichever hand OWNS the open dialog --
 	// see vr.ctl.guiOwner / processControllerPlain's rActive/lActive -- in
@@ -2119,11 +2152,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//                positional hotkeys (fsvr.h's apMenu -- the autopilot
 	//                family, radio-comm/ATC/approach menus, see
 	//                FsSimulation::SimComputeVrGuiState) AND has at least one
-	//                real option. UNLIKE the normal RIGHT_DIAL/LEFT_DIAL face
-	//                (always exactly 4 sectors), this is N-WAY: one wedge per
-	//                real option (N=guiMenu.options.length, up to
-	//                GUI_DIAL_CAPACITY=8), evenly dividing the circle
-	//                starting at up (12 o'clock) and going clockwise --
+	//                real option. Like the normal RIGHT_DIAL/LEFT_DIAL face
+	//                (a fixed table, N=6 sectors today), this is ALSO N-WAY,
+	//                but N is DYNAMIC here: one wedge per real option
+	//                (N=guiMenu.options.length, up to GUI_DIAL_CAPACITY=8),
+	//                evenly dividing the circle starting at up (12 o'clock)
+	//                and going clockwise --
 	//                sector i is guiMenu.options[i], labelled with its own
 	//                parsed hotkey digit and option text (see
 	//                guiDialEngagedFor/hotkeyCode for the matching dispatch
@@ -2415,16 +2449,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 		ctx.fillStyle='rgba(255,224,130,0.95)';
 		ctx.fillText(hintFit.text,6*k,h-10*k);
 	}
+	// ---- Normal flight-function dial face: fully-transparent, radial-label
+	// (2026-07, same redesign/visual language as drawGuiDialGuide below) ----
+	// RIGHT_DIAL/LEFT_DIAL are now N-way arrays (N=6 today) rather than a
+	// fixed up/right/down/left table, so this face is drawn exactly like
+	// the GUI guide's 'ap' branch (see drawGuiDialGuide's doc comment for
+	// the full design rationale -- no background disc, no outer circle, no
+	// wedge fill/borders, no centre hub, only floating text), just WITHOUT
+	// the leading hotkey-digit span (these are fixed functions, not
+	// numbered menu options) and with N fixed at the table's own length
+	// instead of a dialog's dynamic option count. sel (numeric 0..N-1, see
+	// updateDialStick/pickDialSector) picks which sector gets the longer/
+	// amber tick + arrowhead accent; 'hold'-mode entries currently being
+	// fired share that SAME accent while the trigger is held (dial.sel does
+	// not change mid-hold, so no extra state/color is needed here -- see
+	// the class doc comment's Four-refinements section).
 	function drawDial(ctx,hand,sel,state,guiMode)
 	{
-		// w/h/cx/cy/rOuter derive from the ACTUAL canvas size (ctx.canvas.*,
-		// via k=w/256) rather than hardcoded 256/128/110 literals, so this
-		// normal 4-way face's design/proportions are bit-for-bit the same
-		// as before the GUI-guide's canvas was raised to 384px (see
-		// DIAL_CANVAS_PX) -- just rendered crisper. This function's own
-		// wedge-fill/border look is otherwise UNCHANGED by the GUI-guide
-		// redesign below (guiMode only ever routes to drawGuiDialGuide).
-		var w=ctx.canvas.width,h=ctx.canvas.height,cx=w/2,cy=h/2,k=w/256,rOuter=110*k;
+		var w=ctx.canvas.width,h=ctx.canvas.height,cx=w/2,cy=h/2,k=w/384;
 		ctx.clearRect(0,0,w,h);
 		// guiMode is only ever non-null for whichever hand currently OWNS an
 		// open dialog (see processControllerPlain's rActive/lActive) -- so
@@ -2434,71 +2476,59 @@ EM_JS(void,YsfwInstallWebXR,(),
 			drawGuiDialGuide(ctx,guiMode,hand);
 			return;
 		}
-		ctx.fillStyle='rgba(10,14,20,0.55)';
-		ctx.beginPath();
-		ctx.arc(cx,cy,rOuter,0,2*Math.PI);
-		ctx.fill();
-		var sectors=['up','right','down','left'];
-		for(var i=0; i<sectors.length; ++i)
+		var table=('right'===hand ? RIGHT_DIAL : LEFT_DIAL);
+		var n=table.length;
+		var wedge=2*Math.PI/n;
+		// Same hubR/rOuter keep-clear convention as drawGuiDialGuide (k here
+		// is also w/384, so the two faces' proportions match exactly).
+		var rOuter=w/2-10*k;
+		var hubR=28*k;
+		var textFontStart=17*k, floorFontPx=12*k;
+		for(var i=0; i<n; ++i)
 		{
-			var dir=sectors[i];
-			var centerRad=DIAL_SECTOR_CANVAS_DEG[dir]*Math.PI/180;
-			var a0=centerRad-Math.PI/4, a1=centerRad+Math.PI/4;
+			var centerRad=-Math.PI/2+i*wedge;
+			var flip=Math.cos(centerRad)<0; // see drawGuiDialGuide's flip-rule doc comment.
+			var selected=(i===sel);
+			var tickInnerR=hubR+3*k, tickOuterR=selected ? hubR+13*k : hubR+7*k;
+			ctx.save();
+			ctx.translate(cx,cy);
+			ctx.rotate(centerRad);
 			ctx.beginPath();
-			ctx.moveTo(cx,cy);
-			ctx.arc(cx,cy,rOuter,a0,a1);
-			ctx.closePath();
-			ctx.fillStyle=(dir===sel) ? 'rgba(77,163,255,0.85)' : 'rgba(143,163,187,0.28)';
-			ctx.fill();
-			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2*k;
+			ctx.moveTo(tickInnerR,0);
+			ctx.lineTo(tickOuterR,0);
+			ctx.lineWidth=(selected ? 3 : 1.5)*k;
+			ctx.strokeStyle=selected ? 'rgba(255,214,64,0.95)' : 'rgba(230,237,243,0.55)';
 			ctx.stroke();
-			var labelR=rOuter*0.62;
-			var lx=cx+Math.cos(centerRad)*labelR, ly=cy+Math.sin(centerRad)*labelR;
-			ctx.textAlign='center';
-			var stateLine=dialSectorStateLine(hand,dir,state);
-			if(stateLine)
+			if(selected)
 			{
-				// Smaller label + a highlighted state line beneath it -- both
-				// still fit inside the wedge.
-				ctx.fillStyle='#fff';
-				ctx.font='bold '+(17*k)+'px sans-serif';
-				ctx.textBaseline='middle';
-				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly-9*k);
-				ctx.fillStyle='rgba(255,224,130,0.95)';
-				ctx.font='bold '+(15*k)+'px sans-serif';
-				ctx.fillText(stateLine,lx,ly+10*k);
+				var apexR=tickOuterR+6*k;
+				ctx.beginPath();
+				ctx.moveTo(apexR,0);
+				ctx.lineTo(apexR-5*k,-4*k);
+				ctx.lineTo(apexR-5*k,4*k);
+				ctx.closePath();
+				ctx.fillStyle='rgba(255,214,64,0.95)';
+				ctx.fill();
 			}
-			else
+			ctx.restore();
+			var labelStartR=tickOuterR+(selected ? 9*k : 5*k);
+			var avail=Math.max(20*k,rOuter-labelStartR);
+			var fit=fitSpokeLabel(ctx,table[i].label,avail,selected ? textFontStart+2*k : textFontStart,floorFontPx);
+			var textColor=selected ? '#ffe066' : '#dff2e8';
+			var r=drawSpokeSpan(ctx,cx,cy,centerRad,flip,labelStartR,fit.text,fit.fontPx,textColor);
+			// Live-state readout (gear/brake/flap/weapon -- see
+			// dialEntryStateText above): a second, dimmer span chained
+			// outward past the label on the same spoke. The labels are all
+			// short, so the leftover radius comfortably fits these few-char
+			// readouts; fitSpokeLabel still guards the pathological case.
+			var stateText=dialEntryStateText(table[i],state);
+			if(stateText)
 			{
-				ctx.fillStyle='#fff';
-				ctx.font='bold '+(22*k)+'px sans-serif';
-				ctx.textBaseline='middle';
-				ctx.fillText(DIAL_LABELS[hand][dir],lx,ly);
+				var stateStartR=r+5*k;
+				var stateFit=fitSpokeLabel(ctx,stateText,Math.max(16*k,rOuter-stateStartR),13*k,9*k);
+				var stateColor=selected ? 'rgba(255,224,130,0.9)' : 'rgba(170,214,190,0.9)';
+				drawSpokeSpan(ctx,cx,cy,centerRad,flip,stateStartR,stateFit.text,stateFit.fontPx,stateColor);
 			}
-		}
-		var centerText=dialCenterText(hand,state);
-		if(centerText)
-		{
-			ctx.beginPath();
-			ctx.arc(cx,cy,22*k,0,2*Math.PI);
-			ctx.fillStyle='rgba(20,26,34,0.88)';
-			ctx.fill();
-			ctx.strokeStyle='rgba(230,237,243,0.6)';
-			ctx.lineWidth=2*k;
-			ctx.stroke();
-			ctx.fillStyle='#fff';
-			ctx.font='bold '+(13*k)+'px sans-serif';
-			ctx.textAlign='center';
-			ctx.textBaseline='middle';
-			ctx.fillText(centerText,cx,cy);
-		}
-		else
-		{
-			ctx.beginPath();
-			ctx.arc(cx,cy,14*k,0,2*Math.PI);
-			ctx.fillStyle='rgba(230,237,243,0.85)';
-			ctx.fill();
 		}
 	}
 	function ensureDialResources(hand)
@@ -2682,11 +2712,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// open dialog (vr.ctl.guiOwner) -- null on the other hand, which
 			// keeps drawing its own normal face.
 			var guiMode=dial.guiMode||null;
-			// Redraw when the sticky sector selection changes, the live
-			// aircraft state (gear/brake/flap/weapon) changes -- e.g. the
-			// gear finishing its travel must update the dial even though
-			// dial.sel hasn't moved -- OR the guiMode changes (a dialog
-			// just opened/closed/switched between apMenu and generic).
+			// Redraw when the sticky sector selection changes, OR the
+			// guiMode changes (a dialog just opened/closed/switched between
+			// apMenu and generic). stateSig is still tracked/compared here
+			// too (harmless -- drawDial no longer paints aircraft state
+			// on the normal face, see its doc comment, so a state-only
+			// change now just re-draws identical pixels) rather than
+			// threading a third redraw condition's removal through this
+			// call, dumpDialLayer, and drawDial's shared signature.
 			if(res.drawnSel!==dial.sel || res.drawnStateSig!==stateSig || res.drawnGuiMode!==guiMode)
 			{
 				try
@@ -3282,8 +3315,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.lastDialTapAt=0;
 					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false};
 					vr.ctl.leftTrigger=false;
-					vr.ctl.dial.right={sel:'up',engaged:null,visible:false,hideAt:0};
-					vr.ctl.dial.left={sel:'up',engaged:null,visible:false,hideAt:0};
+					vr.ctl.dial.right={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
+					vr.ctl.dial.left={sel:0,guiSel:0,engaged:null,visible:false,hideAt:0};
 					vr.ctl.gripPose={right:null,left:null};
 					vr.viewerSpace=null;
 					vr.dialRes={right:undefined,left:undefined};

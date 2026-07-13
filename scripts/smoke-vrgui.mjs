@@ -3,8 +3,8 @@
 // Boots into a free flight, forces the engine into VR+multiview mode (same
 // hook as scripts/smoke-mv.mjs / smoke-vrhud.mjs -- vr.forceMultiview), then
 // opens the autopilot menu THROUGH THE LEFT DIAL -- the exact same gesture a
-// real pilot uses (select the dial's 'left' sector, pull the left trigger --
-// see LEFT_DIAL.left = AP, Backspace, in fswebxr.cpp) -- rather than firing a
+// real pilot uses (select the dial's AP sector, pull the left trigger --
+// see LEFT_DIAL[4] = AP, Backspace, in fswebxr.cpp) -- rather than firing a
 // raw synthetic Backspace KeyboardEvent directly. This matters because the
 // owner-hand model (Feature 4) attributes an opening dialog to whichever
 // hand's dial tap plausibly opened it (vr.ctl.lastDialTapHand ->
@@ -185,10 +185,24 @@ async function forceVr(page) {
 }
 
 const IDENTITY_QUAT = [0, 0, 0, 1];
-// Sector-select thumbstick vectors -- see fswebxr.cpp's updateDialStick doc
-// comment (upY=-thumb[1], canvas-angle sector split). Cross-checked against
-// scripts/smoke-vrdial.mjs's existing up/down picks.
-const SECTOR_THUMB = { up: [0, -1], right: [1, 0], down: [0, 1], left: [-1, 0] };
+// thumbFor(deg): the stick vector that selects the N-way sector centred at
+// canvas angle `deg` (0=up, clockwise) -- see fswebxr.cpp's updateDialStick/
+// pickDialSector doc comment (upY=-thumb[1], canvas-angle sector split).
+// Used both for RIGHT_DIAL/LEFT_DIAL's fixed N=6 sectors (SECTOR_THUMB
+// below, and openApViaLeftDial's AP pick) and for the GUI-guide's dynamic-N
+// picks in PHASE 3 further down.
+function thumbFor(deg) {
+  const rad = deg * Math.PI / 180;
+  return [Math.sin(rad), -Math.cos(rad)];
+}
+// Cardinal-direction thumbstick vectors -- these 4 angles (0/90/180/270deg)
+// are exact sector centres for BOTH the fixed N=6 RIGHT_DIAL/LEFT_DIAL
+// tables (sector i at i*60deg -- up=i0, down=i3 land exactly on 0/180deg)
+// and the GUI-guide's dynamic-N dial (which always starts sector 0 at
+// up=0deg too), so they stay valid however many real options a given
+// dialog reports. Cross-checked against scripts/smoke-vrdial.mjs's
+// existing up/down picks.
+const SECTOR_THUMB = { up: thumbFor(0), right: thumbFor(90), down: thumbFor(180), left: thumbFor(270) };
 
 function poke(page, list) {
   return page.evaluate((l) => {
@@ -211,14 +225,15 @@ function installKeyListener(page) {
 }
 
 // Opens the autopilot menu the SAME way a real left-handed pilot does: pick
-// the left dial's 'left' sector (LEFT_DIAL.left = AP, Backspace tap) and
-// pull the left trigger -- NOT a raw synthetic Backspace KeyboardEvent. This
-// is what lets vr.ctl.lastDialTapHand/guiOwner attribution (Feature 4) be
-// exercised for real instead of just falling back to its 'left' default.
+// the left dial's AP sector (LEFT_DIAL[4], 240deg -- FSBTF_OPENAUTOPILOTMENU/
+// Backspace tap) and pull the left trigger -- NOT a raw synthetic Backspace
+// KeyboardEvent. This is what lets vr.ctl.lastDialTapHand/guiOwner
+// attribution (Feature 4) be exercised for real instead of just falling
+// back to its 'left' default.
 async function openApViaLeftDial(page, triggerValue) {
   const t = (undefined !== triggerValue) ? triggerValue : 1;
   await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
-  await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: SECTOR_THUMB.left, buttons: {} }]); // select AP sector
+  await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: thumbFor(240), buttons: {} }]); // select AP sector (LEFT_DIAL[4], 240deg)
   await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
   await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: t, thumb: [0, 0], buttons: {} }]); // trigger edge 0->t: Backspace tap dispatched THROUGH the dial
   // The running (non-XR) render loop keeps ticking the engine on its own
@@ -359,7 +374,7 @@ check('vr.dumpDialLayer("right") (the bystander, normal face) returned a PNG dat
 // ---- Bystander (right) hand: fully normal, untouched by the dialog -------
 await resetKeys(page);
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
-await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: SECTOR_THUMB.down, buttons: {} }]); // select Gear (normal RIGHT_DIAL.down)
+await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: SECTOR_THUMB.down, buttons: {} }]); // select Gear (normal RIGHT_DIAL[3], still exactly "down" at N=6)
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 1, thumb: [0, 0], buttons: {} }]); // trigger edge 0->1
 await page.waitForTimeout(120);
@@ -580,13 +595,9 @@ if (forced3 !== 'ok') {
 await page3.waitForTimeout(2000);
 await installKeyListener(page3);
 
-// thumbFor(deg): the stick vector that selects N-way sector-angle `deg`
-// (0=up, clockwise) -- same atan2 convention updateDialStick/
-// drawGuiDialGuide use (see SECTOR_THUMB above for the cardinal-only version).
-function thumbFor(deg) {
-  const rad = deg * Math.PI / 180;
-  return [Math.sin(rad), -Math.cos(rad)];
-}
+// thumbFor (defined near SECTOR_THUMB above) is reused here for arbitrary
+// N-way sector angles -- same atan2 convention updateDialStick/
+// drawGuiDialGuide use.
 
 // openFabricatedMenu: attribute a fresh fabricated dialog to the RIGHT hand
 // via the real dial-tap attribution mechanism (vr.ctl.lastDialTapHand ->
