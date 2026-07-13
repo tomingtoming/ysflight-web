@@ -73,14 +73,16 @@
 //     FsGuiAutoPilotDialog::TakeOff side effect as before).
 //   - The right grip stick (aileron) still overrides flight control while
 //     the dialog is open, regardless of which hand owns it.
-//   - The owner hand's A/B (left X/Y here) are PARKED: their normal flap
-//     keys are suppressed AND they dispatch no dialog hotkey either -- the
-//     N-way sectors already reach every real option, so the whole dialog
-//     grammar is sector pick + trigger confirm + stick-click cancel.
-//   - The owner hand's thumbstick click is the new truthful cancel binding
-//     (dispatches Escape, closes the dialog) -- the RIGHT hand's thumbstick
-//     click, meanwhile, still just toggles the help placards (unaffected,
-//     since it is not the owner).
+//   - The owner hand's A (left X here) is PARKED: its normal flap-down tap
+//     is suppressed AND it dispatches no dialog hotkey either -- the N-way
+//     sectors already reach every real option.
+//   - The owner hand's B (left Y here) is the truthful cancel binding
+//     (dispatches Escape on the press edge, closes the dialog) -- so the
+//     whole dialog grammar is sector pick + trigger confirm + B/Y cancel.
+//     The RIGHT hand's B, meanwhile, still just fires the normal air-brake
+//     key (unaffected, since it is not the owner). Thumbstick click is
+//     completely INERT now on either hand, dialog or no dialog -- pressing
+//     it physically jolts the stick, so it does nothing at all any more.
 //   - TRIGGER_THRESHOLD (Feature 1) applies to the GUI-dialog routing too: a
 //     0.6 trigger value (below the old 0.75 GRAB_THRESHOLD, above the new
 //     0.5) still fires the owner hand's dial-confirm dispatch.
@@ -433,7 +435,8 @@ const ctl = await page.evaluate(() => globalThis.Module.ysfwVr.readControlBlock(
 check('right grip stick still overrides flight control while a (left-owned) dialog is open', ctl[0] === 1 && (Math.abs(ctl[1]) > 0.05 || Math.abs(ctl[2]) > 0.05), 'ctl=' + JSON.stringify(ctl.slice(0, 4)));
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release grip
 
-// ---- Owner (left) X/Y: parked while the dialog is open ------------------
+// ---- Owner (left) X: parked while the dialog is open ---------------------
+// (a quick tap, well under the long-press threshold that would toggle help)
 await resetKeys(page);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { a: false } }]);
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { a: true } }]); // left X press edge
@@ -446,41 +449,48 @@ await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squee
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
 check('dialog still open after left-X (a parked button touches nothing)', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
 
+// ---- Thumbstick click is now completely INERT, dialog open or not -------
+// Neither hand's stick-click button does anything any more (pressing the
+// stick physically jolts it, awkward in VR -- see fswebxr.cpp's
+// processControllerPlain): no help toggle for the bystander (right), no
+// cancel for the owner (left), dialog stays open either way.
 await resetKeys(page);
-await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: false } }]);
-await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: true } }]); // left Y press edge
-await page.waitForTimeout(120);
-keys = await readKeys(page);
-check('owner (left) hand: left-Y does NOT dispatch the normal flaps-up key (KeyR)', !keys.includes('down:KeyR'), 'keys=' + JSON.stringify(keys));
-check('owner (left) hand: left-Y is PARKED -- no Digit0, no Escape either', !keys.includes('down:Digit0') && !keys.includes('down:Escape'), 'keys=' + JSON.stringify(keys));
-await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: false } }]);
-guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
-check('dialog still open after left-Y (a parked button touches nothing)', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
-
-// ---- Owner-hand cancel: thumbstick click, no more cross-hand escape -----
-// (the dialog is still open -- the parked X/Y above never closed it)
-await resetKeys(page);
-// The RIGHT hand's thumbstick click, meanwhile, is NOT the owner -- it must
-// still just toggle the help placards, not touch the dialog at all.
 const helpBefore = await page.evaluate(() => globalThis.Module.ysfwVr.help.visible);
 await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: false } }]);
-await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: true } }]); // right thumbstick click press edge
-keys = await readKeys(page);
-const helpAfter = await page.evaluate(() => globalThis.Module.ysfwVr.help.visible);
-check('bystander (right) hand thumbstick click: still just toggles help (does not cancel the dialog)', helpAfter !== helpBefore && !keys.includes('down:Escape'), 'before=' + helpBefore + ' after=' + helpAfter + ' keys=' + JSON.stringify(keys));
-guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
-check('dialog still open after the bystander hand\'s thumbstick click', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
-
-await resetKeys(page);
+await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: true } }]); // right (bystander) thumbstick click press edge
 await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: false } }]);
-await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: true } }]); // owner (left) thumbstick click press edge -- the truthful cancel binding
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: true } }]); // owner (left) thumbstick click press edge
+keys = await readKeys(page);
+const helpAfterStick = await page.evaluate(() => globalThis.Module.ysfwVr.help.visible);
+check('thumbstick click is inert: neither hand toggles help', helpAfterStick === helpBefore, 'before=' + helpBefore + ' after=' + helpAfterStick);
+check('thumbstick click is inert: no Escape dispatched by either hand', !keys.includes('down:Escape'), 'keys=' + JSON.stringify(keys));
+guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
+check('dialog still open after both hands\' thumbstick click (fully inert)', guiData[5] === 1, 'dialogVisible=' + guiData[5]);
+await poke(page, [{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: false } }]);
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: false } }]);
+
+// ---- Owner (left) Y: the new truthful cancel binding ---------------------
+// B (right) / Y (left) press-edge is now the owner hand's cancel input,
+// replacing the old thumbstick-click binding.
+await resetKeys(page);
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: false } }]);
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: true } }]); // owner (left) Y press edge -- the truthful cancel binding
 await page.waitForTimeout(120); // vrKeyTap's keyup fires ~60ms after keydown
 keys = await readKeys(page);
-check('owner (left) hand thumbstick click dispatches Escape (the truthful, self-contained cancel binding)', keys.includes('down:Escape') && keys.includes('up:Escape'), 'keys=' + JSON.stringify(keys));
-await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { stick: false } }]);
+check('owner (left) hand Y press dispatches Escape (the truthful, self-contained cancel binding)', keys.includes('down:Escape') && keys.includes('up:Escape'), 'keys=' + JSON.stringify(keys));
 await page.waitForTimeout(300);
 guiData = await page.evaluate(() => globalThis.Module.ysfwVr.readGuiData());
-check('owner-hand cancel (stick click) closes the dialog (dialogVisible back to 0)', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
+check('owner-hand cancel (Y press) closes the dialog (dialogVisible back to 0)', guiData[5] === 0, 'dialogVisible=' + guiData[5]);
+// The cancel press closes the dialog out from under the STILL-HELD Y: the
+// next controller frame sees lActive=false with yPressed=true, and without
+// the swallow-until-release latch (vr.ctl.leftYSwallow, fswebxr.cpp) that
+// frame would fire the normal flaps-up KeyR off the cancel press itself.
+await resetKeys(page);
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: true } }]); // Y STILL held after the close
+await page.waitForTimeout(120);
+keys = await readKeys(page);
+check('the still-held cancel press does NOT leak into flaps-up (KeyR) after the dialog closes (swallow-until-release)', !keys.includes('down:KeyR'), 'keys=' + JSON.stringify(keys));
+await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: { b: false } }]); // physical release ends the swallow
 
 // ---- After close: left dial reverts to normal, guiMode clears -----------
 // updateDialStick's own thumbstick-engagement fade timer (DIAL_HIDE_DELAY_MS
