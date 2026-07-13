@@ -247,7 +247,7 @@ console.log('library: delete works (back to 3 creations)');
     const text = new TextDecoder().decode(res.dnm);
     return { tris: res.triangles, rVerts: (text.match(/^V .+ R$/gm) || []).length };
   });
-  if (b747Check.tris !== 9280 || !(b747Check.rVerts > 3000)) {
+  if (b747Check.tris !== 9316 || !(b747Check.rVerts > 3000)) {
     die('b747 sample conversion failed: ' + JSON.stringify(b747Check));
   }
   console.log('b747-8i sample: .glb -> DNM in-browser ' + JSON.stringify(b747Check));

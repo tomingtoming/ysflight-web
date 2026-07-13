@@ -336,17 +336,36 @@ const PROF = [
   [0.0, 0.0, 0.0], [0.03, 0.55, -0.38], [0.10, 0.82, -0.48], [0.30, 1.0, -0.5],
   [0.60, 0.74, -0.3], [0.85, 0.34, -0.1], [1.0, 0.05, -0.02],
 ];
-// sections: [{span, znLE, chord, off}]; spanAxis 'x' (wing/h-stab) or 'y' (fin)
+// profile [upper, lower] thickness fractions at chord fraction cf
+function profAt(cf) {
+  for (let i = 0; i + 1 < PROF.length; i++) {
+    const [f0, u0, d0] = PROF[i], [f1, u1, d1] = PROF[i + 1];
+    if (cf >= f0 && cf <= f1) {
+      const t = (cf - f0) / (f1 - f0);
+      return [u0 + (u1 - u0) * t, d0 + (d1 - d0) * t];
+    }
+  }
+  return [PROF[PROF.length - 1][1], PROF[PROF.length - 1][2]];
+}
+// sections: [{span, znLE, chord, off}]; spanAxis 'x' (wing/h-stab) or 'y' (fin).
+// s.profTo < 1 truncates the airfoil at that chord fraction (a control-surface
+// cut): the section keeps full thickness up to the cut and ends in a BLUNT
+// face that the wedge's matching LE continues — instead of compressing the
+// whole profile into the shortened chord, which tapered the wing to a knife
+// edge at the hinge while the wedge stayed fat (the visible thickness step).
+// s.chordT carries the ORIGINAL chord for the thickness ratio so cut sections
+// don't thin out relative to their uncut epsilon-twins.
 function foilLoft(sections, thickness, colorT, colorB, spanAxis) {
   const g = mkGeo();
-  const rootChord = sections[0].chord;
+  const rootChord = sections[0].chordT || sections[0].chord;
   const pt = (sp, off, z) => (spanAxis === 'x' ? [sp, off, z] : [off, sp, z]);
   const rings = sections.map((s) => {
-    const t = (thickness * Math.max(0.3, s.chord / rootChord)) / 2;
+    const t = (thickness * Math.max(0.3, (s.chordT || s.chord) / rootChord)) / 2;
     const off = s.off || 0;
     const up = [], dn = [];
-    for (const [cf, uT, uB] of PROF) {
+    for (const [cf] of PROF) {
       const z = zys(s.znLE + s.chord * cf);
+      const [uT, uB] = profAt(cf * (s.profTo || 1));
       // NOT smooth ('R'): a thin airfoil shares LE/TE/tip-cap topology between
       // its up- and down-facing skins, so the engine's averaged vertex normal
       // goes edge-on and Gouraud paints the whole panel near-black in flight.
@@ -403,12 +422,18 @@ function wedge(sections, cut, thickness, color, spanAxis) {
   }));
   const g = mkGeo();
   const pt = (sp, off, z) => (spanAxis === 'x' ? [sp, off, z] : [off, sp, z]);
+  // continue the parent airfoil: LE = the profile at the cut fraction (the
+  // fixed surface's blunt cut face), TE = the profile's own trailing edge
+  const rootChord = sections[0].chord;
+  const [leU, leD] = profAt(1 - cut.chordFrac);
+  const teMid = (PROF[PROF.length - 1][1] + PROF[PROF.length - 1][2]) / 2;
   const rows = secs.map((s) => {
-    const t = (thickness * 0.55) / 2, off = s.off || 0;
+    const t = (thickness * Math.max(0.3, (s.chord + 0.05) / cut.chordFrac / rootChord)) / 2;
+    const off = s.off || 0;
     return [
-      addV(g, ...pt(s.span, off + t, zys(s.znLE))),
-      addV(g, ...pt(s.span, off - t, zys(s.znLE))),
-      addV(g, ...pt(s.span, off, zys(s.znLE + s.chord))),
+      addV(g, ...pt(s.span, off + leU * t, zys(s.znLE))),
+      addV(g, ...pt(s.span, off + leD * t, zys(s.znLE))),
+      addV(g, ...pt(s.span, off + teMid * t, zys(s.znLE + s.chord))),
     ];
   });
   const flipped = spanAxis === 'x';
@@ -439,7 +464,7 @@ function fixedWithCuts(sections, cuts, thickness, colorT, colorB, spanAxis) {
   all.sort((p, q) => p.span - q.span);
   const out = all.map((s) => {
     const c = cuts.find((c_) => s.span >= c_.spanFrom - 1e-9 && s.span <= c_.spanTo + 1e-9);
-    return c ? { ...s, chord: s.chord * (1 - c.chordFrac) } : s;
+    return c ? { ...s, chord: s.chord * (1 - c.chordFrac), chordT: s.chord, profTo: 1 - c.chordFrac } : s;
   });
   return foilLoft(out, thickness, colorT, colorB, spanAxis);
 }
@@ -502,16 +527,19 @@ function fairings(wingSecs, flapCuts) {
 function engine(p, wingSecs) {
   const g = mkGeo();
   const N = 18, R = spec.engines.diameter / 2, EL = spec.engines.length;
-  const ring = (zf, rf) => {
+  const ring = (zf, rf, smooth = true) => {
     const out = [];
     for (let i = 0; i < N; i++) {
       const th = (i / N) * Math.PI * 2;
-      out.push(addV(g, p.x + R * rf * Math.cos(th), p.y + R * rf * Math.sin(th), zys(p.zn + EL * zf), true));
+      out.push(addV(g, p.x + R * rf * Math.cos(th), p.y + R * rf * Math.sin(th), zys(p.zn + EL * zf), smooth));
     }
     return out;
   };
   const shape = [[0, 0.86], [0.1, 1.0], [0.5, 0.97], [0.7, 0.84], [0.71, 0.52], [0.93, 0.33], [1.0, 0.15], [1.1, 0.02]];
-  const rings = shape.map(([zf, rf]) => ring(zf, rf));
+  // the intake lip ring is NOT smooth: it joins the outward cowl to the
+  // REVERSED inner-lip surface, so the engine's averaged normal there goes
+  // edge-on and the cowl front shades inside-out in flight
+  const rings = shape.map(([zf, rf], k) => ring(zf, rf, k > 0));
   for (let r = 0; r + 1 < rings.length; r++) {
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
@@ -519,17 +547,22 @@ function engine(p, wingSecs) {
         r >= 4 ? COL.engDark : COL.engine);
     }
   }
-  // intake: inner lip ring + fan disc (both face forward, +z)
-  const lipIn = ring(0.04, 0.72);
+  // intake: inner lip ring + fan disc (both face forward, +z) — flat verts,
+  // same reversed-surface-junction reason as the lip ring
+  const lipIn = ring(0.04, 0.72, false);
   for (let i = 0; i < N; i++) {
     const j = (i + 1) % N;
     addFace(g, [lipIn[j], lipIn[i], rings[0][i], rings[0][j]], COL.engine);
   }
   addFace(g, lipIn, COL.engDark); // fan
-  // pylon: shaped plate nacelle top -> wing underside (follow the dihedral)
+  // pylon: shaped plate nacelle top -> wing underside (follow the dihedral).
+  // Cap the top edge INSIDE the local airfoil: a fixed +0.25 pokes out of the
+  // upper skin on thin outboard wings (the fin-like sliver aft of nacelle 3/4).
   const px = 0.22, zA = p.zn + EL * 0.18, zB = p.zn + EL * 0.95, zC = p.zn + EL * 0.55;
   const wsec = sectionAt(wingSecs, Math.abs(p.x));
-  const y0 = p.y + R * 0.8, y1 = (wsec ? wsec.off : p.y + R + 2.4) + 0.25;
+  const rootC = wingSecs[0].chord;
+  const tW = wsec ? (spec.wing.thickness * Math.max(0.3, wsec.chord / rootC)) / 2 : 0.45;
+  const y0 = p.y + R * 0.8, y1 = (wsec ? wsec.off : p.y + R + 2.4) + Math.min(0.25, tW * 0.5);
   const side = (sgn) => [
     addV(g, p.x + sgn * px, y0, zys(zA)), addV(g, p.x + sgn * px, y0, zys(zB)),
     addV(g, p.x + sgn * px, y1, zys(zB + 1.6)), addV(g, p.x + sgn * px, y1, zys(zC)),
@@ -692,19 +725,31 @@ const staticGeo = merge(
   hsFixed, mirrorX(hsFixed),
   finFixed, dorsal,
   ...spec.engines.positions.map((p) => engine(p, wingSecs)),
-  // nav lights: wingtips (red left / green right) + tail strobe
+);
+
+// Lights live in CLASS nodes (ysshelldnmident.h: 30 NAVLIGHT / 31 BEACON /
+// 32 STROBE), NOT baked into the static geometry: the engine toggles these
+// classes for the blink patterns and draws the glow — a B-face box merged
+// into the body just sits there dimly lit forever.
+const navGeo = merge(
   lightBox(-tipSec.x + 0.1, tipSec.y, zys(tipSec.znLE + 0.4), 0.14, COL.red),
   lightBox(tipSec.x - 0.1, tipSec.y, zys(tipSec.znLE + 0.4), 0.14, COL.green),
   lightBox(0, (lastSt.top + lastSt.bottom) / 2, zys(lastSt.zn + 0.1), 0.12, COL.white),
 );
-
-const beaconGeo = lightBox(0, stationAt(spec.beacon.zn).top + 0.1, zys(spec.beacon.zn), 0.13, COL.red);
+const beaconGeo = merge(
+  lightBox(0, stationAt(spec.beacon.zn).top + 0.1, zys(spec.beacon.zn), 0.13, COL.red),
+  lightBox(0, stationAt(spec.beacon.zn).bottom - 0.06, zys(spec.beacon.zn), 0.12, COL.red),
+);
+const strobeGeo = merge(
+  lightBox(-tipSec.x + 0.12, tipSec.y, zys(tipSec.znLE + 0.9), 0.11, COL.white),
+  lightBox(tipSec.x - 0.12, tipSec.y, zys(tipSec.znLE + 0.9), 0.11, COL.white),
+);
 
 const gearLabels = gearPosts.flatMap((p) => (p.mirror ? [p.label + 'L', p.label + 'R'] : [p.label]));
 P('Fuselage', 0, staticGeo, null, null, [
   ...flaps.flatMap((_, i) => [flapLabel(i, 'L'), flapLabel(i, 'R')]),
   'AileronL', 'AileronR', 'ElevatorL', 'ElevatorR', 'Rudder',
-  ...gearLabels, 'Beacon',
+  ...gearLabels, 'Nav', 'Beacon', 'Strobe',
 ]);
 flaps.forEach((f, i) => {
   const geo = merge(f.geo, fairs.moving[i]); // aft canoe sections ride the flap
@@ -736,7 +781,9 @@ for (const post of gearPosts) {
     P(post.label, 0, mk(post.x), [post.x, post.topY, zys(post.zn)], [retractSta(ret, 1), zero]);
   }
 }
-P('Beacon', 30, beaconGeo, null, [zero, zero]);
+P('Nav', 30, navGeo, null, []);
+P('Beacon', 31, beaconGeo, null, []);
+P('Strobe', 32, strobeGeo, null, []);
 
 // --- DNM writer -------------------------------------------------------------------------
 
