@@ -142,21 +142,55 @@ function fuselage() {
     const ring = [];
     for (let i = 0; i < N; i++) {
       const [x, y] = ringPt(zn, i, N);
-      ring.push({ i: addV(g, x, y, zys(zn), true), y });
+      ring.push({ x, y, z: zys(zn) });
     }
     return ring;
   });
   const bellyY = spec.fuselage.bellyY ?? -2.5;
+  // Weld by position: ring points AND waterline crossings.  The clip line
+  // hits each shared edge twice with identical interpolation; duplicated
+  // verts would break R smoothing across the color seam.
+  const memo = new Map();
+  const V = (p) => {
+    const k = p.x.toFixed(5) + ',' + p.y.toFixed(5) + ',' + p.z.toFixed(5);
+    let id = memo.get(k);
+    if (id === undefined) { id = addV(g, p.x, p.y, p.z, true); memo.set(k, id); }
+    return id;
+  };
+  // Split straddling quads at the waterline y = bellyY (Sutherland-Hodgman
+  // against the half-plane): the belly/body boundary is a straight paint
+  // line, not a zigzag of whichever facets' centroids fell below it.
+  const clip = (pts, keepAbove) => {
+    const out = [];
+    for (let a = 0; a < pts.length; a++) {
+      const P = pts[a], Q = pts[(a + 1) % pts.length];
+      const inP = keepAbove ? P.y >= bellyY : P.y <= bellyY;
+      const inQ = keepAbove ? Q.y >= bellyY : Q.y <= bellyY;
+      if (inP) out.push(P);
+      if (inP !== inQ) {
+        const t = (bellyY - P.y) / (Q.y - P.y);
+        out.push({ x: P.x + t * (Q.x - P.x), y: bellyY, z: P.z + t * (Q.z - P.z) });
+      }
+    }
+    return out;
+  };
   for (let r = 0; r + 1 < rings.length; r++) {
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
       const quad = [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]];
-      const avgY = quad.reduce((s_, q) => s_ + q.y, 0) / 4;
-      addFace(g, quad.map((q) => q.i), avgY < bellyY ? COL.belly : COL.body);
+      const ys = quad.map((q) => q.y);
+      if (Math.min(...ys) >= bellyY) addFace(g, quad.map(V), COL.body);
+      else if (Math.max(...ys) <= bellyY) addFace(g, quad.map(V), COL.belly);
+      else {
+        for (const above of [true, false]) {
+          const piece = clip(quad, above);
+          if (piece.length >= 3) addFace(g, piece.map(V), above ? COL.body : COL.belly);
+        }
+      }
     }
   }
-  addFace(g, rings[0].map((q) => q.i), COL.body);                          // nose cap (+z)
-  addFace(g, rings[rings.length - 1].map((q) => q.i).reverse(), COL.dark); // APU exhaust (-z)
+  addFace(g, rings[0].map(V), COL.body);                          // nose cap (+z)
+  addFace(g, rings[rings.length - 1].map(V).reverse(), COL.dark); // APU exhaust (-z)
   return g;
 }
 
