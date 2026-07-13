@@ -3083,6 +3083,38 @@ EM_JS(void,YsfwInstallWebXR,(),
 				}catch(e){}
 				res={canvas:canvas,ctx:canvas.getContext('2d'),quad:quad,inLayers:false};
 			}
+			else if(vr.testDialFace)
+			{
+				// Headless dial-face harness (scripts/smoke-vrdialface.mjs):
+				// canvas-only resource so the REAL updateDialLayers state
+				// machine below (redraw gate, drawnSel bookkeeping, visible/
+				// inLayers lifecycle) runs end-to-end without a live XR
+				// session -- quad:null routes the upload step into the
+				// compositor MODEL below instead of GL. This exists because
+				// three rounds of stale-highlight fixes asserted only on PICK
+				// state while the RENDER/PRESENT half was the untested part;
+				// see vr.tickDialFace's doc comment.
+				//
+				// presentedCanvas: what the headset compositor SHOWS, as
+				// opposed to `canvas` (what drawDial painted).  The model
+				// mirrors two real WebXR-layers semantics that the stale-GUN
+				// device bug hinged on: (1) an upload only reaches the eye if
+				// the layer is in the CURRENTLY APPLIED render state
+				// (inAppliedRenderState -- XRSession.updateRenderState takes
+				// effect on the NEXT frame, so the sync at the tail of
+				// updateDialLayers lags the upload in its own frame by one);
+				// (2) a layer re-added to the render state re-presents its
+				// LAST SUBMITTED buffer, however old.
+				var testCanvas=document.createElement('canvas');
+				testCanvas.width=DIAL_CANVAS_PX;
+				testCanvas.height=DIAL_CANVAS_PX;
+				var presented=document.createElement('canvas');
+				presented.width=DIAL_CANVAS_PX;
+				presented.height=DIAL_CANVAS_PX;
+				res={canvas:testCanvas,ctx:testCanvas.getContext('2d'),quad:null,inLayers:false,
+					presentedCanvas:presented,presentedCtx:presented.getContext('2d'),
+					inAppliedRenderState:false};
+			}
 		}
 		catch(e)
 		{
@@ -3193,7 +3225,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var state=readAircraftStateSnapshot();
 		updateStateHaptics(state);
-		if(!vr.mvBinding)
+		if(!vr.mvBinding && !vr.testDialFace)
 		{
 			return; // No layers support: dial visuals unavailable, haptics above still ran.
 		}
@@ -3253,14 +3285,52 @@ EM_JS(void,YsfwInstallWebXR,(),
 				try
 				{
 					drawDial(res.ctx,hand,dial.sel,state,guiMode);
-					var sub=vr.mvBinding.getSubImage(res.quad,frame);
-					uploadCanvasToSubImage(res.canvas,sub);
 					res.drawnSel=redrawKey;
 					res.drawnStateSig=stateSig;
 					res.drawnGuiMode=guiMode;
 				}
 				catch(e){} // Leave res.drawn* unset so the next frame retries.
 			}
+			// Upload the canvas EVERY frame the quad is presented -- the
+			// upload is deliberately NOT behind the repaint gate above.
+			// Root cause of the thrice-reported stale-GUN-highlight device
+			// bug (round 4, reproduced visually by scripts/
+			// smoke-vrdialface.mjs's compositor model): a quad layer's
+			// upload only reaches the eye if the layer is in the CURRENTLY
+			// APPLIED render state, but on the dial's reappearance frame the
+			// quad is re-added via syncRenderStateLayers at the END of this
+			// function and XRSession.updateRenderState only takes effect on
+			// the NEXT frame -- so when a fast flick crossed both the
+			// visible and select thresholds inside one 72 Hz frame, the
+			// gate's single redraw+upload landed in a never-presented
+			// swapchain buffer (no exception raised), the gate then closed
+			// (drawn* marked done), and the compositor re-presented the
+			// LAST SUBMITTED buffer: the pre-hide GUN face, frozen while
+			// the stick pointed elsewhere.  Uploading every presented frame
+			// removes ALL freshness state from the GL boundary (also
+			// covering compositor-side buffer loss, which needsRedraw was
+			// supposed to signal); the paint gate above still keeps the
+			// expensive canvas 2D work change-driven.  Cost: one 384x384
+			// texSubImage2D per visible dial per frame, only while a dial is
+			// actually shown (thumbstick engaged + the 1.2 s fade window) --
+			// negligible next to the scene pass.
+			try
+			{
+				if(res.quad)
+				{
+					var sub=vr.mvBinding.getSubImage(res.quad,frame);
+					uploadCanvasToSubImage(res.canvas,sub);
+				}
+				else if(res.presentedCtx && res.inAppliedRenderState)
+				{
+					// Headless compositor model (see ensureDialResources'
+					// test-mode branch): the upload reaches the presented
+					// buffer only for a layer in the APPLIED render state.
+					res.presentedCtx.clearRect(0,0,res.presentedCanvas.width,res.presentedCanvas.height);
+					res.presentedCtx.drawImage(res.canvas,0,0);
+				}
+			}
+			catch(e){} // Transient (e.g. the very frame of re-add): the next frame's upload heals it.
 		}
 		if(layersChanged)
 		{
@@ -4753,6 +4823,96 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var dial=vr.ctl.dial[hand];
 		return dialRedrawKey(dial,dial.guiMode||null);
+	};
+
+	// ---- Headless dial-FACE harness (scripts/smoke-vrdialface.mjs) --------
+	// Three rounds of "stale GUN highlight" fixes asserted only on internal
+	// pick state (dial.sel / dialRedrawKey) while the user-visible RENDER
+	// path -- updateDialLayers' redraw gate, drawn* bookkeeping, and the
+	// visible/inLayers lifecycle -- never ran headless at all (early-out on
+	// !vr.mvBinding).  These hooks close that gap: tickDialFace drives the
+	// REAL updateDialLayers (vr.testDialFace makes ensureDialResources hand
+	// out a canvas-only resource and skips just the GL upload/renderState
+	// steps), so a test can poke Quest-shaped controller entries through
+	// pokeControllerFrame and then read back the canvas AS THE GATE LAST
+	// PAINTED IT -- unlike vr.dumpDialLayer above, which always repaints
+	// fresh and therefore can never catch a stale-gate bug.
+	vr.tickDialFace=function()
+	{
+		vr.testDialFace=true;
+		// Apply the "pending render state" one frame late, exactly like
+		// XRSession.updateRenderState: what syncRenderStateLayers decided at
+		// the END of the previous tick (res.inLayers) is what the compositor
+		// model considers live DURING this tick.
+		var hands=['right','left'];
+		for(var i=0; i<hands.length; ++i)
+		{
+			var res=vr.dialRes[hands[i]];
+			if(res)
+			{
+				res.inAppliedRenderState=res.inLayers;
+			}
+		}
+		updateDialLayers(null);
+	};
+	// The per-hand face as the user would SEE it: the compositor model's
+	// presented buffer in harness mode (null before anything was ever
+	// presented).  NO repaint happens here -- that is the whole point.
+	vr.dumpRenderedDialFace=function(hand)
+	{
+		var res=vr.dialRes[hand];
+		if(!res)
+		{
+			return null;
+		}
+		var c=res.presentedCanvas||res.canvas;
+		return c ? c.toDataURL('image/png') : null;
+	};
+	// Pixel probe into the LAST-PAINTED canvas: over a small patch centred
+	// on the given canvas coordinates, the mean RGBA plus a count of
+	// "selection accent" pixels (the amber tick/arrowhead drawDial paints
+	// ONLY on the selected sector: rgba(255,214,64,0.95) / #ffe066, vs the
+	// faint gray-blue ticks everywhere else) -- lets a test assert WHICH
+	// sector the LAST PAINT highlighted without PNG round-trips.
+	vr.readRenderedDialPatch=function(hand,cxPix,cyPix,half)
+	{
+		var res=vr.dialRes[hand];
+		var ctx=(res ? (res.presentedCtx||res.ctx) : null);
+		if(!ctx)
+		{
+			return null;
+		}
+		half=half||6;
+		var d=ctx.getImageData(cxPix-half,cyPix-half,2*half,2*half).data;
+		var n=d.length/4,r=0,g=0,b=0,a=0,accent=0;
+		for(var i=0; i<n; ++i)
+		{
+			var pr=d[i*4],pg=d[i*4+1],pb=d[i*4+2],pa=d[i*4+3];
+			r+=pr; g+=pg; b+=pb; a+=pa;
+			if(128<pa && 200<pr && 150<pg && pb<130)
+			{
+				++accent;
+			}
+		}
+		return {r:r/n,g:g/n,b:b/n,a:a/n,accent:accent};
+	};
+	// Full per-frame trace of everything the gate and the pick depend on --
+	// the "instrument deeper" channel if the visual repro ever goes quiet.
+	vr.dialFaceDebug=function(hand)
+	{
+		var dial=vr.ctl.dial[hand];
+		var res=vr.dialRes[hand];
+		return {
+			sel:dial.sel,
+			guiSel:dial.guiSel,
+			picking:!!dial.picking,
+			visible:!!dial.visible,
+			guiMode:dial.guiMode||null,
+			redrawKey:dialRedrawKey(dial,dial.guiMode||null),
+			inLayers:(res ? !!res.inLayers : null),
+			drawnSel:(res ? res.drawnSel : null),
+			drawnGuiMode:(res ? res.drawnGuiMode : null)
+		};
 	};
 
 	// dumpPerfPlacard: headless-probe helper, the perf-placard counterpart of
