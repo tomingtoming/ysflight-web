@@ -312,6 +312,15 @@ extern "C" int EMSCRIPTEN_KEEPALIVE YsfwVrGuiMenuVersion(void)
 	return FsVrGuiMenuVersion();
 }
 
+// TEST-ONLY: forwards to the engine's blackout/redout override block
+// (fsvr.h's FsVrSetBlackoutOverride) so a headless test can exercise
+// FsVrDrawFullScreenTint (SimDrawAllScreen's VR G-load tint) without a real
+// high-G manoeuvre -- see vr.pokeBlackout below.
+extern "C" void EMSCRIPTEN_KEEPALIVE YsfwVrSetBlackoutOverride(int active,float r,float g,float b,float alpha)
+{
+	FsVrSetBlackoutOverride(active,r,g,b,alpha);
+}
+
 // clang-format off
 EM_JS(void,YsfwInstallWebXR,(),
 {
@@ -3829,6 +3838,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 	vr.clearGuiOverride=function()
 	{
 		vr.testGuiOverride=null;
+	};
+
+	// TEST-ONLY: forces the VR G-load blackout/redout full-field tint
+	// (FsVrDrawFullScreenTint, SimDrawAllScreen) to a fixed colour/alpha,
+	// bypassing the real G-load gate entirely -- scripts have no headless
+	// path to a real high-G manoeuvre. Defaults to red (a redout), since
+	// that is the more visually distinctive smoke-test signature; pass
+	// r=g=b=0 for a blackout instead. alpha<=0 clears the override (same as
+	// vr.clearBlackoutOverride()).
+	vr.pokeBlackout=function(alpha,r,g,b)
+	{
+		_YsfwVrSetBlackoutOverride(alpha>0 ? 1 : 0,
+			(undefined!==r ? r : 1), (undefined!==g ? g : 0), (undefined!==b ? b : 0),
+			alpha);
+	};
+	vr.clearBlackoutOverride=function()
+	{
+		_YsfwVrSetBlackoutOverride(0,0,0,0,0);
 	};
 
 	// Debug/test hook: read the 16-float control block back as a plain array
