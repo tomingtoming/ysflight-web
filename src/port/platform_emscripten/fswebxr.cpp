@@ -467,7 +467,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// instead of recentering (see toggleHelp,
 			// processControllerPlain's left-hand branch). helped mirrors
 			// aBtn.recentered: fires toggleHelp at most once per hold.
-			xBtn:{pressed:false,pressAt:0,helped:false,owned:false},
+			xBtn:{pressed:false,pressAt:0,helped:false,owned:false,outside:false},
 			// Right B / left Y previous-press state -- re-added ONLY for the
 			// dialog-owner cancel press-edge (see processControllerPlain's
 			// rActive/lActive branches); the normal, non-owner B/Y dispatch
@@ -1889,17 +1889,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// Left X: mirrors the right hand's A tap-vs-long-press pattern
 			// (see A_TAP_MAX_MS/A_RECENTER_MS above, vr.ctl.xBtn), but the
 			// LONG action here is toggleHelp, not recenter: a quick
-			// press+release (<A_TAP_MAX_MS) taps the flaps-down key
-			// (FSBTF_FLAPDOWN steps one flap position per press, so a real
-			// tap -- not the old held vrKeyEdge -- matches its semantics);
-			// held >=A_RECENTER_MS instead toggles the help placards once
-			// per hold and suppresses the flap tap on the eventual release.
-			// While THIS hand owns an open dialog (lActive), the quick-tap
-			// flap dispatch is parked (same reasoning as the right hand's A
-			// above -- no face-button fumble mid-dialog), but the long-press
-			// help toggle stays live regardless -- it is a view-only action,
-			// not a flight or dialog control (same reasoning as the right
-			// hand's A long-press recenter staying live during dialogs).
+			// press+release (<A_TAP_MAX_MS) toggles the VIEW -- alternating
+			// taps dispatch F2 (FSBTF_OUTSIDEPLAYERVIEW, external/chase)
+			// and F1 (FSBTF_COCKPITVIEW), tracked in xBtn.outside.
+			// Flaps-down, this tap's previous meaning, still lives on the
+			// left dial's Flap- sector, so no function is lost -- the face
+			// button goes to an action a pilot wants at a moment's notice
+			// instead of one that already has a home. (If the pilot changes
+			// view some other way the toggle can desync by one press --
+			// harmless, the next tap resyncs it.) Held >=A_RECENTER_MS
+			// instead toggles the help placards once per hold and
+			// suppresses the view tap on the eventual release. While THIS
+			// hand owns an open dialog (lActive), the quick-tap view
+			// dispatch is parked (same reasoning as the right hand's A
+			// above -- no face-button fumble mid-dialog), but the
+			// long-press help toggle stays live regardless -- it is a
+			// view-only action, not a flight or dialog control (same
+			// reasoning as the right hand's A long-press recenter staying
+			// live during dialogs).
 			var xPressed=!!(entry.buttons && entry.buttons.a);
 			var xBtn=vr.ctl.xBtn;
 			var xNow=(typeof performance!=='undefined' ? performance.now() : Date.now());
@@ -1922,7 +1929,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				if(!lActive && !xBtn.owned)
 				{
-					vrKeyTap('KeyF'); // Default flaps-down key: a real tap, one flap step per press.
+					xBtn.outside=!xBtn.outside;
+					vrHapticPulse(rawSrc);
+					vrKeyTap(xBtn.outside ? 'F2' : 'F1'); // View toggle: external (F2) <-> cockpit (F1).
 				}
 			}
 			xBtn.pressed=xPressed;
@@ -2920,7 +2929,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		],
 		left:[
 			{cx:80, cy:92,  label:'スティック',label2:'ダイヤル選択'},
-			{cx:64, cy:132, label:'X',        label2:'フラップ下げ(長押し:ヘルプ)'},
+			{cx:64, cy:132, label:'X',        label2:'視点切替(長押し:ヘルプ)'},
 			{cx:96, cy:132, label:'Y',        label2:'フラップ上げ'},
 			{cx:80, cy:206, label:'トリガー',  label2:'左ダイヤル機能'},
 			{cx:80, cy:252, label:'グリップ',  label2:'スロットル(押込み過ぎでAB)'}
@@ -3697,7 +3706,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.ctl.lastDialTapHand=null;
 					vr.ctl.lastDialTapAt=0;
 					vr.ctl.aBtn={pressed:false,pressAt:0,recentered:false,owned:false};
-					vr.ctl.xBtn={pressed:false,pressAt:0,helped:false,owned:false};
+					vr.ctl.xBtn={pressed:false,pressAt:0,helped:false,owned:false,outside:false};
 					vr.ctl.rightB=false;
 					vr.ctl.rightBSwallow=false;
 					vr.ctl.leftY=false;
