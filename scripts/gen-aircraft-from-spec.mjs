@@ -142,12 +142,21 @@ function fuselage() {
     return ring;
   });
   const bellyY = spec.fuselage.bellyY ?? -2.5;
+  // Cockpit glass = the hull's OWN quads recolored (the stock-747 technique:
+  // no floated decal to sink into or z-fight the dome — the dome facets ARE
+  // the windshield).  Band: shoulder ring angles, the spec's zn/y window.
+  const ck = spec.decals && spec.decals.cockpit;
   for (let r = 0; r + 1 < rings.length; r++) {
+    const znq = (denseZn[r] + denseZn[r + 1]) / 2;
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
       const quad = [rings[r + 1][i], rings[r + 1][j], rings[r][j], rings[r][i]];
       const avgY = quad.reduce((s_, q) => s_ + q.y, 0) / 4;
-      addFace(g, quad.map((q) => q.i), avgY < bellyY ? COL.belly : COL.body);
+      let color = avgY < bellyY ? COL.belly : COL.body;
+      if (ck && znq >= ck.znFrom && znq <= ck.znTo &&
+          Math.min(Math.sin((2 * Math.PI * i) / N), Math.sin((2 * Math.PI * j) / N)) >= 0.6 &&
+          avgY >= ck.y0 - 0.15 && avgY <= ck.y1 + 0.05) color = COL.glass;
+      addFace(g, quad.map((q) => q.i), color);
     }
   }
   addFace(g, rings[0].map((q) => q.i), COL.body);                          // nose cap (+z)
@@ -190,18 +199,8 @@ function decals() {
   if (D.doors) {
     for (const d of doors) strip(d - D.doors.halfW, d + D.doors.halfW, D.doors.y0, D.doors.y1, COL.door, 2);
   }
-  if (D.cockpit) {
-    const c = D.cockpit;
-    strip(c.znFrom, c.znTo, c.y0, c.y1, COL.glass, 1);       // side glass
-    if (c.front) {
-      const f = c.front, xw = skinX((c.znFrom + c.znTo) / 2, (c.y0 + c.y1) / 2);
-      const q = [
-        addV(g, -xw * 0.55, f.y0, zys(f.zn)), addV(g, xw * 0.55, f.y0, zys(f.zn)),
-        addV(g, xw * 0.42, f.y1, zys(f.zn + f.dz)), addV(g, -xw * 0.42, f.y1, zys(f.zn + f.dz)),
-      ];
-      addFace(g, q, COL.glass);
-    }
-  }
+  // (cockpit glass is painted onto the hull's own quads in fuselage() —
+  //  floated decals sink into the curved dome; see the note there.)
   return g;
 }
 
