@@ -431,7 +431,7 @@ export const SCENERY_CONV = 2;
 export function migrateScenery(sc) {
   if (!sc || (sc.conv | 0) >= SCENERY_CONV) return sc;
   const flip = (a) => a === undefined ? undefined
-    : (a || []).map((o) => ({ ...o, headingDeg: ((360 - (Number(o.headingDeg) || 0)) % 360) % 360 }));
+    : (a || []).map((o) => ({ ...o, headingDeg: ((360 - (Number(o.headingDeg) || 0)) % 360 + 360) % 360 }));
   return { ...sc, conv: SCENERY_CONV, objects: flip(sc.objects), starts: flip(sc.starts), runways: flip(sc.runways) };
 }
 
