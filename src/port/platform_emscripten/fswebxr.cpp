@@ -1333,71 +1333,43 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(!ctx){ return null; }
 
 		// ---- Sky gradient (top -> horizon -> ground) -----------------------
-		// Significantly brighter than the original so it reads on Quest OLED.
-		// Still pre-dawn (no sun), but clearly "deep navy" not "black void".
 		var grad=ctx.createLinearGradient(0,0,0,H);
-		grad.addColorStop(0,   '#0a1428'); // zenith: visible dark blue
-		grad.addColorStop(0.30,'#111e3a'); // upper sky: deep navy
-		grad.addColorStop(0.50,'#1a2d55'); // mid sky
-		grad.addColorStop(0.62,'#243c6a'); // approaching horizon
-		grad.addColorStop(0.68,'#4a6080'); // pre-dawn horizon glow
-		grad.addColorStop(0.72,'#2a3040'); // ground horizon
-		grad.addColorStop(0.78,'#141820'); // near ground
-		grad.addColorStop(1,   '#0c1018'); // nadir
+		grad.addColorStop(0,   '#000005'); // zenith: almost black
+		grad.addColorStop(0.35,'#050a1a'); // upper sky: deep navy
+		grad.addColorStop(0.52,'#0c1830'); // mid sky
+		grad.addColorStop(0.60,'#1a2a48'); // approaching horizon
+		grad.addColorStop(0.65,'#2d3c5a'); // pre-dawn horizon glow
+		grad.addColorStop(0.70,'#4a4a58'); // ground horizon
+		grad.addColorStop(0.75,'#1a1a1e'); // near ground
+		grad.addColorStop(1,   '#0a0a0c'); // nadir
 		ctx.fillStyle=grad;
 		ctx.fillRect(0,0,W,H);
 
-		// ---- Horizon glow (wider and brighter for OLED visibility) ----------
-		var hGrad=ctx.createRadialGradient(W/2,H*0.66,0,W/2,H*0.66,W*0.55);
-		hGrad.addColorStop(0,'rgba(140,170,220,0.42)');
-		hGrad.addColorStop(0.3,'rgba(100,130,180,0.22)');
-		hGrad.addColorStop(0.6,'rgba(60,90,140,0.08)');
+		// ---- Subtle horizon glow -------------------------------------------
+		var hGrad=ctx.createRadialGradient(W/2,H*0.65,0,W/2,H*0.65,W*0.45);
+		hGrad.addColorStop(0,'rgba(100,120,160,0.18)');
+		hGrad.addColorStop(0.4,'rgba(70,90,130,0.08)');
 		hGrad.addColorStop(1,'rgba(0,0,0,0)');
 		ctx.fillStyle=hGrad;
 		ctx.fillRect(0,0,W,H);
 
 		// ---- Stars (upper sky only, seeded PRNG) ---------------------------
-		// Slightly larger / brighter than before for OLED readability.
-		var rng=mulberry32(0x42a7f91c); // fixed seed -- MUST NOT change (byte-stability)
+		// Horizon is at y = H*0.65; stars only appear above that.
+		var rng=mulberry32(0x42a7f91c); // fixed seed
 		var starCount=1800;
 		for(var i=0; i<starCount; ++i)
 		{
 			var sx=rng()*W;
 			var sy=rng()*H*0.62; // confined to upper 62% (clear of horizon glow)
-			var ssize=0.5+rng()*1.6; // slightly larger than before
-			var salpha=0.55+rng()*0.45; // brighter: min 0.55 (was 0.35)
+			var ssize=0.3+rng()*1.1;
+			// Twinkle: slightly varied alpha so not all stars are the same brightness
+			var salpha=0.35+rng()*0.65;
 			ctx.beginPath();
 			ctx.arc(sx,sy,ssize,0,Math.PI*2);
-			var hue=Math.floor(rng()*40);
-			ctx.fillStyle='hsla('+hue+',25%,95%,'+salpha.toFixed(2)+')';
+			// Mix of white-blue colours for realism
+			var hue=Math.floor(rng()*40); // 0-40 range: white to slightly warm
+			ctx.fillStyle='hsla('+hue+',20%,90%,'+salpha.toFixed(2)+')';
 			ctx.fill();
-		}
-
-		// ---- Ground grid (faint, below horizon) ----------------------------
-		// Gives spatial orientation without a bright floor.  Purely procedural,
-		// no PRNG (so no seed-stability concern for grid pattern changes).
-		var horizonY=Math.round(H*0.72);
-		var GRID_LINES=12;
-		var GRID_COLOR='rgba(80,110,150,0.18)';
-		ctx.strokeStyle=GRID_COLOR;
-		ctx.lineWidth=1;
-		// Horizontal lines (latitude bands below horizon)
-		for(var gi=0; gi<=GRID_LINES; ++gi)
-		{
-			var gy=horizonY+Math.round((H-horizonY)*gi/GRID_LINES);
-			ctx.beginPath();
-			ctx.moveTo(0,gy);
-			ctx.lineTo(W,gy);
-			ctx.stroke();
-		}
-		// Vertical lines (longitude, evenly spaced on the equirect canvas)
-		for(var gj=0; gj<=GRID_LINES*2; ++gj)
-		{
-			var gx=Math.round(W*gj/(GRID_LINES*2));
-			ctx.beginPath();
-			ctx.moveTo(gx,horizonY);
-			ctx.lineTo(gx,H);
-			ctx.stroke();
 		}
 
 		return canvas;
@@ -1405,11 +1377,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 	function setupSky()
 	{
-		if(false===vrOpt('sky',true))
-		{
-			vr.skyRes=false;
-			return;
-		}
 		// skyRes===false means we already tried and failed (createEquirectLayer
 		// not available); don't retry.
 		if(vr.skyRes===false || vr.skyRes)
@@ -1436,8 +1403,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				viewPixelWidth:2048,
 				viewPixelHeight:1024,
 				layout:'mono',
-				radius:0,         // 0 = infinite sphere (spec default, explicit)
-				isStatic:false    // we upload each frame (see header comment)
+				isStatic:false // we upload each frame (see header comment)
 			});
 		}
 		catch(e)
