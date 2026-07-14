@@ -118,7 +118,12 @@ const SPIN_SLOT = { 3: 3, 18: 5, 20: 5, 22: 4, 24: 3 };
 
 // ============================ DNM -> GLB ===========================================
 
-export function dnmToGlb(dnmBytes) {
+// opts.cockpit = {x, y, z} (YS airplane coords, the .dat COCKPITP value):
+// embeds a glTF "Cockpit" perspective camera at the eye point, facing the
+// nose, so Blender shows the pilot's view and the studio import can restore
+// the value.  The pose goes through the same X-mirror conjugation as every
+// node; the engine-exact YS value rides extras.ysflight.cockpit verbatim.
+export function dnmToGlb(dnmBytes, opts) {
   const dnm = parseDnm(dnmBytes);
 
   const materials = [];
@@ -307,6 +312,22 @@ export function dnmToGlb(dnmBytes) {
   const rootIx = dnm.roots.map(emitNode).filter((ix) => ix !== null);
   if (!rootIx.length) throw new Error('no nodes exported (is this a DNM?)');
 
+  // Cockpit camera node (see the opts note above dnmToGlb).
+  const ck = opts && opts.cockpit;
+  let cameras;
+  if (ck && [ck.x, ck.y, ck.z].every(Number.isFinite)) {
+    cameras = [{ type: 'perspective', perspective: { yfov: Math.PI / 3, znear: 0.05 } }];
+    // In YS coords the eye sits at the COCKPITP point looking down +Z (nose);
+    // a glTF camera looks down its local -Z, so the YS pose is T(p)·RotXZ(pi).
+    // Conjugate by the X mirror like every other node pose.
+    const pose = matToTQ(conjX(mul(T(ck.x, ck.y, ck.z), rotXZ(Math.PI))));
+    gnodes.push({
+      name: 'Cockpit', camera: 0, translation: pose.t, rotation: pose.q,
+      extras: { ysflight: { rh: 1, cockpit: { x: ck.x, y: ck.y, z: ck.z } } },
+    });
+    rootIx.push(gnodes.length - 1);
+  }
+
   const gltf = {
     // asset.extras is informational only — Blender re-exports drop it, so the
     // importer detects the convention from the per-node rh markers instead.
@@ -320,6 +341,7 @@ export function dnmToGlb(dnmBytes) {
     accessors,
     buffers: [{ byteLength: binLen }],
   };
+  if (cameras) gltf.cameras = cameras;
   if (animByName.size) gltf.animations = [...animByName.values()];
 
   // GLB container.
@@ -691,6 +713,10 @@ export function glbToDnm(glbBytes) {
   // Flightradar24's COLLADA-era exports), and scale comes free.
   const walk = (nix, parentBake) => {
     const node = json.nodes[nix];
+    // A leaf camera node (our Cockpit export, or any Blender camera) is a
+    // viewpoint, not geometry — it must not become a DNM node.  Its value is
+    // recovered separately below.
+    if (node.camera !== undefined && node.mesh === undefined && !(node.children || []).length) return null;
     const label = uniq(usedLabels, (node.name || 'node').replace(/"/g, ''));
     const ys = ysExtras(node);
     const bake = ys ? null : mul(parentBake || I16, localMatrix(node));
@@ -718,7 +744,7 @@ export function glbToDnm(glbBytes) {
     }
     // Children of an extras node bake relative to it (the engine applies the
     // parent's POS transform through the DNM hierarchy).
-    const childLabels = (node.children || []).map((c) => walk(c, ys ? I16 : bake));
+    const childLabels = (node.children || []).map((c) => walk(c, ys ? I16 : bake)).filter((l) => l !== null);
     const b = [];
     b.push('SRF "' + label + '"');
     b.push('FIL ' + srfName);
@@ -741,6 +767,32 @@ export function glbToDnm(glbBytes) {
   for (const nix of scene.nodes || []) walk(nix, I16);
   if (!nodeCount) throw new Error('no nodes in the glTF scene');
 
+  // Cockpit eye point: a camera node (name "Cockpit" preferred) restores the
+  // recipe's COCKPITP.  extras.ysflight.cockpit is the engine-exact YS value
+  // (Blender round-trips node extras as custom properties); without it, fall
+  // back to the camera's world translation, mirrored back when the file is
+  // right-handed.  No camera at all -> null (foreign glbs are untouched).
+  let cockpit = null;
+  {
+    const camNodes = [];
+    const visit = (nix, M) => {
+      const n = json.nodes[nix];
+      const W = mul(M, localMatrix(n));
+      if (n.camera !== undefined) camNodes.push({ n, W });
+      for (const c of n.children || []) visit(c, W);
+    };
+    for (const nix of scene.nodes || []) visit(nix, I16);
+    const pick = camNodes.find((c) => (c.n.name || '') === 'Cockpit') || camNodes[0];
+    if (pick) {
+      const e = ysExtras(pick.n);
+      if (e && e.cockpit && [e.cockpit.x, e.cockpit.y, e.cockpit.z].every(Number.isFinite)) {
+        cockpit = { x: e.cockpit.x, y: e.cockpit.y, z: e.cockpit.z };
+      } else {
+        cockpit = { x: flip ? -pick.W[3] : pick.W[3], y: pick.W[7], z: pick.W[11] };
+      }
+    }
+  }
+
   const out = ['DYNAMODEL', 'DNMVER 2'];
   for (const p of pcks) {
     out.push('PCK ' + p.name + ' ' + p.lineCount);
@@ -751,5 +803,61 @@ export function glbToDnm(glbBytes) {
   return {
     dnm: new TextEncoder().encode(out.join('\n') + '\n'),
     nodes: nodeCount, srfs: pcks.length, triangles: triCount,
+    cockpit,
   };
+}
+
+// ==================== geometry-derived cockpit estimate ============================
+
+// Rest-visible vertices in aircraft coordinates (the same hierarchical bake as
+// dnmToCollisionSrf), streamed to a callback.
+function eachRestVertex(dnm, cb) {
+  const addNode = (label, parentM) => {
+    const n = dnm.nodes.get(label);
+    if (!n) return;
+    const sta0 = (n.sta && n.sta[0]) || null;
+    const M = mul(parentM, nodeMatrix(n.pos || [0, 0, 0, 0, 0, 0], sta0, n.cnt || [0, 0, 0]));
+    const visible = !sta0 || sta0[6] === undefined || sta0[6] !== 0;
+    const srf = visible && n.srf && dnm.srfByName.get(n.srf);
+    if (srf) {
+      for (const v of srf.vertices) {
+        cb(M[0] * v[0] + M[1] * v[1] + M[2] * v[2] + M[3],
+          M[4] * v[0] + M[5] * v[1] + M[6] * v[2] + M[7],
+          M[8] * v[0] + M[9] * v[1] + M[10] * v[2] + M[11]);
+      }
+    }
+    for (const c of n.children || []) addNode(c, M);
+  };
+  const I = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  for (const r of dnm.roots) addNode(r, I);
+}
+
+// Estimate a cockpit eye point from geometry alone — the studio's fallback
+// when neither the recipe nor the .dat carries one.  Heuristic from the stock
+// fleet (b747: 6.3m aft of the nose on a 70.7m hull ≈ 7% of the length; the
+// eye sits just under the local crown/canopy line): z = 7% of the overall
+// length behind the nose tip (+z = nose), y a little below the top of the
+// skin at that station, x centered.  A visible ESTIMATE, not truth — the UI
+// labels it and the pilot adjusts.  Returns {x, y, z} or null (no geometry).
+export function estimateCockpit(dnmBytes) {
+  const dnm = parseDnm(dnmBytes);
+  let minZ = Infinity, maxZ = -Infinity;
+  eachRestVertex(dnm, (x, y, z) => {
+    if (z < minZ) minZ = z;
+    if (z > maxZ) maxZ = z;
+  });
+  if (!(maxZ > minZ)) return null;
+  const len = maxZ - minZ;
+  const zc = maxZ - len * 0.07;
+  const half = Math.max(len * 0.03, 0.5); // station band around the eye point
+  let topY = -Infinity, botY = Infinity;
+  eachRestVertex(dnm, (x, y, z) => {
+    if (Math.abs(z - zc) > half) return;
+    if (y > topY) topY = y;
+    if (y < botY) botY = y;
+  });
+  if (!(topY > botY)) return null;
+  const drop = Math.min(0.6, Math.max(0.15, (topY - botY) * 0.12));
+  const cm = (v) => Math.round(v * 100) / 100;
+  return { x: 0, y: cm(topY - drop), z: cm(zc) };
 }
