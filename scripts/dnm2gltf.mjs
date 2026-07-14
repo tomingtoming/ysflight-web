@@ -2,7 +2,9 @@
 //   node scripts/dnm2gltf.mjs <input.dnm> <output.glb>
 // Thin wrapper — the conversion lives in web/dnm-gltf.js (browser-safe), which
 // the workbench also uses directly.  See that module for the full mapping notes
-// (hierarchy, engine-exact transforms, extras.ysflight, per-class animations).
+// (hierarchy, engine-exact transforms, extras.ysflight, per-class animations,
+// and the chirality note: the glb is right-handed, so Blender shows the model
+// the way the engine does, not its mirror image).
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dnmToGlb } from '../web/dnm-gltf.js';
