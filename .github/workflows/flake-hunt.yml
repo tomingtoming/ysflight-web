@@ -1,0 +1,73 @@
+name: Flake hunt
+
+# Measures a smoke's flake rate by building once and looping the smoke N times
+# on the same runner.  Manual-only: dispatch it against a branch to get a
+# before/after A-B when hunting a flaky test (e.g. the MP pack transfer smoke,
+# the only recurring CI flake as of 2026-07 -- every flaky first attempt over
+# 07-09..07-14 was this one step).
+#
+#   gh workflow run flake-hunt.yml --ref <branch> \
+#     -f smoke=smoke-mp-pack.sh -f iterations=20
+#
+# The run fails (red) if ANY iteration fails, so a surviving flake is visible
+# at a glance; the pass/fail tally lands in the run's step summary either way.
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke:
+        description: 'Smoke script under scripts/ to loop'
+        required: true
+        default: 'smoke-mp-pack.sh'
+      iterations:
+        description: 'How many times to run it'
+        required: true
+        default: '20'
+
+permissions:
+  contents: read
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 6.0.0
+
+      - name: Build
+        run: scripts/build.sh
+
+      - name: Install smoke-test browser
+        run: |
+          npm install --no-save playwright ws
+          npx playwright install --with-deps chromium
+
+      - name: Loop the smoke
+        run: |
+          n='${{ github.event.inputs.iterations }}'
+          smoke='${{ github.event.inputs.smoke }}'
+          pass=0; fail=0; failed_iters=""
+          for i in $(seq 1 "$n"); do
+            echo "::group::iteration $i/$n"
+            if "scripts/$smoke"; then
+              pass=$((pass+1))
+            else
+              fail=$((fail+1)); failed_iters="$failed_iters $i"
+            fi
+            echo "::endgroup::"
+            echo "tally after $i/$n: pass=$pass fail=$fail"
+          done
+          {
+            echo "## Flake hunt: \`$smoke\` @ \`${GITHUB_SHA::8}\`"
+            echo "- iterations: $n"
+            echo "- pass: $pass"
+            echo "- fail: $fail"
+            if [ "$fail" -gt 0 ]; then echo "- failed iterations:$failed_iters"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "RESULT: $pass/$n passed, $fail failed ($failed_iters)"
+          [ "$fail" -eq 0 ]
