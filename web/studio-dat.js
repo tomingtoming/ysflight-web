@@ -42,6 +42,21 @@ export function splitUnit(valueStr) {
   return { num: m[1], suffix: m[2] };
 }
 
+// --- splitComment -----------------------------------------------------------------
+//
+// Inline '#comment' tails are the author's content and must survive form
+// edits (the non-destructive contract) — and they must never be mistaken
+// for a unit suffix or a vec3 token.  Split them off before any tokenizing;
+// writers re-append `comment` (verbatim, '#' included) after the edited
+// body.  Unedited fields never rewrite their line, so original spacing
+// before '#' is only normalized when the value actually changed.
+export function splitComment(valueStr) {
+  const s = String(valueStr);
+  const i = s.indexOf('#');
+  if (i < 0) return { body: s, comment: '' };
+  return { body: s.slice(0, i).trimEnd(), comment: s.slice(i) };
+}
+
 // --- parseDat -------------------------------------------------------------------
 //
 // Returns:
@@ -415,17 +430,23 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       [['', L('（未設定）', '(unset)')], ['TRUE', 'TRUE'], ['FALSE', 'FALSE']].forEach(([v, t]) => {
         sel.appendChild(Object.assign(document.createElement('option'), { value: v, textContent: t }));
       });
-      sel.value = currentVal.toUpperCase();
+      const { body: boolBody, comment: boolComment } = splitComment(currentVal);
+      sel.value = boolBody.trim().toUpperCase();
       if (!['TRUE', 'FALSE', ''].includes(sel.value)) sel.value = '';
-      sel.addEventListener('change', () => { if (sel.value) onChange(sel.value); });
+      sel.addEventListener('change', () => {
+        if (sel.value) onChange(sel.value + (boolComment ? ' ' + boolComment : ''));
+      });
       inputEl = sel;
 
     } else if (schema.type === 'vec3' || schema.type === 'att3') {
       // Each token keeps its OWN unit suffix ('0.0m 1.4m 4.50m' — engine
-      // defaults change if the suffix is dropped), split per token.
+      // defaults change if the suffix is dropped), split per token.  The
+      // inline '#comment' tail (if any) is split off FIRST so it neither
+      // shows up as a bogus 4th token nor gets dropped on reassembly.
       const wrap3 = el('div');
       wrap3.style.cssText = 'flex:1;display:flex;gap:4px;align-items:center;min-width:0';
-      const tokens = currentVal.split(/\s+/).filter(Boolean);
+      const { body: vecBody, comment: vecComment } = splitComment(currentVal);
+      const tokens = vecBody.split(/\s+/).filter(Boolean);
       const parts = [0, 1, 2].map((i) => splitUnit(tokens[i] || ''));
       const suffixes = parts.map((p) => (p.num !== null ? p.suffix : ''));
       const inputs3 = [0, 1, 2].map((i) => {
@@ -436,7 +457,8 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
         inp.style.cssText = 'flex:1;min-width:0;padding:5px 6px;border:1px solid #2a3647;border-radius:6px;' +
           'background:#0b1017;color:#e6edf3;font-size:12px';
         inp.addEventListener('change', () => {
-          onChange(inputs3.map((x, j) => (x.value || '0') + (suffixes[j] || '')).join(' '));
+          onChange(inputs3.map((x, j) => (x.value || '0') + (suffixes[j] || '')).join(' ') +
+                   (vecComment ? ' ' + vecComment : ''));
         });
         wrap3.appendChild(inp);
         return inp;
@@ -455,9 +477,12 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
                schema.type === 'area') {
       // Values carry unit suffixes ('13.6t', '2.2MACH', '100%') that MUST be
       // preserved: a bare number is read in the engine's default unit and
-      // silently rescales the value.  Split off the suffix, edit the number,
-      // write back number+suffix.  Unparseable values fall back to raw text.
-      const { num, suffix } = splitUnit(currentVal);
+      // silently rescales the value.  Split off the inline '#comment' first
+      // (so it is neither shown as a unit label nor lost), then the suffix;
+      // edit the number, write back number+suffix+comment.  Unparseable
+      // values fall back to raw text.
+      const { body: numBody, comment: numComment } = splitComment(currentVal);
+      const { num, suffix } = splitUnit(numBody);
       if (currentVal !== '' && num === null) {
         const inp = document.createElement('input');
         inp.type = 'text';
@@ -475,7 +500,9 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
         inp.value = num !== null ? num : '';
         inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
           'background:#0b1017;color:#e6edf3;font-size:12px';
-        inp.addEventListener('change', () => { onChange(inp.value + suffix); });
+        inp.addEventListener('change', () => {
+          onChange(inp.value + suffix + (numComment ? ' ' + numComment : ''));
+        });
         wrapN.appendChild(inp);
         if (suffix) {
           const lab = el('span', null, suffix);
@@ -486,13 +513,18 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       }
 
     } else if (schema.type === 'int') {
+      // splitComment here too: 'NREALPRP 4 #props' would otherwise show as
+      // NaN in the number input and write back 'NaN' on change.
+      const { body: intBody, comment: intComment } = splitComment(currentVal);
       const inp = document.createElement('input');
       inp.type = 'number';
       inp.step = '1';
-      inp.value = currentVal;
+      inp.value = intBody.trim();
       inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
         'background:#0b1017;color:#e6edf3;font-size:12px';
-      inp.addEventListener('change', () => { onChange(String(Math.round(Number(inp.value)))); });
+      inp.addEventListener('change', () => {
+        onChange(String(Math.round(Number(inp.value))) + (intComment ? ' ' + intComment : ''));
+      });
       inputEl = inp;
 
     } else {

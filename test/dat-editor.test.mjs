@@ -269,3 +269,34 @@ test('splitUnit: every numeric value in stock f15.dat splits and round-trips', (
   }
   assert.ok(checked >= 20, 'expected many numeric values in f15.dat; checked ' + checked);
 });
+
+// --- splitComment -----------------------------------------------------------------
+
+test('splitComment: inline #comment tails split off and reassemble verbatim', async () => {
+  const { splitComment } = await import('../web/studio-dat.js');
+  assert.deepEqual(splitComment('22.6t   #THRUST AFTERBURNER'),
+    { body: '22.6t', comment: '#THRUST AFTERBURNER' });
+  assert.deepEqual(splitComment('0.0m 1.4m 4.50m #COCKPIT'),
+    { body: '0.0m 1.4m 4.50m', comment: '#COCKPIT' });
+  assert.deepEqual(splitComment('TRUE #ARMED'), { body: 'TRUE', comment: '#ARMED' });
+  assert.deepEqual(splitComment('2.2MACH'), { body: '2.2MACH', comment: '' });
+  assert.deepEqual(splitComment(''), { body: '', comment: '' });
+});
+
+test('splitComment: comment does not leak into splitUnit suffix', async () => {
+  const { splitComment } = await import('../web/studio-dat.js');
+  const { body } = splitComment('13.6t #inner engines only');
+  assert.deepEqual(splitUnit(body), { num: '13.6', suffix: 't' });
+});
+
+test('editDatKey: editing a commented value keeps the comment (form write shape)', () => {
+  // Simulates what the form's onChange produces after the splitComment fix:
+  // number edited, suffix and '#comment' re-appended.
+  const src = 'IDENTIFY "X"\nTHRAFTBN 13.6t   #both pods\nCOCKPITP 0.0m 1.4m 4.50m #eye\n';
+  const doc = parseDat(new TextEncoder().encode(src));
+  editDatKey(doc, 'THRAFTBN', '15t #both pods');
+  editDatKey(doc, 'COCKPITP', '0m 1.5m 4.50m #eye');
+  const out = new TextDecoder().decode(serializeDat(doc));
+  assert.match(out, /THRAFTBN 15t #both pods/);
+  assert.match(out, /COCKPITP 0m 1.5m 4.50m #eye/);
+});
