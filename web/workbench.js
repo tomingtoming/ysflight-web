@@ -382,6 +382,46 @@ export function makeDatFromBase(baseBytes, { identify, knobs = {}, extras = {} }
   return { bytes: s2b(lines.join('\n')), identify: clean, applied };
 }
 
+// --- cockpit position (.dat COCKPITP) ---------------------------------------------
+
+// The engine's cockpit eye point is the .dat's `COCKPITP x y z` line
+// (fsairplaneproperty.cpp case 52 -> FsGetVec3), in YS airplane coordinates:
+// +x = starboard, +y = up, +z = nose.  Stock format (b747.dat):
+//   COCKPITP -0.5m  3.5m  29.05m  #COCKPIT POSITION
+
+// Read the COCKPITP line of a .dat.  Returns {x, y, z} in meters or null when
+// the .dat has no COCKPITP line.  Stock always writes "m"; a bare number is
+// meters too (FsGetLength's default unit).
+export function getDatCockpit(bytes) {
+  for (const line of b2s(bytes).split('\n')) {
+    const m = /^COCKPITP\s+(\S+)\s+(\S+)\s+(\S+)/.exec(line.trim());
+    if (!m) continue;
+    const num = (tok) => (/ft$/i.test(tok) ? parseFloat(tok) * 0.3048 : parseFloat(tok));
+    const [x, y, z] = [num(m[1]), num(m[2]), num(m[3])];
+    return [x, y, z].every(Number.isFinite) ? { x, y, z } : null;
+  }
+  return null;
+}
+
+// Replace (or insert) the COCKPITP line, stock-formatted.  Replacement is
+// in-place on the existing line; insertion goes right after IDENTIFY (order is
+// free — COCKPITP does not feed AUTOCALC — but stock keeps it in the header
+// block, so we do too).  Byte-preserving outside the touched line.
+export function setDatCockpit(bytes, { x, y, z }) {
+  const fmt = (v) => String(Math.round(v * 1000) / 1000) + 'm';
+  const cockLine = 'COCKPITP ' + fmt(x) + '  ' + fmt(y) + '  ' + fmt(z) + '  #COCKPIT POSITION';
+  const lines = b2s(bytes).split('\n');
+  const ix = lines.findIndex((l) => /^COCKPITP\b/.test(l));
+  if (ix >= 0) {
+    lines[ix] = cockLine + (lines[ix].endsWith('\r') ? '\r' : '');
+  } else {
+    const idIx = lines.findIndex((l) => /^IDENTIFY\b/.test(l));
+    const eol = idIx >= 0 && lines[idIx].endsWith('\r') ? '\r' : '';
+    lines.splice(idIx >= 0 ? idIx + 1 : 0, 0, cockLine + eol);
+  }
+  return s2b(lines.join('\n'));
+}
+
 // --- scenery wizard --------------------------------------------------------------
 
 export const SCENERY_START = 'START01';
