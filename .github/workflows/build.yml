@@ -81,3 +81,15 @@ jobs:
       - name: MP scenery-pack sync smoke (PR only)
         if: github.event_name == 'pull_request'
         run: scripts/smoke-mp-scenery.sh
+
+      # VR menu smoke (PR only): verifies that the engine renders the 2D main
+      # menu into the VR off-screen FBO (setupMenu/DrawMenu/updateMenuLayer),
+      # that the menuDrawn flag is set, and that the watchdog stays disarmed.
+      # Requires the native-GL ANGLE path (--use-angle=gl) for OVR_multiview2;
+      # headless-only, no physical headset needed.
+      - name: VR menu smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          node "${{ github.workspace }}/scripts/serve.mjs" 8923 "${{ github.workspace }}/dist" &
+          sleep 2
+          node scripts/smoke-vrmenu.mjs "http://localhost:8923/index.html" "."
