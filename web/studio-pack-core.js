@@ -100,12 +100,18 @@ export function refreshPlan(members, creations) {
 
 // The pack recipe object embedded as workbench.json.  Field order and the
 // omit-when-empty rules are stable so an UNCHANGED pack re-serializes to the
-// same bytes (records are content-addressed: same bytes = same id = no-op save).
+// same bytes (records are content-addressed: same bytes = same id = no-op
+// save), and a pack saved by an OLDER studio round-trips byte-identically.
+// addedAt = when the member snapshot was (re-)frozen (add or ↺), epoch ms.
 export function buildRecipe(packName, members) {
   return {
     type: 'pack',
     packName,
-    members: members.map((m) => ({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind })),
+    members: members.map((m) => {
+      const e = { sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind };
+      if (m.addedAt) e.addedAt = m.addedAt;
+      return e;
+    }),
   };
 }
 
@@ -119,6 +125,7 @@ export function parseRecipe(recipe) {
       san: m.san,
       name: m.name,
       kind: m.kind,
+      addedAt: m.addedAt || null,
     })),
   };
 }

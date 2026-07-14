@@ -64,12 +64,15 @@ test('namespaceSnapshot: scenery list keeps its sce lead and rewritten quoted-sa
 });
 
 test('recipe round-trips through buildRecipe -> JSON -> parseRecipe', () => {
-  const members = [mkMember('F-15', 'aircraft', []), mkMember('Isle', 'scenery', [])];
+  const members = [
+    { ...mkMember('F-15', 'aircraft', []), addedAt: 1700000000000 },
+    mkMember('Isle', 'scenery', []), // no addedAt (legacy member) — stays null
+  ];
   const back = parseRecipe(JSON.parse(JSON.stringify(buildRecipe('MyPack', members))));
   assert.equal(back.packName, 'MyPack');
-  assert.deepEqual(back.members.map((m) => [m.sourceId, m.san, m.name, m.kind]), [
-    ['src_F-15', 'F-15', 'F-15', 'aircraft'],
-    ['src_Isle', 'Isle', 'Isle', 'scenery'],
+  assert.deepEqual(back.members.map((m) => [m.sourceId, m.san, m.name, m.kind, m.addedAt]), [
+    ['src_F-15', 'F-15', 'F-15', 'aircraft', 1700000000000],
+    ['src_Isle', 'Isle', 'Isle', 'scenery', null],
   ]);
 });
 

@@ -14,9 +14,12 @@
 // member's .lst text are rewritten to match — so two works that both borrow
 // f15.dnm (with different paint) never collide.
 
-import { studioChrome, LANG, el, row, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, saveOrReplace, listCreations, loadCreation } from './studio-shared.js';
+import { studioChrome, LANG, el, row, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, saveOrReplace, listCreations, loadCreation, webSha256 } from './studio-shared.js';
 import { RECIPE_FILE, SCENERY_START } from './workbench.js';
-import { sanitize, uniqueSan, namespaceSnapshot, composeEntries, memberState, refreshPlan } from './studio-pack-core.js';
+import {
+  sanitize, uniqueSan, namespaceSnapshot, composeEntries, memberState, refreshPlan,
+  parseRecipe, fmtBytes, memberBytes, summarize,
+} from './studio-pack-core.js';
 import * as opfs from './opfs-store.js';
 import { zipSync } from './vendor/fflate.js';
 
@@ -45,6 +48,10 @@ const S = ({
     refreshAllConfirm: (n, names) => n + ' 件を最新版に更新します（収録は更新時点で再固定されます）:\n・' + names.join('\n・'),
     refreshAllDone: (n) => '✓ ' + n + ' 件を最新版に更新しました',
     snapshotNote: '追加時点の内容で固定（↺で最新版に更新できます）',
+    summaryLine: (k, f, b) => '合計: ' + k + ' 作品 · ' + f + ' ファイル · ' + b,
+    detailTitle: '収録内容の詳細を開閉',
+    addedAtLabel: '収録日時', addedAtUnknown: '（記録なし — 旧形式のレシピ）',
+    filesLabel: '含有ファイル',
     orphanNote: '元の作品は削除済み — このパック内のスナップショットだけが残っています',
     kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
     packTitle: '🧩 パック',
@@ -88,6 +95,10 @@ const S = ({
     refreshAllConfirm: (n, names) => 'Refresh ' + n + ' member(s) to their latest versions (re-frozen as of now):\n· ' + names.join('\n· '),
     refreshAllDone: (n) => '✓ Refreshed ' + n + ' member(s)',
     snapshotNote: 'Frozen as of when it was added (↺ refreshes to latest)',
+    summaryLine: (k, f, b) => 'Total: ' + k + ' work(s) · ' + f + ' file(s) · ' + b,
+    detailTitle: 'Toggle member details',
+    addedAtLabel: 'Added', addedAtUnknown: '(not recorded — old recipe)',
+    filesLabel: 'Files',
     orphanNote: 'The source work was deleted — only this pack’s snapshot remains',
     kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
     packTitle: '🧩 Pack',
@@ -171,7 +182,7 @@ async function addMember(c) {
   const san = memberSan(c.name || c.id);
   members.push({
     sourceId: c.id, san, name: c.name || c.id, kind: c.kind,
-    files: await snapshotFromRecord(rec, san),
+    files: await snapshotFromRecord(rec, san), addedAt: Date.now(),
   });
 }
 
@@ -346,6 +357,7 @@ async function refreshMember(m, currentId) {
   if (!rec) return false;
   m.files = await snapshotFromRecord(rec, m.san);
   m.sourceId = currentId;
+  m.addedAt = Date.now(); // re-frozen as of now
   return true;
 }
 
@@ -357,6 +369,11 @@ renderMembers = () => {
     memberCol.appendChild(el('div', 'msg', S.membersEmpty));
     return;
   }
+  // Whole-pack summary: works / files / total size.
+  const sum = summarize(members);
+  const sumEl = el('div', null, S.summaryLine(sum.works, sum.files, fmtBytes(sum.bytes)));
+  sumEl.style.cssText = 'color:#cfe0f5;font-size:12px;margin-bottom:8px';
+  memberCol.appendChild(sumEl);
   // Bulk ↺: shown only when the hash diff found outdated members; the confirm
   // lists exactly what would be re-frozen before anything happens.
   const plan = refreshPlan(members, creationsCache);
@@ -381,13 +398,16 @@ renderMembers = () => {
   }
   members.forEach((m, i) => {
     const st = memberState(m, creationsCache);
-    const r = itemRow(S.kindGlyph[m.kind] || '📦', m.name, st.state === 'orphan' ? S.orphanNote : (m.files.length + 'f'));
+    const note = st.state === 'orphan' ? S.orphanNote : (m.files.length + 'f · ' + fmtBytes(memberBytes(m)));
+    const r = itemRow(S.kindGlyph[m.kind] || '📦', m.name, note);
     if (st.state === 'stale') {
       const badge = el('span', null, S.staleBadge);
       badge.title = S.staleTitle;
       badge.style.cssText = 'flex:none;color:#e3b341;font-size:10.5px;border:1px solid #5c4a1a;border-radius:5px;padding:1px 6px';
       r.appendChild(badge);
     }
+    const dt = smallBtn(r, m.open ? '▾' : '▸', S.detailTitle, false);
+    dt.addEventListener('click', () => { m.open = !m.open; renderMembers(); });
     if (st.state !== 'orphan') {
       const rf = smallBtn(r, S.refresh, S.refreshTitle, false);
       rf.addEventListener('click', async () => {
@@ -405,8 +425,35 @@ renderMembers = () => {
     rm.style.color = '#c75d6a';
     rm.addEventListener('click', () => { members.splice(i, 1); renderMembers(); });
     memberCol.appendChild(r);
+    if (m.open) memberCol.appendChild(memberDetail(m));
   });
 };
+
+// The expanded member view: kind, freeze time, and the exact snapshot contents
+// (path · size · short content hash).  Hashes are computed lazily on first
+// expand and cached on the file objects (a refresh replaces the array, so
+// stale hashes can't survive).
+function memberDetail(m) {
+  const d = el('div');
+  d.style.cssText = 'margin:-2px 0 8px;padding:8px 10px;border:1px dashed #2a3647;border-radius:7px;font-size:11.5px;color:#8fa3bb';
+  d.appendChild(el('div', null,
+    (S.kindGlyph[m.kind] || '📦') + ' ' + m.kind + ' · ' + S.addedAtLabel + ': ' +
+    (m.addedAt ? new Date(m.addedAt).toLocaleString() : S.addedAtUnknown)));
+  const fl = el('div', null, S.filesLabel + ':');
+  fl.style.marginTop = '4px';
+  d.appendChild(fl);
+  for (const f of m.files) {
+    const line = el('div', null, f.path + ' · ' + fmtBytes(f.bytes.length) + ' · ');
+    line.style.cssText = 'font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;color:#7d93b0;' +
+      'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const hs = el('span', null, '…');
+    line.appendChild(hs);
+    if (f.sha) hs.textContent = f.sha.slice(0, 10);
+    else webSha256(f.bytes).then((h) => { f.sha = h; hs.textContent = h.slice(0, 10); }).catch(() => { hs.textContent = '?'; });
+    d.appendChild(line);
+  }
+  return d;
+}
 
 // rail: pack identity + save + export.
 function buildRail() {
@@ -485,15 +532,16 @@ async function main2() {
       const c = await loadCreation(editId);
       if (c && c.recipe && c.recipe.type === 'pack') {
         const packRec = await opfs.getRecord(editId);
+        const parsed = parseRecipe(c.recipe); // tolerates old-studio recipes
         members = [];
-        for (const m of c.recipe.members || []) {
+        for (const m of parsed.members) {
           const files = await snapshotFromPack(packRec, m.san);
           // fresh/stale/orphan is derived at render time (memberState vs. the
           // library snapshot), so nothing else is loaded here.
-          members.push({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind, files });
+          members.push({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind, files, addedAt: m.addedAt });
         }
         editingId = editId;
-        nameIn.value = c.recipe.packName || c.name || '';
+        nameIn.value = parsed.packName || c.name || '';
         editBadge.textContent = S.editingBadge(c.name || editId);
       } else if (c && c.recipe) {
         location.replace(pageUrl(c.recipe.type === 'scenery' ? 'studio-scenery.html' : 'studio-aircraft.html', { edit: editId }));
