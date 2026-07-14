@@ -29,6 +29,13 @@ const S = ({
     membersTitle: '📦 このパックの収録内容',
     membersEmpty: '（まだ空です — 左の作品を「＋」で収録）',
     add: '＋', addTitle: 'このパックに収録する',
+    checkTitle: 'まとめて収録する対象に選ぶ',
+    searchPh: '名前で検索…',
+    filterAll: 'すべて', filterAir: '✈️ 機体', filterSce: '🏝 マップ',
+    addSelected: (n) => '☑ 選択した ' + n + ' 件を収録',
+    addedN: (n) => '✓ ' + n + ' 件を収録しました',
+    preselectNote: '前回保存したパックの収録セットを自動選択しています（チェックを外して調整できます）',
+    noMatch: '（検索・フィルタに一致する作品がありません）',
     remove: '−', removeTitle: '収録から外す',
     refresh: '↺', refreshTitle: '元の作品の最新版に更新する（収録は追加時点で固定です）',
     refreshed: (n) => '✓ ' + n + ' を最新版に更新しました',
@@ -60,6 +67,13 @@ const S = ({
     membersTitle: '📦 In this pack',
     membersEmpty: '(Empty — add works from the left with “＋”)',
     add: '＋', addTitle: 'Include in this pack',
+    checkTitle: 'Select for bulk add',
+    searchPh: 'Search by name…',
+    filterAll: 'All', filterAir: '✈️ Aircraft', filterSce: '🏝 Maps',
+    addSelected: (n) => '☑ Add ' + n + ' selected',
+    addedN: (n) => '✓ Added ' + n + ' work(s)',
+    preselectNote: 'Your last saved pack’s set is pre-selected (uncheck to adjust)',
+    noMatch: '(No works match the search / filter)',
     remove: '−', removeTitle: 'Remove from the pack',
     refresh: '↺', refreshTitle: 'Refresh to the source work’s latest version (members are frozen at add time)',
     refreshed: (n) => '✓ Refreshed ' + n + ' to its latest version',
@@ -121,7 +135,35 @@ let editingId = null;
 let savedName = null; // last saved pack name (enables export)
 let savedZip = null;  // last composed zip bytes (export without recompose)
 
+// The creation-picker (left column) state: the library list is loaded once at
+// boot; search/kind filtering and the checked set are pure view state.
+let creationsCache = [];    // aircraft/scenery creations only (packs don't nest)
+const selected = new Set(); // creation ids checked for bulk add
+let availFilter = { term: '', kind: 'all' };
+let preselectApplied = false;
+
+// "Last curated set": the sourceIds of the last SAVED pack, remembered so the
+// next new pack starts pre-checked (no re-picking the same works every time).
+// localStorage, guarded like every other ysfw* key (private mode).
+const LAST_MEMBERS_KEY = 'ysfwPackLastMembers';
+const readLastMembers = () => {
+  try { const v = JSON.parse(localStorage.getItem(LAST_MEMBERS_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+};
+const writeLastMembers = (ids) => { try { localStorage.setItem(LAST_MEMBERS_KEY, JSON.stringify(ids)); } catch (e) {} };
+
 const memberSan = (name) => uniqueSan(name, members.map((m) => m.san));
+
+// Snapshot one library creation and append it as a member (shared by the
+// per-row ＋, the bulk add, and the composeAll smoke driver).
+async function addMember(c) {
+  const rec = await opfs.getRecord(c.id);
+  const san = memberSan(c.name || c.id);
+  members.push({
+    sourceId: c.id, san, name: c.name || c.id, kind: c.kind,
+    files: await snapshotFromRecord(rec, san), orphan: false,
+  });
+}
 
 const composeZip = (packName) => zipSync(composeEntries(members, packName));
 
@@ -166,19 +208,39 @@ const smallBtn = (parent, label, title, accent) => {
 
 let renderAvail = () => {};
 let renderMembers = () => {};
+let availRows = null, bulkAddBtn = null;
 
-renderAvail = async () => {
-  availCol.innerHTML = '';
-  availCol.appendChild(el('h2', null, S.availTitle));
-  availCol.appendChild(el('p', 'intro', S.availIntro));
-  // Only aircraft/scenery works can be members — packs don't nest.
-  const creations = (await listCreations()).filter((c) => c.kind === 'aircraft' || c.kind === 'scenery');
-  if (!creations.length) {
-    availCol.appendChild(el('div', 'msg', S.availEmpty));
+function updateBulkAdd() {
+  if (!bulkAddBtn) return;
+  bulkAddBtn.textContent = S.addSelected(selected.size);
+  bulkAddBtn.disabled = selected.size === 0;
+  bulkAddBtn.classList.toggle('accent', selected.size > 0);
+}
+
+// Only the row list re-renders on search/filter input, so the search box never
+// loses focus mid-typing.
+function renderAvailRows() {
+  if (!availRows) return;
+  availRows.innerHTML = '';
+  const term = availFilter.term.trim().toLowerCase();
+  const list = creationsCache.filter((c) =>
+    (availFilter.kind === 'all' || c.kind === availFilter.kind) &&
+    (!term || String(c.name || c.id).toLowerCase().includes(term)));
+  if (!list.length) {
+    availRows.appendChild(el('div', 'msg', S.noMatch));
+    updateBulkAdd();
     return;
   }
-  for (const c of creations) {
+  for (const c of list) {
     const r = itemRow(S.kindGlyph[c.kind] || '📦', c.name || c.id, c.identities[0] || c.sceneryIdent || '');
+    const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: selected.has(c.id) });
+    cb.title = S.checkTitle;
+    cb.style.cssText = 'flex:none;accent-color:#4da3ff;margin:0';
+    cb.addEventListener('change', () => {
+      if (cb.checked) selected.add(c.id); else selected.delete(c.id);
+      updateBulkAdd();
+    });
+    r.insertBefore(cb, r.firstChild);
     if (c.identities.length > 0 || (c.kind === 'scenery' && c.sceneryIdent)) {
       const fly = smallBtn(r, S.fly, S.flyTitle, false);
       fly.addEventListener('click', () => {
@@ -188,16 +250,12 @@ renderAvail = async () => {
       });
     }
     const add = smallBtn(r, S.add, S.addTitle, true);
+    add.dataset.add = '1';
     add.addEventListener('click', async () => {
       add.disabled = true;
       msg.textContent = S.working;
       try {
-        const rec = await opfs.getRecord(c.id);
-        const san = memberSan(c.name || c.id);
-        members.push({
-          sourceId: c.id, san, name: c.name || c.id, kind: c.kind,
-          files: await snapshotFromRecord(rec, san), orphan: false,
-        });
+        await addMember(c);
         msg.textContent = '';
         renderMembers();
       } catch (e) {
@@ -206,8 +264,68 @@ renderAvail = async () => {
         add.disabled = false;
       }
     });
-    availCol.appendChild(r);
+    availRows.appendChild(r);
   }
+  updateBulkAdd();
+}
+
+renderAvail = () => {
+  availCol.innerHTML = '';
+  availRows = null;
+  bulkAddBtn = null;
+  availCol.appendChild(el('h2', null, S.availTitle));
+  availCol.appendChild(el('p', 'intro', S.availIntro));
+  if (!creationsCache.length) {
+    availCol.appendChild(el('div', 'msg', S.availEmpty));
+    return;
+  }
+  // Toolbar: name search + kind filter, then the bulk-add button for the
+  // checked set (the fix for "re-pick everything on every pack").
+  const bar = el('div');
+  bar.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+  const search = Object.assign(document.createElement('input'), { type: 'search', placeholder: S.searchPh, value: availFilter.term });
+  search.style.cssText = 'flex:1;min-width:0;padding:5px 9px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+  search.addEventListener('input', () => { availFilter.term = search.value; renderAvailRows(); });
+  const kindSel = document.createElement('select');
+  for (const [v, label] of [['all', S.filterAll], ['aircraft', S.filterAir], ['scenery', S.filterSce]]) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = label;
+    kindSel.appendChild(o);
+  }
+  kindSel.value = availFilter.kind;
+  kindSel.style.cssText = 'flex:none;padding:5px 6px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+  kindSel.addEventListener('change', () => { availFilter.kind = kindSel.value; renderAvailRows(); });
+  bar.appendChild(search);
+  bar.appendChild(kindSel);
+  availCol.appendChild(bar);
+
+  bulkAddBtn = el('button', null, S.addSelected(0));
+  bulkAddBtn.style.cssText += ';font-size:12px;margin-bottom:8px';
+  bulkAddBtn.addEventListener('click', async () => {
+    // Skip works already in the pack, so a stale pre-selection can't duplicate.
+    const targets = creationsCache.filter((c) => selected.has(c.id) && !members.some((m) => m.sourceId === c.id));
+    bulkAddBtn.disabled = true;
+    msg.textContent = S.working;
+    try {
+      for (const c of targets) await addMember(c);
+      selected.clear();
+      msg.textContent = S.addedN(targets.length);
+      renderAvailRows();
+      renderMembers();
+    } catch (e) {
+      msg.textContent = S.errorPrefix + ((e && e.message) || e);
+    } finally {
+      bulkAddBtn.disabled = false;
+      updateBulkAdd();
+    }
+  });
+  availCol.appendChild(bulkAddBtn);
+  if (preselectApplied) availCol.appendChild(el('p', 'intro', S.preselectNote));
+
+  availRows = el('div');
+  availCol.appendChild(availRows);
+  renderAvailRows();
 };
 
 renderMembers = () => {
@@ -278,6 +396,7 @@ function buildRail() {
       editingId = res.id;
       savedName = name;
       savedZip = zip;
+      writeLastMembers(members.map((m) => m.sourceId).filter(Boolean));
       msg.textContent = S.saved(name, members.length);
       expMsg.textContent = '';
     } catch (e) {
@@ -304,6 +423,10 @@ function buildRail() {
 
 async function main2() {
   const { nameIn, editBadge } = buildRail();
+
+  // Load the library once: the avail column, the pre-selection, and the member
+  // freshness checks all read this snapshot.
+  creationsCache = (await listCreations()).filter((c) => c.kind === 'aircraft' || c.kind === 'scenery');
 
   // ?edit=<id>: re-open a saved pack.  Members are re-snapshotted from their
   // SOURCE creations when those still exist (recipe = curation, source = truth
@@ -333,25 +456,28 @@ async function main2() {
     }
   }
 
-  await renderAvail();
+  // New pack: pre-check the last saved pack's set so recurring curation
+  // (same works, updated content) starts one click from done.
+  if (!editId) {
+    for (const id of readLastMembers()) if (creationsCache.some((c) => c.id === id)) selected.add(id);
+    preselectApplied = selected.size > 0;
+  }
+
+  renderAvail();
   renderMembers();
 
   window.ysfwStudio = {
     ready: true,
     page: 'pack',
     counts: () => ({
-      available: availCol.querySelectorAll('button.accent').length,
+      available: availCol.querySelectorAll('button[data-add]').length,
       members: members.length,
     }),
     // Smoke/console driver: curate every available creation into a pack and save.
     composeAll: async (name) => {
       members = [];
-      const creations = (await listCreations()).filter((c) => c.kind === 'aircraft' || c.kind === 'scenery');
-      for (const c of creations) {
-        const rec = await opfs.getRecord(c.id);
-        const san = memberSan(c.name || c.id);
-        members.push({ sourceId: c.id, san, name: c.name || c.id, kind: c.kind, files: await snapshotFromRecord(rec, san), orphan: false });
-      }
+      creationsCache = (await listCreations()).filter((c) => c.kind === 'aircraft' || c.kind === 'scenery');
+      for (const c of creationsCache) await addMember(c);
       renderMembers();
       const zip = composeZip(name);
       const res = await saveOrReplace(zip, name, editingId);
