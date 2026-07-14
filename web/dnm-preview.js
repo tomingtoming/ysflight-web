@@ -429,7 +429,7 @@ export function mountPreview(container, bytes) {
     setPaint: (mapping) => applyPaint(built.meshesByLabel, mapping),
     setAutoSpin: (on) => { spin = on; },
     // Exposed for studio-paint.js face-picking (scene/camera/built/parsed).
-    scene, camera, renderer, built, parsed,
+    scene, camera: cam, renderer, built, parsed,
     dispose: () => {
       cancelAnimationFrame(raf);
       renderer.dispose();
