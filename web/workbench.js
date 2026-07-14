@@ -464,9 +464,21 @@ function mountainTer({ radiusM = 1500, heightM = 300, n = 16 }) {
 
 // One runway = flat pavement PLGs (grey base + white threshold bars +
 // centerline dashes, all in the shared .pc2), a PST AREA LAND rectangle so it
-// is landable even when it sticks out over water, and a ground spawn point
+// is landable even when it sticks out over water, an RGN id-1 rect region so
+// the ENGINE treats touchdown/rollout as ON-runway, and a ground spawn point
 // 60m in from the approach end (alt 0 / speed 0 = the engine starts you
 // parked, gear down, ready to roll).
+//
+// Why the RGN matters (fsexistence.cpp FsAirplane::HitGround): on ground
+// contact the engine looks up the rect regions under the aircraft
+// (FsField::GetFieldRegion) and only ids 1 (runway) and 2 (taxiway) count as
+// safe pavement (FsSimulation::IsSafeTerrainRegionId).  Without one, the PST
+// AREA LAND only saves you from "splashed into the water": the touchdown is
+// flagged out-of-runway, which either kills the flight (LANDEDOUTOFRUNWAY)
+// or, when landing anywhere is allowed, sets IsOutOfRunway and the rollout
+// gets the rough-field random pitch jolts above 8m/s.  Stock fields carry
+// exactly this RGN over every runway (e.g. crescent.fld: ARE +-23.2 x
+// +-1675.2, ID 1).
 function runwayShapes({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45 }) {
   const h = (headingDeg * Math.PI) / 180;          // compass: 0 = north = +Z, 90 = east = +X
   const fx = Math.sin(h), fz = Math.cos(h);        // forward (landing/takeoff direction)
@@ -492,6 +504,15 @@ function runwayShapes({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45 }) {
   return {
     polys,
     landPad: rect(0, 0, lengthM / 2 + 10, widthM / 2 + 10),
+    // RGN geometry: ARE is the min/max rect in the region's LOCAL frame (the
+    // local +z axis runs along the runway), POS carries the rotation.  The
+    // rotation is the ENGINE attitude (the same value the runway spawn
+    // writes), so the region's long axis is exactly the pavement axis; 10m
+    // margin matches the landPad.
+    rgn: {
+      x, z, headingDeg,
+      halfW: widthM / 2 + 10, halfL: lengthM / 2 + 10,
+    },
     start: {
       x: x - fx * (lengthM / 2 - 60), z: z - fz * (lengthM / 2 - 60),
       altM: 0, speedMS: 0, headingDeg,
@@ -591,6 +612,17 @@ export function assembleSceneryZip(opts) {
       fldLines.push('PST', 'ISLOOP TRUE', 'AREA LAND');
       for (const [x, z] of points) fldLines.push('PNT ' + num(x, 2) + ' 0.00 ' + num(z, 2));
       fldLines.push('FIL ""', 'POS 0.00 0.00 0.00 0.00 0.00 0.00', 'ID 0', 'END');
+    }
+    // ID-1 "safe pavement" region per runway (see runwayShapes) — this is
+    // what makes touchdown and rollout count as ON the runway.
+    for (const r of rws) {
+      fldLines.push(
+        'RGN',
+        'ARE ' + num(-r.rgn.halfW, 2) + ' ' + num(-r.rgn.halfL, 2) + ' ' + num(r.rgn.halfW, 2) + ' ' + num(r.rgn.halfL, 2),
+        'POS ' + num(r.rgn.x, 2) + ' 0.00 ' + num(r.rgn.z, 2) + ' ' + deg32768(compassToEngineDeg(r.rgn.headingDeg)) + ' 0 0',
+        'ID 1',
+        'END',
+      );
     }
   }
   // Mountains: one PCK'd TER each; the PCK line count must equal the embedded
