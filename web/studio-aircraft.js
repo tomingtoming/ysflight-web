@@ -674,6 +674,7 @@ function exitView() {
     preview.setCockpitView(false);
     preview.setCockpit(cockpit);
   }
+  if (vpTools) vpTools.setVisible(true);
   if (cycleBtn) {
     cycleBtn.textContent = S.vpCycle;
     cycleBtn.classList.remove('accent');
@@ -687,6 +688,7 @@ function stepView() {
   if (viewIx >= stops.length) { exitView(); return; }
   preview.setCockpit(stops[viewIx].pose);
   preview.setCockpitView(true);
+  if (vpTools) vpTools.setVisible(false); // markers would sit in the lens
   cycleBtn.textContent = S.vpViewing(stops[viewIx].name);
   cycleBtn.classList.add('accent');
 }

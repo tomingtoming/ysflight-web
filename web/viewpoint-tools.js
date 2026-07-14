@@ -165,6 +165,9 @@ export function mountViewpointTools(preview, opts) {
   return {
     setMarkers,
     capturePose,
+    // Hide all markers while the eye view is on (the selected one would sit
+    // right in the lens — same reason the preview hides its own marker).
+    setVisible: (on) => { group.visible = !!on; },
     dispose: () => {
       if (upL) upL();
       preview.setPointerDownHook(null);
