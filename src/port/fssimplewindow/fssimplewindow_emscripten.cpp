@@ -765,3 +765,8 @@ int FsGetNativeTextInputEvent(void)
 {
 	return FSNATIVETEXTEVENT_NONE;
 }
+
+extern "C" EMSCRIPTEN_KEEPALIVE void YsfwInjectMouseEvent(int eventType,int lb,int mb,int rb,int mx,int my)
+{
+	PushMouseEvent(eventType,lb,mb,rb,mx,my);
+}
