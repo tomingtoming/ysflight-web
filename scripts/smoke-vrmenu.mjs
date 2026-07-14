@@ -1,18 +1,20 @@
 // VR main-menu-in-VR test without a headset.
 //
-// Boots to the main menu (NOT a free flight) and switches the engine into
-// VR + multiview mode through vr.forceMultiview (the same headless hook all
-// other VR smoke tests use).  The new setupMenu() call inside forceMultiview
-// allocates a plain mono RGBA FBO for the menu (skipping the XRQuadLayer,
-// which requires a real XR session) so this test can verify:
+// Boots the BARE page (no ?freeflight -- presses the pack panel's Play button
+// like a user) and switches the engine into VR-presenting mode through
+// vr.forceVrMenu.  Unlike the other VR smokes (which use vr.forceMultiview and
+// therefore need a real multiview-capable GPU, so they run locally), the menu
+// FBO is a plain mono RGBA texture and DrawMenu's off-screen pass never
+// touches the multiview machinery -- so this smoke needs no OVR_multiview2
+// and runs on CI's GPU-less runners.  Verifies:
 //
-//   1. YsfwVrMenuDataPointer() export is accessible.
-//   2. After forceMultiview, menuData[0] === 1 (FBO allocated, enable flag set).
+//   1. The VR test hooks / wasm exports are accessible.
+//   2. After forceVrMenu, menuData[0] === 1 (FBO allocated, enable flag set).
 //   3. menuData[3] and menuData[4] are the canvas width/height (FBO size).
 //   4. After a few engine ticks, menuData[5] becomes 1 (DrawMenu wrote to FBO).
-//   5. The menu FBO contains non-trivial content (mean luminance > 0, alpha > 0).
-//   6. The watchdog does NOT fire: simSilentFrames stays 0 while the menu is
-//      being rendered (DrawMenu calls FsVrMarkSimDrawn each frame).
+//   5. The menu FBO contains non-trivial content (mean luminance > 0).
+//   6. DrawMenu feeds the watchdog: FsVrConsumeSimDrawnFrames() > 0 while the
+//      menu is being rendered (FsVrMarkSimDrawn each menu frame).
 //
 //   node scripts/smoke-vrmenu.mjs [url] [outDir]
 import { chromium } from 'playwright';
@@ -124,10 +126,11 @@ const missingHook = await page.evaluate(() => {
   const M = globalThis.Module;
   const vr = M && M.ysfwVr;
   if (!vr) return 'Module.ysfwVr';
-  for (const k of ['forceMultiview', 'readMenuData', 'readMenuStats']) {
+  for (const k of ['forceVrMenu', 'readMenuData', 'readMenuStats']) {
     if (!vr[k]) return 'vr.' + k;
   }
   if (typeof M._YsfwVrMenuDataPointer !== 'function') return 'Module._YsfwVrMenuDataPointer';
+  if (typeof M._YsfwVrConsumeSimDrawnFrames !== 'function') return 'Module._YsfwVrConsumeSimDrawnFrames';
   return null;
 });
 if (missingHook) {
@@ -136,40 +139,30 @@ if (missingHook) {
   process.exit(1);
 }
 
-// ---- menuData should start at all zeros before multiview engages ----------
+// ---- menuData should start at all zeros before VR engages ------------------
 let menuData = await page.evaluate(() => globalThis.Module.ysfwVr.readMenuData());
-check('menuData all zeros before forceMultiview', menuData.every((v) => v === 0), 'menuData=' + JSON.stringify(menuData));
+check('menuData all zeros before forceVrMenu', menuData.every((v) => v === 0), 'menuData=' + JSON.stringify(menuData));
 
-// ---- Enter multiview mode (same synthetic eye data as smoke-mv.mjs) --------
-// forceMultiview now also calls setupMenu(), which allocates the menu FBO.
-const W = 512, H = 512;
-const forced = await page.evaluate(([w, h]) => {
-  const M = globalThis.Module;
-  const vr = M && M.ysfwVr;
-  if (!vr || !vr.pokeEye || !vr.forceMultiview) return 'hooks-missing';
-  const s = Math.sin(5 * Math.PI / 180), c = Math.cos(5 * Math.PI / 180);
-  vr.pokeEye(0, [
-    1, 1, 1, 1,
-    1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, +0.032, 0, 0, 1,
-    0, 0, w, h
-  ]);
-  vr.pokeEye(1, [
-    1, 1, 1, 1,
-    c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, -0.032, 0, 0, 1,
-    0, 0, w, h
-  ]);
-  return vr.forceMultiview(w, h);
-}, [W, H]);
-check('forceMultiview returned ok', forced === 'ok', 'result=' + forced);
+// ---- Enter VR-presenting mode (menu path only, NO multiview) ---------------
+// The menu FBO is a plain mono texture and DrawMenu's off-screen pass never
+// touches the multiview scene machinery, so this smoke uses forceVrMenu --
+// which does not require OVR_multiview2 -- and therefore runs on CI's
+// GPU-less runners (forceMultiview and the other VR smokes need a real GPU
+// and run locally instead).
+const forced = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  return vr.forceVrMenu();
+});
+check('forceVrMenu returned ok', forced === 'ok', 'result=' + forced);
 if (forced !== 'ok') {
-  console.error('FAILED to force multiview mode: ' + forced);
+  console.error('FAILED to force VR menu mode: ' + forced);
   await browser.close();
   process.exit(1);
 }
 
-// ---- menuData[0] must be 1 (FBO allocated) immediately after forceMultiview -
+// ---- menuData[0] must be 1 (FBO allocated) immediately after forceVrMenu ---
 menuData = await page.evaluate(() => globalThis.Module.ysfwVr.readMenuData());
-check('menuData[0] (enable) === 1 after forceMultiview (FBO allocated)', menuData[0] === 1, 'menuData=' + JSON.stringify(menuData));
+check('menuData[0] (enable) === 1 after forceVrMenu (FBO allocated)', menuData[0] === 1, 'menuData=' + JSON.stringify(menuData));
 check('menuData[3] (texWidth) > 0', menuData[3] > 0, 'w=' + menuData[3]);
 check('menuData[4] (texHeight) > 0', menuData[4] > 0, 'h=' + menuData[4]);
 check('menuData[1] (menuFbo) > 0 (valid GL framebuffer id)', menuData[1] > 0, 'fbo=' + menuData[1]);
@@ -202,19 +195,22 @@ check('menuData[5] (menuDrawn) becomes 1 after engine ticks (DrawMenu rendered i
 const stats = await page.evaluate(() => globalThis.Module.ysfwVr.readMenuStats());
 check('menu FBO has non-zero mean luminance (content was drawn)', stats.lum > 0.5, 'lum=' + stats.lum.toFixed(2));
 
-// ---- Sky: setupSky() graceful-degrade in test mode -------------------------
-// In test mode (forceMultiview with no real XR binding) setupSky() detects
-// the missing mvBinding and returns without allocating, leaving skyRes===null.
-// This verifies the sky path doesn't throw on a headless/non-layers browser.
-const skyRes = await page.evaluate(() => globalThis.Module.ysfwVr.skyRes);
-check('skyRes is null in test mode (no real XR binding -- graceful degrade)', skyRes === null, 'skyRes=' + JSON.stringify(skyRes));
+// ---- Sky: never allocated on this path --------------------------------------
+// forceVrMenu does not call setupSky (the sky needs a real XR layers binding);
+// this just verifies nothing on the menu path allocated it by accident.
+const skyRes = await page.evaluate(() => {
+  const s = globalThis.Module.ysfwVr.skyRes;
+  return s === null || s === undefined ? 'unset' : JSON.stringify(s);
+});
+check('skyRes stays unset on the menu-only test path', skyRes === 'unset', 'skyRes=' + skyRes);
 
-// ---- vr.simSilentFrames should be 0 (watchdog disarmed) -------------------
-// DrawMenu calls FsVrMarkSimDrawn, which increments the sim-drawn counter.
-// ConsumeSimDrawnFrames resets it and returns > 0, so onXRFrame keeps
-// simSilentFrames at 0.
-const simSilent = await page.evaluate(() => globalThis.Module.ysfwVr.simSilentFrames);
-check('simSilentFrames === 0 (DrawMenu keeps the watchdog disarmed)', simSilent === 0, 'simSilentFrames=' + simSilent);
+// ---- Watchdog feed: DrawMenu marks every menu frame as sim-drawn -----------
+// FsVrMarkSimDrawn increments the engine-side counter that onXRFrame's
+// watchdog consumes (FsVrConsumeSimDrawnFrames): a positive value here is the
+// direct proof that menu frames keep a real session alive.  (Consuming it in
+// the test is safe -- no onXRFrame loop runs in test mode.)
+const simFed = await page.evaluate(() => globalThis.Module._YsfwVrConsumeSimDrawnFrames());
+check('FsVrMarkSimDrawn fed the watchdog (consumed > 0 menu frames)', simFed > 0, 'consumed=' + simFed);
 
 await page.screenshot({ path: outDir + '/vrmenu-test-1-vr.png' });
 console.log('wrote ' + outDir + '/vrmenu-test-1-vr.png');

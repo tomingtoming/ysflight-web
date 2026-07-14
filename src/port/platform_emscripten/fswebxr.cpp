@@ -5231,6 +5231,25 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		return 'ok';
 	};
+	// Headless test hook for the main-menu-in-VR path ONLY: the menu FBO is a
+	// plain mono texture (see setupMenu) and DrawMenu's off-screen pass never
+	// touches the multiview scene machinery, so this hook deliberately does
+	// NOT require OVR_multiview2 -- CI runners have no multiview-capable GL,
+	// which is why scripts/smoke-vrmenu.mjs cannot use forceMultiview above
+	// (the other VR smokes run on a real GPU instead).  Just allocate the
+	// menu FBO in test mode and flip the engine into VR-presenting so
+	// FsRunLoop::DrawMenu takes its VR branch.
+	vr.forceVrMenu=function()
+	{
+		vr.testMode=true;
+		setupMenu();
+		if(!vr.menuRes)
+		{
+			return 'no menu fbo';
+		}
+		_YsfwVrSetPresenting(1);
+		return 'ok';
+	};
 	vr.readMultiviewStats=function(layer)
 	{
 		// Mean luminance of a layer of the test color texture-array.
