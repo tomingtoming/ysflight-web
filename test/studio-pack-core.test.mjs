@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 
 import {
   sanitize, uniqueSan, namespaceSnapshot, buildRecipe, parseRecipe,
-  composeEntries, fmtBytes, summarize, memberState, refreshPlan,
+  composeEntries, fmtBytes, summarize, memberState, refreshPlan, memberFlight,
 } from '../web/studio-pack-core.js';
 import { RECIPE_FILE } from '../web/workbench.js';
 import { analyzePack } from '../web/packs.js';
@@ -150,6 +150,20 @@ test('refreshPlan drives the bulk-↺ summary (stale targets + counts)', () => {
   assert.deepEqual(plan.stale, [{ index: 0, name: 'F-15', currentId: 'new_f15' }]);
   assert.deepEqual(plan.orphans, ['Zero']);
   assert.equal(plan.fresh, 1);
+});
+
+test('memberFlight reads launch targets from the snapshot bytes', () => {
+  // aircraft: IDENTIFY from the namespaced .dat
+  const air = mkMember('F-15', 'aircraft', namespaceSnapshot(aircraftFiles(), 'f15'));
+  assert.deepEqual(memberFlight(air), { identities: ['WB_F15'], sceneryIdent: null });
+  // scenery: the (possibly quoted) first token of the sce list
+  const sce = mkMember('Isle', 'scenery', namespaceSnapshot(sceneryFiles(), 'isle'));
+  assert.deepEqual(memberFlight(sce), { identities: [], sceneryIdent: 'WB_ISLE' });
+  const quoted = mkMember('Q', 'scenery', [{ path: 'scenery/sce_q.lst', bytes: E('"MY FIELD" scenery/q.fld scenery/q.stp\n') }]);
+  assert.equal(memberFlight(quoted).sceneryIdent, 'MY FIELD');
+  // a .dat without an ASCII IDENTIFY yields no launchable identity
+  const noIdn = mkMember('X', 'aircraft', [{ path: 'aircraft/x.dat', bytes: E('WEIGHCLN 5t\n') }]);
+  assert.deepEqual(memberFlight(noIdn).identities, []);
 });
 
 test('fmtBytes / summarize', () => {

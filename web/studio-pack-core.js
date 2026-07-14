@@ -9,6 +9,7 @@
 // add time; ↺ refresh is always an explicit act.
 
 import { RECIPE_FILE } from './workbench.js';
+import { parseDatIdentity } from './packs.js';
 
 const te = new TextEncoder();
 const td = new TextDecoder();
@@ -139,6 +140,36 @@ export function composeEntries(members, packName) {
   for (const m of members) for (const f of m.files) entries[f.path] = f.bytes;
   entries[RECIPE_FILE] = te.encode(JSON.stringify(buildRecipe(packName, members)));
   return entries;
+}
+
+// --- test flight -------------------------------------------------------------------
+
+// What ?freeflight= can launch from a member, read from the SNAPSHOT bytes
+// themselves (no library lookup, so it also works for orphaned members whose
+// saved pack is installed):
+//   aircraft — the ASCII IDENTIFY of each .dat in the snapshot.  The engine
+//              registers the same IDENTIFY whether the bytes come from the
+//              source creation or the saved pack, so launching by name flies
+//              the installed content.  Non-ASCII identities can't be launched
+//              by name (parseDatIdentity returns null, same rule as the game
+//              page's test-fly button).
+//   scenery  — the field identifier: the first token of the member's sce list
+//              (possibly quoted).
+export function memberFlight(member) {
+  const identities = [];
+  let sceneryIdent = null;
+  for (const f of member.files || []) {
+    const base = f.path.slice(f.path.lastIndexOf('/') + 1);
+    if (/\.dat$/i.test(base)) {
+      const idn = parseDatIdentity(f.bytes);
+      if (idn && idn.identify) identities.push(idn.identify);
+    } else if (/^sce[^/]*\.lst$/i.test(base)) {
+      const first = td.decode(f.bytes).split('\n').map((l) => l.trim()).find(Boolean);
+      const m = first && first.match(/^"([^"]*)"|^(\S+)/);
+      if (m) sceneryIdent = m[1] || m[2] || sceneryIdent;
+    }
+  }
+  return { identities, sceneryIdent };
 }
 
 // --- display helpers ----------------------------------------------------------------

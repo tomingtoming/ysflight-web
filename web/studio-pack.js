@@ -18,7 +18,7 @@ import { studioChrome, LANG, el, row, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, sav
 import { RECIPE_FILE, SCENERY_START } from './workbench.js';
 import {
   sanitize, uniqueSan, namespaceSnapshot, composeEntries, memberState, refreshPlan,
-  parseRecipe, fmtBytes, memberBytes, summarize,
+  parseRecipe, fmtBytes, memberBytes, summarize, memberFlight,
 } from './studio-pack-core.js';
 import * as opfs from './opfs-store.js';
 import { zipSync } from './vendor/fflate.js';
@@ -70,6 +70,8 @@ const S = ({
     working: '作業中…',
     errorPrefix: 'エラー: ',
     fly: '🛫', flyTitle: 'テスト飛行（ゲームページに移動します）',
+    flyMemberAirTitle: (idn) => 'この機体でテスト飛行: ' + idn + '（ゲームページに移動。インストール済みの内容で飛びます）',
+    flyMemberSceTitle: (idn) => 'このマップで飛ぶ: ' + idn + '（ゲームページに移動）',
   },
   en: {
     title: '📦 Pack Studio',
@@ -117,6 +119,8 @@ const S = ({
     working: 'Working…',
     errorPrefix: 'Error: ',
     fly: '🛫', flyTitle: 'Test-fly (moves to the game page)',
+    flyMemberAirTitle: (idn) => 'Test-fly this aircraft: ' + idn + ' (moves to the game page; flies the installed content)',
+    flyMemberSceTitle: (idn) => 'Fly on this map: ' + idn + ' (moves to the game page)',
   },
 })[LANG];
 
@@ -408,6 +412,17 @@ renderMembers = () => {
     }
     const dt = smallBtn(r, m.open ? '▾' : '▸', S.detailTitle, false);
     dt.addEventListener('click', () => { m.open = !m.open; renderMembers(); });
+    // Test-fly straight from the pack: the identity comes from the member's own
+    // snapshot bytes, and the flight uses whatever is installed under that
+    // identity (the source creation and/or the saved pack — see memberFlight).
+    const flight = memberFlight(m);
+    if (m.kind === 'aircraft' && flight.identities.length > 0) {
+      const fb = smallBtn(r, S.fly, S.flyMemberAirTitle(flight.identities[0]), false);
+      fb.addEventListener('click', () => { location.href = flyUrl(flight.identities[0]); });
+    } else if (m.kind === 'scenery' && flight.sceneryIdent) {
+      const fb = smallBtn(r, S.fly, S.flyMemberSceTitle(flight.sceneryIdent), false);
+      fb.addEventListener('click', () => { location.href = flyUrl(DEFAULT_FLY_AIRCRAFT, flight.sceneryIdent, SCENERY_START); });
+    }
     if (st.state !== 'orphan') {
       const rf = smallBtn(r, S.refresh, S.refreshTitle, false);
       rf.addEventListener('click', async () => {
