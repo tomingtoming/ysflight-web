@@ -120,13 +120,14 @@ console.log('wrote ' + outDir + '/vrmenu-test-0-menu.png');
 
 // ---- Check VR test hooks are present ---------------------------------------
 // The vr.* hooks are guaranteed by the boot wait above; this additionally
-// verifies the wasm export is attached to Module (the direct HEAPF32 reads
-// below depend on it), and names the missing hook on failure.
+// verifies the wasm function exports are attached to Module (function exports
+// are, unlike runtime views such as HEAPF32 -- hence all block reads/writes
+// below go through the vr.* helpers), and names the missing hook on failure.
 const missingHook = await page.evaluate(() => {
   const M = globalThis.Module;
   const vr = M && M.ysfwVr;
   if (!vr) return 'Module.ysfwVr';
-  for (const k of ['forceVrMenu', 'readMenuData', 'readMenuStats']) {
+  for (const k of ['forceVrMenu', 'readMenuData', 'readMenuStats', 'teardownMenuForTest']) {
     if (!vr[k]) return 'vr.' + k;
   }
   if (typeof M._YsfwVrMenuDataPointer !== 'function') return 'Module._YsfwVrMenuDataPointer';
@@ -178,12 +179,11 @@ check('menuData[2] (menuTex) > 0 (valid GL texture id)', menuData[2] > 0, 'tex='
 let menuDrawn = false;
 const pollT0 = Date.now();
 while (Date.now() - pollT0 < 15000) {
-  // Direct HEAPF32 read -- bypass the JS helper so we see the flag BEFORE
-  // updateMenuLayer clears it this same JS task.
-  const drawn = await page.evaluate(() => {
-    const p = Module._YsfwVrMenuDataPointer() >> 2;
-    return Module.HEAPF32[p + 5] !== 0;
-  });
+  // readMenuData reads the block from the EM_JS glue scope (page scripts
+  // cannot touch Module.HEAPF32 -- not an exported runtime method).  Nothing
+  // clears [5] in test mode (updateMenuLayer only runs in a real XR session),
+  // so polling the helper is exact.
+  const drawn = await page.evaluate(() => globalThis.Module.ysfwVr.readMenuData()[5] !== 0);
   if (drawn) { menuDrawn = true; break; }
   await page.waitForTimeout(200);
 }
@@ -216,18 +216,14 @@ await page.screenshot({ path: outDir + '/vrmenu-test-1-vr.png' });
 console.log('wrote ' + outDir + '/vrmenu-test-1-vr.png');
 
 // ---- teardownMenu: menuData cleared on session teardown -------------------
-// Simulate session end by calling teardownMenu via the testMode path.
-await page.evaluate(() => {
-  const vr = globalThis.Module.ysfwVr;
-  // Directly zero the data block (mirrors what teardownMenu does in a real
-  // session end).  A full session-end test would require a real XR session.
-  if (vr.menuRes) {
-    const p = Module._YsfwVrMenuDataPointer() >> 2;
-    for (let i = 0; i < 8; ++i) { Module.HEAPF32[p + i] = 0; }
-  }
-});
+// Run the REAL teardown (vr.teardownMenuForTest wraps teardownMenu): it must
+// zero the whole data block and free the GL resources -- the same code a real
+// session end runs.
+await page.evaluate(() => globalThis.Module.ysfwVr.teardownMenuForTest());
 menuData = await page.evaluate(() => globalThis.Module.ysfwVr.readMenuData());
 check('menuData cleared to zeros after teardown', menuData.every((v) => v === 0), 'menuData=' + JSON.stringify(menuData));
+const menuResAfter = await page.evaluate(() => !!globalThis.Module.ysfwVr.menuRes);
+check('menuRes released after teardown', menuResAfter === false, 'menuRes=' + menuResAfter);
 
 await browser.close();
 

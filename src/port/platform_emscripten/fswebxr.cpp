@@ -5250,6 +5250,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		_YsfwVrSetPresenting(1);
 		return 'ok';
 	};
+	// Headless test hook: run the REAL menu teardown (zeroes the menu data
+	// block and frees the GL resources) -- page-context scripts cannot touch
+	// the block directly (HEAPF32 is not an exported runtime method), so
+	// smoke-vrmenu.mjs exercises teardown through this instead.
+	vr.teardownMenuForTest=function()
+	{
+		teardownMenu();
+	};
 	vr.readMultiviewStats=function(layer)
 	{
 		// Mean luminance of a layer of the test color texture-array.
