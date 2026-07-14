@@ -17,6 +17,21 @@
 // with POS decomposed from the node transform.  Geometry is welded back into
 // shared vertices; meshless nodes get the 3-line stub PCK stock files use.
 //
+// CHIRALITY.  YSFLIGHT is left-handed (+X = starboard, +Z = nose, +Y = up);
+// glTF is right-handed with -X = right.  The exporter therefore mirrors X
+// (positions, normals, transforms conjugated, winding reversed) so the model
+// reads CORRECTLY in Blender/three.js — liveries and titles are no longer
+// their mirror image — and stamps `rh: 1` into every node's extras.ysflight.
+// The importer decides per file:
+//   rh marker present            -> new convention, mirror X back
+//   extras.ysflight, no marker   -> legacy export (pre-flip), pass through
+//   no extras at all             -> genuine foreign glTF (Blender-from-scratch,
+//                                   Flightradar24, ...) = right-handed, mirror
+//                                   (fixes the silent mirroring of foreign
+//                                   models under the old convention)
+// YS-space fields inside extras.ysflight (POS/CNT/STA) stay verbatim either
+// way — the round trip never re-derives them from the mirrored transforms.
+//
 // The scripts/dnm2gltf.mjs and scripts/gltf2dnm.mjs CLIs are thin wrappers
 // around this module.
 
@@ -56,6 +71,12 @@ export function nodeMatrix(pos, sta, cnt) {
   M = mul(M, T(-(cnt[0] || 0), -(cnt[1] || 0), -(cnt[2] || 0)));
   return M;
 }
+
+// Conjugate a rigid transform by the X mirror (F·M·F, F = diag(-1,1,1)): the
+// same motion expressed in the mirrored (right-handed) frame.  Flips the sign
+// of every element with exactly one index in the X row/column, so a proper
+// rotation stays proper — matToTQ below never sees an improper matrix.
+const conjX = (M) => M.map((v, i) => ((((i >> 2) === 0) !== ((i & 3) === 0)) ? -v : v));
 
 // Rigid matrix -> translation + quaternion (exact; our matrices carry no scale).
 function matToTQ(M) {
@@ -176,13 +197,15 @@ export function dnmToGlb(dnmBytes) {
         }
         if (nx * f.nom[0] + ny * f.nom[1] + nz * f.nom[2] < 0) idx = idx.slice().reverse();
       }
+      // Mirror X into the right-handed glTF frame; the mirror flips the
+      // fan's orientation, so swap two corners to keep the winding outward.
       for (let i = 1; i + 1 < idx.length; i++) {
-        for (const vi of [idx[0], idx[i], idx[i + 1]]) {
+        for (const vi of [idx[0], idx[i + 1], idx[i]]) {
           const v = srf.vertices[vi];
           if (!v) continue;
-          bucket.pos.push(v[0], v[1], v[2]);
+          bucket.pos.push(-v[0], v[1], v[2]);
           const n = (srf.smooth && srf.smooth[vi] && vtxNom.get(vi)) || fn;
-          bucket.nrm.push(n[0], n[1], n[2]);
+          bucket.nrm.push(-n[0], n[1], n[2]);
         }
       }
     }
@@ -213,7 +236,7 @@ export function dnmToGlb(dnmBytes) {
     if (!n) return null;
     const node = { name: label };
     const pos = n.pos || [0, 0, 0, 0, 0, 0], cnt = n.cnt || [0, 0, 0];
-    const rest = matToTQ(nodeMatrix(pos, (n.sta && n.sta[0]) || null, cnt));
+    const rest = matToTQ(conjX(nodeMatrix(pos, (n.sta && n.sta[0]) || null, cnt)));
     if (rest.t.some((v) => Math.abs(v) > 1e-9)) node.translation = rest.t;
     if (Math.abs(rest.q[3] - 1) > 1e-9) node.rotation = rest.q;
     const srf = n.srf && dnm.srfByName.get(n.srf);
@@ -221,7 +244,9 @@ export function dnmToGlb(dnmBytes) {
       const mesh = meshFromSrf(srf, n.srf);
       if (mesh) { node.mesh = meshes.length; meshes.push(mesh); }
     }
-    node.extras = { ysflight: { cla: n.cla || 0, pos, cnt, sta: n.sta || [], srf: n.srf || null } };
+    // rh: 1 marks the right-handed (mirrored-X) convention; it rides on every
+    // node because node extras are what Blender provably round-trips.
+    node.extras = { ysflight: { rh: 1, cla: n.cla || 0, pos, cnt, sta: n.sta || [], srf: n.srf || null } };
     const children = (n.children || []).map(emitNode).filter((ix) => ix !== null);
     if (children.length) node.children = children;
     const ix = gnodes.length;
@@ -233,7 +258,7 @@ export function dnmToGlb(dnmBytes) {
       if (!anim) { anim = { name, samplers: [], channels: [] }; animByName.set(name, anim); }
       const ts = [], qs = [];
       for (const sta of staList) {
-        const { t, q } = matToTQ(nodeMatrix(pos, sta, cnt));
+        const { t, q } = matToTQ(conjX(nodeMatrix(pos, sta, cnt)));
         ts.push(...t);
         qs.push(...q);
       }
@@ -283,7 +308,9 @@ export function dnmToGlb(dnmBytes) {
   if (!rootIx.length) throw new Error('no nodes exported (is this a DNM?)');
 
   const gltf = {
-    asset: { version: '2.0', generator: 'ysflight-web dnm-gltf' },
+    // asset.extras is informational only — Blender re-exports drop it, so the
+    // importer detects the convention from the per-node rh markers instead.
+    asset: { version: '2.0', generator: 'ysflight-web dnm-gltf', extras: { ysflight: { rh: 1 } } },
     scene: 0,
     scenes: [{ nodes: rootIx }],
     nodes: gnodes,
@@ -528,6 +555,15 @@ export function glbToDnm(glbBytes) {
 
   const f6 = (v) => (Math.abs(v) < 5e-7 ? '0' : String(Math.round(v * 1e6) / 1e6));
 
+  // Chirality (see the module header).  rh-marked files and genuinely foreign
+  // files (no extras.ysflight anywhere) are right-handed and get mirrored back
+  // into YS left-handed coordinates; extras without the marker are our legacy
+  // pre-flip exports and pass through untouched.
+  const nodeList = json.nodes || [];
+  const hasYs = nodeList.some((n) => ysExtras(n));
+  const hasRh = nodeList.some((n) => { const e = ysExtras(n); return e && e.rh; });
+  const flip = hasRh || !hasYs;
+
   // Rotate a direction by a bake matrix (no translation) and renormalize —
   // good enough for the rigid/near-uniform node transforms we bake.
   const applyDir = (M, n) => {
@@ -552,6 +588,10 @@ export function glbToDnm(glbBytes) {
       // smooth shading there (Blender's shade-smooth exports averaged normals).
       let nrms = prim.attributes.NORMAL !== undefined ? readAccessor(prim.attributes.NORMAL) : null;
       if (bake && nrms) nrms = nrms.map((n) => applyDir(bake, n));
+      if (flip) {
+        pos = pos.map((v) => [-v[0], v[1], v[2]]);
+        if (nrms) nrms = nrms.map((n) => [-n[0], n[1], n[2]]);
+      }
       const idx = prim.indices !== undefined ? readAccessor(prim.indices) : pos.map((_, i) => i);
       const mat = prim.material !== undefined ? json.materials[prim.material] : null;
       const bc = (mat && mat.pbrMetallicRoughness && mat.pbrMetallicRoughness.baseColorFactor) || [0.8, 0.8, 0.8, 1];
@@ -573,7 +613,10 @@ export function glbToDnm(glbBytes) {
         return ix;
       };
       for (let t = 0; t + 2 < idx.length; t += 3) {
-        const tri = [pos[idx[t]], pos[idx[t + 1]], pos[idx[t + 2]]];
+        // Mirroring back flips orientation too: visit the mirrored triangle's
+        // corners in swapped order so the restored winding stays outward.
+        const ord = flip ? [t, t + 2, t + 1] : [t, t + 1, t + 2];
+        const tri = [pos[idx[ord[0]]], pos[idx[ord[1]]], pos[idx[ord[2]]]];
         if (tri.some((p) => !p)) continue;
         const ids = tri.map(vix);
         if (nrms) {
@@ -584,7 +627,7 @@ export function glbToDnm(glbBytes) {
           // each tri's geometric normal deviate from the authored face normal
           // and sprays spurious R over surfaces meant to stay flat — which the
           // engine then shades with edge-on averaged normals (dark patches).
-          const n0 = nrms[idx[t]], n1 = nrms[idx[t + 1]], n2 = nrms[idx[t + 2]];
+          const n0 = nrms[idx[ord[0]]], n1 = nrms[idx[ord[1]]], n2 = nrms[idx[ord[2]]];
           const same = (u, v) => !u || !v || (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) > 0.99999;
           if (!(same(n0, n1) && same(n1, n2) && same(n0, n2))) {
             const [a, b, c] = tri;
@@ -594,7 +637,7 @@ export function glbToDnm(glbBytes) {
             const fl = Math.hypot(fx, fy, fz) || 1;
             fx /= fl; fy /= fl; fz /= fl;
             for (let k = 0; k < 3; k++) {
-              const n = nrms[idx[t + k]];
+              const n = nrms[idx[ord[k]]];
               if (n && Math.abs(n[0] * fx + n[1] * fy + n[2] * fz) < 0.9995) smoothV.add(ids[k]);
             }
           }
