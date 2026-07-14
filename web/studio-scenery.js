@@ -7,7 +7,7 @@ import {
   saveOrReplace, loadCreation, OBJECT_PALETTE, WORLD_M,
   DEFAULT_FLY_AIRCRAFT, stockIndex,
 } from './studio-shared.js';
-import { assembleSceneryZip, SCENERY_START } from './workbench.js';
+import { assembleSceneryZip, migrateScenery, SCENERY_START } from './workbench.js';
 
 // Bilingual strings (island keys verbatim from workbench-page.js S.ja / S.en).
 const S = ({
@@ -275,8 +275,10 @@ async function main() {
   const placed    = [];   // undo order: 'poly' | 'object' | 'mountain' | 'start'
   let stroke = null;
 
-  const toWorld   = ([x, y]) => [(x / canvas.width  - 0.5) * WORLD_M, (y / canvas.height - 0.5) * WORLD_M];
-  const fromWorld = ([x, z]) => [(x / WORLD_M + 0.5) * canvas.width,  (z / WORLD_M + 0.5) * canvas.height];
+  // World axes (engine truth, see compassToEngineDeg in workbench.js):
+  // +x = east, +z = north.  The canvas is a north-up map, so canvas -y = +z.
+  const toWorld   = ([x, y]) => [(x / canvas.width  - 0.5) * WORLD_M, (0.5 - y / canvas.height) * WORLD_M];
+  const fromWorld = ([x, z]) => [(x / WORLD_M + 0.5) * canvas.width,  (0.5 - z / WORLD_M) * canvas.height];
   const pxPerM    = canvas.width / WORLD_M;
 
   // ── redraw ────────────────────────────────────────────────────────────────────
@@ -435,6 +437,7 @@ async function main() {
     saveMsg.textContent = S.working;
     try {
       const scenery = {
+        conv: 2, // headingDeg fields are compass degrees (see migrateScenery)
         name: nameIn.value.trim(),
         ground: hex2rgb(seaIn.value),
         sky:    hex2rgb(skyIn.value),
@@ -489,7 +492,9 @@ async function main() {
         return;
       }
       if (c.recipe.type === 'scenery') {
-        const sc = c.recipe.scenery || {};
+        // Legacy (pre-conv-2) recipes stored headings in engine attitude sign;
+        // migrate so the editor state is compass and recompiles identically.
+        const sc = migrateScenery(c.recipe.scenery || {});
         nameIn.value = sc.name || c.name || '';
         if (sc.ground) seaIn.value = rgb2hex(sc.ground);
         if (sc.sky)    skyIn.value  = rgb2hex(sc.sky);

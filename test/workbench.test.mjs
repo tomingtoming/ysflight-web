@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, SCENERY_START, extractDnmColors, repaintDnm } from '../web/workbench.js';
+import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, migrateScenery, SCENERY_START, extractDnmColors, repaintDnm } from '../web/workbench.js';
 import { analyzePack } from '../web/packs.js';
 import { unzipSync } from '../web/vendor/fflate.js';
 
@@ -182,9 +182,10 @@ test('assembleSceneryZip with islands: PC2 visual + PST AREA LAND, exact PCK lin
   assert.deepEqual(a.categories, ['scenery']);
   assert.equal(a.diagnostics.missing, 0);
 
-  // The start position moves upwind so the drawn islands sit ahead of the nose.
+  // The start position moves upwind (south, -Z: attitude 0 = compass north)
+  // so the drawn islands sit ahead of the nose.
   const stp = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/drawn.stp']);
-  assert.match(stp, /^C POSITION 0\.00m 1000\.00m 6000\.00m$/m);
+  assert.match(stp, /^C POSITION 0\.00m 1000\.00m -6000\.00m$/m);
 });
 
 test('assembleSceneryZip without islands stays the proven 8-line header', async () => {
@@ -268,17 +269,63 @@ test('assembleSceneryZip runways: pavement PLGs + landable pad + threshold spawn
   assert.ok(pc2.includes('VER 0.00 -1977.50'), 'west end corner');
 
   // Landable pad: a PST AREA LAND loop with a 10m margin.
-  assert.match(fld, /^PST\nISLOOP TRUE\nAREA LAND\nPNT 2010\.00 0\.00 -1967\.50$/m);
+  assert.match(fld, /^PST\nISLOOP TRUE\nAREA LAND\nPNT -10\.00 0\.00 -1967\.50$/m);
 
-  // Threshold spawn: on the ground at the approach end, rolling heading 90.
+  // Threshold spawn: legacy headingDeg 90 = engine attitude 90 = compass 270
+  // (west).  Attitude bytes are unchanged by the conv-2 migration; the spawn
+  // sits at the approach end with the full length AHEAD of the nose (the old
+  // convention parked it 60m from the fence).
   assert.match(stp, /^N RUNWAY01$/m);
-  assert.match(stp, /^C POSITION 60\.00m 0\.00m -2000\.00m$/m);
+  assert.match(stp, /^C POSITION 1940\.00m 0\.00m -2000\.00m$/m);
   assert.match(stp, /^C ATTITUDE 90\.00deg 0\.00deg 0\.00deg$/m);
   assert.match(stp, /^C CTLLDGEA TRUE$/m);
 
   const a = await analyzePack(asm.zipBytes, { sha256 });
   assert.deepEqual(a.categories, ['scenery']);
   assert.equal(a.diagnostics.missing, 0);
+});
+
+test('scenery conv 2: headingDeg is compass — engine attitude is its negation', async () => {
+  const asm = assembleSceneryZip({
+    name: 'CONV2', conv: 2,
+    objects: [{ nam: 'AIRCRAFTCARRIER', x: 0, z: 0, headingDeg: 90 }],  // facing east
+    starts: [{ name: 'E', x: 0, z: 0, altM: 500, speedMS: 100, headingDeg: 90 }],
+    runways: [{ x: 0, z: 0, headingDeg: 0, lengthM: 2000, widthM: 45 }], // landing north
+  });
+  const z = unzipSync(asm.zipBytes);
+  const fld = new TextDecoder().decode(z['scenery/conv2.fld']);
+  const stp = new TextDecoder().decode(z['scenery/conv2.stp']);
+  // compass 90 (east) = engine attitude -90 (stock oracle: atsugi RW01/compass
+  // 010 spawns at ATTITUDE -10deg).  -90deg = -16384 in 32768=pi units.
+  assert.match(fld, /^POS 0\.00 0\.00 0\.00 -16384 0 0$/m);
+  assert.match(stp, /^C ATTITUDE -90\.00deg 0\.00deg 0\.00deg$/m);
+  // Compass-0 runway runs south->north; the takeoff spawn sits at the south
+  // (approach) end facing north with 1940m of pavement ahead.
+  assert.match(stp, /^N RUNWAY01$/m);
+  assert.match(stp, /^C POSITION 0\.00m 0\.00m -940\.00m$/m);
+  assert.match(stp, /^C ATTITUDE (-0\.00|0\.00)deg 0\.00deg 0\.00deg$/m);
+});
+
+test('migrateScenery: legacy headings negate once, conv 2 is idempotent', () => {
+  const legacy = {
+    name: 'OLD',
+    islands: [{ points: [[1, 2], [3, 4], [5, 6]] }],
+    objects: [{ nam: 'CASTLE', x: 1, z: 2, headingDeg: 90 }],
+    starts: [{ x: 0, z: 0, headingDeg: 45 }],
+    runways: [{ x: 0, z: 0, headingDeg: 180 }],
+  };
+  const m = migrateScenery(legacy);
+  assert.equal(m.conv, 2);
+  assert.equal(m.objects[0].headingDeg, 270);  // engine orientation preserved
+  assert.equal(m.starts[0].headingDeg, 315);
+  assert.equal(m.runways[0].headingDeg, 180);
+  assert.deepEqual(m.islands, legacy.islands);  // islands are never touched
+  assert.deepEqual(migrateScenery(m), m);       // migrating twice is a no-op
+  // The recipe embedded by assembleSceneryZip carries the migrated form.
+  const asm = assembleSceneryZip({ ...legacy, recipe: { scenery: legacy } });
+  const rec = JSON.parse(new TextDecoder().decode(unzipSync(asm.zipBytes)['workbench.json']));
+  assert.equal(rec.scenery.conv, 2);
+  assert.equal(rec.scenery.objects[0].headingDeg, 270);
 });
 
 test('makeDatFromBase extras: SET knobs replace-or-append, smoke gets a generator', () => {
