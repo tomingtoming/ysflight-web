@@ -382,6 +382,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		xrFb:null,
 		origBind:null,
 		simSilentFrames:0,
+		// Menu-quad idle counter (see updateMenuLayer's grace window).  Starts
+		// huge so the quad cannot appear before the engine's first real menu
+		// render of a session.
+		menuIdleFrames:1e9,
 		// Why the last session ended, when the JS side knows better than the
 		// bare 'end' event.  null = normal end; 'menu-unsupported' = the
 		// watchdog fired while the menu was up because the menu quad could
@@ -1260,6 +1264,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GL.framebuffers[vr.menuRes.fbId]=null;
 		GL.textures[vr.menuRes.texId]=null;
 		vr.menuRes=null;
+		vr.menuIdleFrames=1e9;
 	}
 
 	// ---- Static equirect sky background for the VR menu --------------------
@@ -1574,6 +1579,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// engine wrote to the menu FBO this frame (menuDrawn flag), blits the
 	// content into the XRQuadLayer's swapchain texture, and adds/removes the
 	// quad from the session render-state layers list as needed.
+	// Grace window before hiding the menu quad.  The menuDrawn flag is
+	// per-engine-render; the engine now redraws the menu every VR frame
+	// (fsrunloop.cpp NeedRedraw), but a transient skipped tick must not
+	// blink the whole menu out -- the pre-fix on-device symptom was the quad
+	// flickering in and out as the 2D redraw throttle gated menuDrawn.  The
+	// menu FBO keeps the last rendered image, so during the grace window we
+	// just keep compositing it (the copy still runs every presented frame,
+	// per the swapchain-freshness discipline).  8 frames = ~110ms at 72Hz:
+	// long enough to ride out a hiccup, short enough that the quad is gone
+	// before the flight scene fades in after a menu->flight transition.
+	var MENU_HIDE_GRACE=8;
 	function updateMenuLayer(frame)
 	{
 		if(!vr.menuRes)
@@ -1584,9 +1600,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var menuDrawn=(0!==HEAPF32[p+5]);
 		HEAPF32[p+5]=0;
 
+		if(menuDrawn)
+		{
+			vr.menuIdleFrames=0;
+		}
+		else
+		{
+			++vr.menuIdleFrames;
+		}
+		// menuIdleFrames starts (and resets to) a huge value, so the quad can
+		// only appear after the engine has actually rendered the menu once --
+		// never as an uninitialized-FBO square at session start mid-flight.
+		var menuVisible=(vr.menuIdleFrames<=MENU_HIDE_GRACE);
+
 		var layersChanged=false;
 
-		if(menuDrawn)
+		if(menuVisible)
 		{
 			if(!vr.menuRes.inLayers)
 			{
@@ -1614,10 +1643,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 			layersChanged=true;
 		}
 
-		// Sky equirect tracks the same menuDrawn state; drives its own inLayers
-		// and upload, returns true if inLayers changed (we OR into layersChanged
-		// so the single syncRenderStateLayers call below covers both).
-		if(updateSkyLayer(frame,menuDrawn))
+		// Sky equirect tracks the same visibility (grace window included);
+		// drives its own inLayers and upload, returns true if inLayers changed
+		// (we OR into layersChanged so the single syncRenderStateLayers call
+		// below covers both).
+		if(updateSkyLayer(frame,menuVisible))
 		{
 			layersChanged=true;
 		}
