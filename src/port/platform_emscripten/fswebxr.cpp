@@ -334,6 +334,16 @@ extern "C" int EMSCRIPTEN_KEEPALIVE YsfwVrGuiMenuVersion(void)
 	return FsVrGuiMenuVersion();
 }
 
+// Forwards to the engine's VR main-menu state block (fsvr.h, 8 floats):
+// the JS runtime writes [enable,fbo,tex,texW,texH] here when the WebXR layers
+// session starts (setupMenu); the engine (DrawMenu in fsrunloop.cpp) reads
+// [0] to know when the FBO is ready and writes [5] menuDrawn=1 each frame it
+// rendered the menu into the FBO.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrMenuDataPointer(void)
+{
+	return FsVrMenuDataPointer();
+}
+
 // TEST-ONLY: forwards to the engine's blackout/redout override block
 // (fsvr.h's FsVrSetBlackoutOverride) so a headless test can exercise
 // FsVrDrawFullScreenTint (SimDrawAllScreen's VR G-load tint) without a real
@@ -444,6 +454,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// per-hand pair) and anchored to viewerSpace like the dial quads --
 		// see ensurePerfResources/updatePerfLayers.
 		perfRes:undefined,
+		// Main-menu-in-VR quad layer resource (WebXR layers path only).
+		// null = not yet allocated (or session ended).
+		// object = {fb,tex,fbId,texId,w,h,quad,inLayers} once setupMenu
+		// allocates the FBO + XRQuadLayer.
+		menuRes:null,
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -1116,6 +1131,329 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GL.framebuffers[vr.gui.fbId]=null;
 		GL.textures[vr.gui.texId]=null;
 		vr.gui=null;
+	}
+
+	// ---- VR main-menu off-screen FBO + head-locked quad layer ---------------
+	// Called at session start (setupMenu) and end (teardownMenu).  The menu FBO
+	// is a plain mono RGBA 2D texture (not multiview) the engine renders the
+	// 2D main menu into each tick; updateMenuLayer blits it into the XRQuadLayer
+	// swapchain every frame the engine wrote to it (menuDrawn flag).
+	function setupMenu()
+	{
+		if(vr.menuRes)
+		{
+			return;
+		}
+		// In headless test mode (vr.testMode, forceMultiview) there is no real
+		// XRWebGLBinding, but we still allocate the FBO so the engine can render
+		// into it and the smoke test can read it back.
+		var inTestMode=(vr.testMode && !vr.mvBinding);
+		if(!inTestMode && (!vr.mvBinding||!vr.viewerSpace))
+		{
+			return;
+		}
+
+		var canvas=Module.canvas||document.getElementById('canvas');
+		var W=Math.min(canvas ? canvas.width : 800, 2048);
+		var H=Math.min(canvas ? canvas.height : 600, 2048);
+		if(W<=0||H<=0)
+		{
+			return;
+		}
+
+		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
+		GLctx.activeTexture(GLctx.TEXTURE14);
+		var tex=GLctx.createTexture();
+		GLctx.bindTexture(GLctx.TEXTURE_2D,tex);
+		GLctx.texImage2D(GLctx.TEXTURE_2D,0,GLctx.RGBA,W,H,0,GLctx.RGBA,GLctx.UNSIGNED_BYTE,null);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_MIN_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_MAG_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_WRAP_S,GLctx.CLAMP_TO_EDGE);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_WRAP_T,GLctx.CLAMP_TO_EDGE);
+		GLctx.bindTexture(GLctx.TEXTURE_2D,null);
+		GLctx.activeTexture(prevActive);
+
+		var fb=GLctx.createFramebuffer();
+		var prevFb=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,fb);
+		GLctx.framebufferTexture2D(GLctx.FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,GLctx.TEXTURE_2D,tex,0);
+		var st=GLctx.checkFramebufferStatus(GLctx.FRAMEBUFFER);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prevFb);
+		if(st!==GLctx.FRAMEBUFFER_COMPLETE)
+		{
+			console.warn('[vr] menu FBO incomplete 0x'+st.toString(16));
+			GLctx.deleteFramebuffer(fb);
+			GLctx.deleteTexture(tex);
+			return;
+		}
+
+		var fbId=GL.getNewId(GL.framebuffers);
+		GL.framebuffers[fbId]=fb; fb.name=fbId;
+		var texId=GL.getNewId(GL.textures);
+		GL.textures[texId]=tex; tex.name=texId;
+
+		var quad=null;
+		if(!inTestMode)
+		{
+			try
+			{
+				quad=vr.mvBinding.createQuadLayer({
+					space:vr.viewerSpace,
+					viewPixelWidth:W,
+					viewPixelHeight:H,
+					layout:'mono',
+					width:1.6,
+					height:1.6*H/W
+				});
+				quad.transform=new XRRigidTransform(
+					{x:0,y:-0.1,z:-1.8},
+					{x:0,y:0,z:0,w:1}
+				);
+			}
+			catch(e)
+			{
+				console.warn('[vr] menu quad layer failed: '+(e&&e.message?e.message:e));
+				GLctx.deleteFramebuffer(fb); GLctx.deleteTexture(tex);
+				GL.framebuffers[fbId]=null; GL.textures[texId]=null;
+				return;
+			}
+		}
+
+		var p=_YsfwVrMenuDataPointer()>>2;
+		HEAPF32[p+0]=1; HEAPF32[p+1]=fbId; HEAPF32[p+2]=texId;
+		HEAPF32[p+3]=W; HEAPF32[p+4]=H;
+		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
+
+		vr.menuRes={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H,quad:quad,inLayers:false};
+		console.log('[vr] menu '+W+'x'+H+' (fbId='+fbId+' texId='+texId+(inTestMode?' testMode':'')+')');
+	}
+
+	function teardownMenu()
+	{
+		var p=_YsfwVrMenuDataPointer()>>2;
+		for(var i=0; i<8; ++i){ HEAPF32[p+i]=0; }
+		if(!vr.menuRes)
+		{
+			return;
+		}
+		try{ GLctx.deleteFramebuffer(vr.menuRes.fb); }catch(e){}
+		try{ GLctx.deleteTexture(vr.menuRes.tex); }catch(e){}
+		try{ if(vr.menuRes.quad){ vr.menuRes.quad.destroy(); } }catch(e){}
+		GL.framebuffers[vr.menuRes.fbId]=null;
+		GL.textures[vr.menuRes.texId]=null;
+		vr.menuRes=null;
+	}
+
+	// Called once per onXRFrame after _YsfwExternalTick().  Checks whether the
+	// engine wrote to the menu FBO this frame (menuDrawn flag), blits the
+	// content into the XRQuadLayer's swapchain texture, and adds/removes the
+	// quad from the session render-state layers list as needed.
+	function updateMenuLayer(frame)
+	{
+		if(!vr.menuRes)
+		{
+			return;
+		}
+		var p=_YsfwVrMenuDataPointer()>>2;
+		var menuDrawn=(0!==HEAPF32[p+5]);
+		HEAPF32[p+5]=0;
+
+		var layersChanged=false;
+
+		if(menuDrawn)
+		{
+			if(!vr.menuRes.inLayers)
+			{
+				vr.menuRes.inLayers=true;
+				layersChanged=true;
+			}
+			if(vr.menuRes.quad)
+			{
+				try
+				{
+					var sub=vr.mvBinding.getSubImage(vr.menuRes.quad,frame);
+					var prevReadFb=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+					GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,vr.menuRes.fb);
+					GLctx.bindTexture(GLctx.TEXTURE_2D,sub.colorTexture);
+					GLctx.copyTexSubImage2D(GLctx.TEXTURE_2D,0,0,0,0,0,vr.menuRes.w,vr.menuRes.h);
+					GLctx.bindTexture(GLctx.TEXTURE_2D,null);
+					GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prevReadFb);
+				}
+				catch(e){}
+			}
+		}
+		else if(vr.menuRes.inLayers)
+		{
+			vr.menuRes.inLayers=false;
+			layersChanged=true;
+		}
+
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
+		}
+	}
+
+	// Reads back the mean RGBA of the menu FBO -- used by smoke-vrmenu.mjs to
+	// prove the engine actually drew into it.
+	vr.readMenuStats=function()
+	{
+		if(!vr.menuRes)
+		{
+			return {alpha:0,lum:0};
+		}
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
+		GLctx.framebufferTexture2D(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,GLctx.TEXTURE_2D,vr.menuRes.tex,0);
+		var W=vr.menuRes.w, H=vr.menuRes.h;
+		// sample a 16x16 grid to stay fast even at full canvas resolution
+		var step=Math.max(1,Math.floor(Math.min(W,H)/16));
+		var wS=Math.ceil(W/step), hS=Math.ceil(H/step);
+		var px=new Uint8Array(wS*hS*4);
+		GLctx.readPixels(0,0,wS,hS,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		var sumA=0, sumL=0;
+		for(var i=0; i<px.length; i+=4)
+		{
+			sumA+=px[i+3];
+			sumL+=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+		}
+		var n=px.length/4;
+		return {alpha:sumA/n, lum:sumL/n};
+	};
+
+	vr.readMenuData=function()
+	{
+		var p=_YsfwVrMenuDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<8; ++i){ out.push(HEAPF32[p+i]); }
+		return out;
+	};
+
+	// ---- Menu ray-to-mouse synthesis ----------------------------------------
+	// Projects each controller's aim ray onto the menu quad plane (z=-1.8 in
+	// viewer space, centred at {0,-0.1,-1.8}) and injects a mouse-move event +
+	// left-button edge into the engine via YsfwInjectMouseEvent.  Only active
+	// while the menu quad is being shown (menuVisible, checked at call site).
+	//
+	// Menu quad geometry (viewer space):
+	//   centre = (0, -0.1, -1.8);  width = 1.6m;  height = 1.6*H/W
+	//   left edge x = -0.8,  right edge x = +0.8
+	//   top edge  y = -0.1 + 0.5*quadH,  bottom y = -0.1 - 0.5*quadH
+	//
+	// Axis convention from the XR aim space: +Z is the ray direction in view
+	// space (aim space has its +Z pointing forward toward the target).
+	// We intersect the aim ray with the plane at z = -1.8 (viewer-forward is -Z).
+	var menuRayState={prevMx:-1,prevMy:-1,prevTrig:false};
+	function processMenuRayInput(frame)
+	{
+		if(!vr.menuRes||!vr.viewerSpace)
+		{
+			return;
+		}
+		var p=_YsfwVrMenuDataPointer()>>2;
+		var texW=HEAPF32[p+3];
+		var texH=HEAPF32[p+4];
+		if(texW<=0||texH<=0)
+		{
+			return;
+		}
+
+		var quadW=1.6;
+		var quadH=1.6*texH/texW;
+		var quadCX=0, quadCY=-0.1, quadZ=-1.8;
+		var quadLeft=quadCX-quadW/2;
+		var quadTop =quadCY+quadH/2;
+
+		var sources=frame.session.inputSources;
+		var hitMx=-1,hitMy=-1,hitTrig=false;
+		for(var i=0; i<sources.length; ++i)
+		{
+			var src=sources[i];
+			if(!src.targetRaySpace)
+			{
+				continue;
+			}
+			var rayPose=frame.getPose(src.targetRaySpace,vr.viewerSpace);
+			if(!rayPose)
+			{
+				continue;
+			}
+			// Ray origin and direction in viewer space.
+			var ro=rayPose.transform.position;
+			var rd=rayPose.transform.orientation;
+			// Rotate unit forward vector (0,0,-1) by the aim quaternion to get
+			// the ray direction in viewer space.
+			// Rodrigues: v' = v + 2*q.w*(q.xyz x v) + 2*(q.xyz x (q.xyz x v))
+			var vx=0,vy=0,vz=-1;
+			var qx=rd.x,qy=rd.y,qz=rd.z,qw=rd.w;
+			var cx=qy*vz-qz*vy, cy=qz*vx-qx*vz, cz=qx*vy-qy*vx;
+			var dx=qy*cz-qz*cy, dy=qz*cx-qx*cz, dz=qx*cy-qy*cx;
+			var rayDX=vx+2*(qw*cx+dx);
+			var rayDY=vy+2*(qw*cy+dy);
+			var rayDZ=vz+2*(qw*cz+dz);
+
+			// Intersect with the plane at z = quadZ.
+			// t = (quadZ - ro.z) / rayDZ
+			if(Math.abs(rayDZ)<1e-6)
+			{
+				continue; // Ray is parallel to the plane.
+			}
+			var t=(quadZ-ro.z)/rayDZ;
+			if(t<0)
+			{
+				continue; // Intersection behind the origin.
+			}
+			var hx=ro.x+t*rayDX;
+			var hy=ro.y+t*rayDY;
+
+			// Map hit point to UV on the quad.
+			var u=(hx-quadLeft)/quadW;
+			var v=(quadTop-hy)/quadH; // y is flipped: top=0, bottom=1
+
+			if(u<0||u>1||v<0||v>1)
+			{
+				continue; // Hit outside the quad.
+			}
+
+			hitMx=Math.round(u*texW);
+			hitMy=Math.round(v*texH);
+			// Trigger button = left mouse click.
+			var gp=src.gamepad;
+			hitTrig=!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5);
+			break; // First controller that hits the menu wins.
+		}
+
+		if(hitMx<0)
+		{
+			return; // No controller hit the menu this frame.
+		}
+
+		// Inject mouse move.
+		if(hitMx!==menuRayState.prevMx||hitMy!==menuRayState.prevMy||hitTrig!==menuRayState.prevTrig)
+		{
+			// eventType: 1=FSMOUSEEVENT_MOVE, 2=FSMOUSEEVENT_LBUTTONDOWN, 3=FSMOUSEEVENT_LBUTTONUP
+			var lb=(hitTrig ? 1 : 0);
+			var evtType;
+			if(hitTrig&&!menuRayState.prevTrig)
+			{
+				evtType=2; // left button down
+			}
+			else if(!hitTrig&&menuRayState.prevTrig)
+			{
+				evtType=3; // left button up
+			}
+			else
+			{
+				evtType=1; // move
+			}
+			_YsfwInjectMouseEvent(evtType,lb,0,0,hitMx,hitMy);
+			menuRayState.prevMx=hitMx;
+			menuRayState.prevMy=hitMy;
+			menuRayState.prevTrig=hitTrig;
+		}
 	}
 
 	// Reads back [dialogVisible,apMenu] from the GUI state block -- cheap,
@@ -1892,6 +2230,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var ptr=_YsfwVrControlDataPointer()>>2;
 		var physGrabbed=entry.squeeze>GRAB_THRESHOLD;
+		// True while the main-menu quad is being shown: B/Y dispatch ESC so the
+		// pilot can navigate back, and flight-control inputs (stick/throttle/
+		// trigger/dial) are suppressed -- the menu uses ray-to-mouse injection
+		// instead (see processMenuRayInput/YsfwInjectMouseEvent).
+		var menuVisible=!!(vr.menuRes&&vr.menuRes.inLayers);
 		// While a modal in-flight dialog is open (see SimDrawVrGui / fsvr.h's
 		// FsVrGuiDataPointer), ONE hand's dial/trigger/A-B inputs are
 		// rerouted to operate that dialog instead of their normal
@@ -2119,6 +2462,21 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// release-if-held safety so a brake held from before the dialog
 			// opened doesn't stay stuck on.
 			var bPressed=!!(entry.buttons && entry.buttons.b);
+			if(menuVisible)
+			{
+				// While the main menu is visible, B dispatches ESC (go back).
+				// Flight-control input (air brake) is suppressed entirely.
+				vrKeyEdge('KeyB',false); // Ensure KeyB is released.
+				if(bPressed && !vr.ctl.rightB)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap('Escape');
+				}
+				vr.ctl.rightB=bPressed;
+				// Skip remainder of right-hand processing (stick/dial/trigger
+				// are all suppressed while the menu is the active UI).
+				return;
+			}
 			if(rActive && bPressed)
 			{
 				// This press overlapped dialog ownership (the cancel press
@@ -2296,6 +2654,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// same or a later frame of that same physical press.
 			var yPressed=!!(entry.buttons && entry.buttons.b);
 			var yPressEdge=(yPressed && !vr.ctl.leftY);
+			if(menuVisible)
+			{
+				// While the main menu is visible, Y dispatches ESC (go back).
+				// The normal view-cycle action is suppressed.
+				if(yPressEdge)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap('Escape');
+				}
+				vr.ctl.leftY=yPressed;
+				// Skip remainder of left-hand processing (throttle/dial/trigger
+				// are all suppressed while the menu is the active UI).
+				return;
+			}
 			if(lActive && yPressed)
 			{
 				vr.ctl.leftYSwallow=true;
@@ -3355,6 +3727,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.helpRes.right && vr.helpRes.right.inLayers){ layers.push(vr.helpRes.right.quad); }
 		if(vr.helpRes.left && vr.helpRes.left.inLayers){ layers.push(vr.helpRes.left.quad); }
 		if(vr.perfRes && vr.perfRes.inLayers){ layers.push(vr.perfRes.quad); }
+		// Menu quad: placed last (front-most) so it composites over the scene.
+		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
 		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
 	}
 
@@ -3924,8 +4298,23 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,vr.xrFb);
 		_YsfwExternalTick();
 
-		// The 2D menus are not presented in VR: end the session when the
-		// simulation stops drawing (~1.5s of silence).
+		// Update the menu quad layer: blit the engine's menu FBO into the
+		// XRQuadLayer swapchain if the engine drew this frame (menuDrawn flag),
+		// and add/remove the quad from renderState.layers as visibility changes.
+		updateMenuLayer(frame);
+
+		// Ray-to-mouse synthesis: project controller aim rays onto the menu quad
+		// plane and inject synthetic mouse events into the engine while the
+		// menu is being shown.
+		if(vr.menuRes&&vr.menuRes.inLayers&&pose)
+		{
+			processMenuRayInput(frame);
+		}
+
+		// Watchdog: end the session when the engine stops presenting entirely
+		// (~1.5s of silence).  While the main menu is visible DrawMenu sets
+		// FsVrMarkSimDrawn every frame (keeping simSilentFrames at 0), so the
+		// watchdog is safely disarmed during normal menu navigation.
 		if(0<_YsfwVrConsumeSimDrawnFrames())
 		{
 			vr.simSilentFrames=0;
@@ -4173,10 +4562,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.helpRes={right:undefined,left:undefined};
 					vr.help={visible:false,shownAt:0};
 					vr.perfRes=undefined;
+					vr.menuRes=null;
 
 					teardownHud();
 					teardownGui();
 					teardownShadowFbo();
+					teardownMenu();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -4192,6 +4583,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					setupHud();
 					setupGui();
 					setupShadowFbo();
+					setupMenu();
 				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
@@ -4436,6 +4828,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		setupHud();
 		setupGui();
 		setupShadowFbo();
+		setupMenu(); // Test mode: allocates menu FBO without XRQuadLayer.
 		_YsfwVrSetPresenting(1);
 		// Headless stand-in for a real session start (see vr.enter): also
 		// auto-shows the help placards, so scripts/smoke-vrctl.mjs can drive
