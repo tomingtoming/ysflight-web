@@ -1629,7 +1629,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 	}
 
 	// Reads back the mean RGBA of the menu FBO -- used by smoke-vrmenu.mjs to
-	// prove the engine actually drew into it.
+	// prove the engine actually drew into it.  Uses the plain FRAMEBUFFER
+	// target, NOT READ_FRAMEBUFFER: the CI runner's fallback context is
+	// WebGL1 (no separate read/draw targets -- READ_FRAMEBUFFER is
+	// INVALID_ENUM there), and on WebGL2 binding FRAMEBUFFER sets both, so
+	// readPixels works either way.
 	vr.readMenuStats=function()
 	{
 		if(!vr.menuRes)
@@ -1637,16 +1641,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			return {alpha:0,lum:0};
 		}
 		var rfb=GLctx.createFramebuffer();
-		var prev=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
-		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,rfb);
-		GLctx.framebufferTexture2D(GLctx.READ_FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,GLctx.TEXTURE_2D,vr.menuRes.tex,0);
+		var prev=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,rfb);
+		GLctx.framebufferTexture2D(GLctx.FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,GLctx.TEXTURE_2D,vr.menuRes.tex,0);
 		var W=vr.menuRes.w, H=vr.menuRes.h;
 		// sample a 16x16 grid to stay fast even at full canvas resolution
 		var step=Math.max(1,Math.floor(Math.min(W,H)/16));
 		var wS=Math.ceil(W/step), hS=Math.ceil(H/step);
 		var px=new Uint8Array(wS*hS*4);
 		GLctx.readPixels(0,0,wS,hS,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
-		GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prev);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prev);
 		GLctx.deleteFramebuffer(rfb);
 		var sumA=0, sumL=0;
 		for(var i=0; i<px.length; i+=4)

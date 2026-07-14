@@ -59,7 +59,14 @@ page.on('console', (m) => {
   if (FATAL_PATTERNS.some((re) => re.test(t))) fatal.push('[console] ' + t);
 });
 page.on('pageerror', (e) => fatal.push('[pageerror] ' + e.message));
-page.on('requestfailed', (r) => fatal.push('[requestfailed] ' + r.url() + ' -- ' + (r.failure() ? r.failure().errorText : '?')));
+page.on('requestfailed', (r) => {
+  // Only same-origin failures are diagnostic: third-party analytics (e.g.
+  // cloudflareinsights.com) are expected to fail from localhost and must not
+  // fail the smoke.
+  let sameOrigin = false;
+  try { sameOrigin = new URL(r.url()).origin === new URL(baseUrl).origin; } catch (e) {}
+  if (sameOrigin) fatal.push('[requestfailed] ' + r.url() + ' -- ' + (r.failure() ? r.failure().errorText : '?'));
+});
 
 // ---- Boot to the main menu (NOT a free flight) ----------------------------
 // The bare page (no ?freeflight/?join/?replay) holds the engine boot at the
