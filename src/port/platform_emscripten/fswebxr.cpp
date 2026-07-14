@@ -471,6 +471,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// null = not allocated, false = unavailable (createEquirectLayer threw),
 		// object = {layer,canvas,inLayers} once created.
 		skyRes:null,
+		// Small ring/dot cursor quad that tracks the menu ray hit point
+		// (layers path only) -- without it, aiming at dialog lists and small
+		// buttons is guesswork since the engine's hover highlight is the only
+		// feedback.  null = not allocated, false = unavailable,
+		// object = {quad,canvas,inLayers} once created.
+		cursorRes:null,
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -1431,6 +1437,139 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return layersChanged;
 	}
 
+	// ---- Menu ray cursor (small ring/dot quad at the hit point) -------------
+	// The engine's hover highlight alone makes dialog lists and small buttons
+	// guesswork on device, so a ~2.5cm cursor quad floats just in front of the
+	// menu quad at the controller-ray hit point (processMenuRayInput stores it
+	// in menuRayState.hitVX/hitVY, viewer space).  Texture is drawn once (a
+	// static ring + dot) but transferred EVERY presented frame -- Round-4
+	// discipline: never gate uploads on change, non-presented swapchain
+	// buffers freeze otherwise.
+
+	function buildCursorCanvas()
+	{
+		var S=32;
+		var c=document.createElement('canvas');
+		c.width=S; c.height=S;
+		var ctx=c.getContext('2d');
+		if(!ctx){ return null; }
+		ctx.clearRect(0,0,S,S);
+		// Dark contrast ring (outermost) so the cursor reads on light menus.
+		ctx.beginPath();
+		ctx.arc(S/2,S/2,14,0,Math.PI*2);
+		ctx.lineWidth=2;
+		ctx.strokeStyle='rgba(0,0,0,0.6)';
+		ctx.stroke();
+		// Main white ring.
+		ctx.beginPath();
+		ctx.arc(S/2,S/2,11,0,Math.PI*2);
+		ctx.lineWidth=3;
+		ctx.strokeStyle='rgba(255,255,255,0.95)';
+		ctx.stroke();
+		// Warm centre dot (matches the reticle accent used elsewhere).
+		ctx.beginPath();
+		ctx.arc(S/2,S/2,3,0,Math.PI*2);
+		ctx.fillStyle='rgba(255,220,80,0.95)';
+		ctx.fill();
+		return c;
+	}
+
+	function setupCursor()
+	{
+		if(vr.cursorRes===false || vr.cursorRes)
+		{
+			return;
+		}
+		if(!vr.mvBinding || !vr.viewerSpace)
+		{
+			return; // Layers path only (test mode / non-layers browsers skip).
+		}
+		var canvas=buildCursorCanvas();
+		if(!canvas)
+		{
+			vr.cursorRes=false;
+			return;
+		}
+		var quad;
+		try
+		{
+			quad=vr.mvBinding.createQuadLayer({
+				space:vr.viewerSpace,
+				viewPixelWidth:32,
+				viewPixelHeight:32,
+				layout:'mono',
+				width:0.025,   // metres: ~2.5cm ring, small enough not to
+				height:0.025   // occlude the menu row under it.
+			});
+		}
+		catch(e)
+		{
+			console.warn('[vr] menu cursor quad failed: '+(e&&e.message?e.message:e));
+			vr.cursorRes=false;
+			return;
+		}
+		vr.cursorRes={quad:quad,canvas:canvas,inLayers:false};
+	}
+
+	function teardownCursor()
+	{
+		if(!vr.cursorRes || vr.cursorRes===false)
+		{
+			vr.cursorRes=null;
+			return;
+		}
+		try{ if(vr.cursorRes.quad){ vr.cursorRes.quad.destroy(); } }catch(e){}
+		vr.cursorRes=null;
+	}
+
+	// Called once per onXRFrame (after processMenuRayInput has refreshed
+	// menuRayState).  Shows the cursor at the ray hit point while the menu is
+	// visible and a controller ray is on the quad; hides it otherwise.
+	function updateMenuCursor(frame)
+	{
+		if(!vr.cursorRes || vr.cursorRes===false)
+		{
+			return;
+		}
+		var menuVisible=!!(vr.menuRes && vr.menuRes.inLayers);
+		var show=(menuVisible && menuRayState.wasHit);
+		var layersChanged=false;
+		if(show)
+		{
+			// Reposition to the hit point, slightly in front of the menu quad
+			// (menu plane is z=-1.8 in viewer space -- see setupMenu /
+			// processMenuRayInput, which share that constant).
+			try
+			{
+				vr.cursorRes.quad.transform=new XRRigidTransform(
+					{x:menuRayState.hitVX,y:menuRayState.hitVY,z:-1.79},
+					{x:0,y:0,z:0,w:1}
+				);
+			}
+			catch(e){}
+			if(!vr.cursorRes.inLayers)
+			{
+				vr.cursorRes.inLayers=true;
+				layersChanged=true;
+			}
+			try
+			{
+				var sub=vr.mvBinding.getSubImage(vr.cursorRes.quad,frame);
+				uploadCanvasToSubImage(vr.cursorRes.canvas,sub);
+			}
+			catch(e){}
+		}
+		else if(vr.cursorRes.inLayers)
+		{
+			vr.cursorRes.inLayers=false;
+			layersChanged=true;
+		}
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
+		}
+	}
+
 	// Called once per onXRFrame after _YsfwExternalTick().  Checks whether the
 	// engine wrote to the menu FBO this frame (menuDrawn flag), blits the
 	// content into the XRQuadLayer's swapchain texture, and adds/removes the
@@ -1541,7 +1680,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// Axis convention from the XR aim space: +Z is the ray direction in view
 	// space (aim space has its +Z pointing forward toward the target).
 	// We intersect the aim ray with the plane at z = -1.8 (viewer-forward is -Z).
-	var menuRayState={prevMx:-1,prevMy:-1,prevTrig:false};
+	// wasHit / hitVX / hitVY: whether a controller ray is currently on the
+	// menu quad and where (viewer-space metres) -- read by updateMenuCursor
+	// to place the ring cursor.
+	var menuRayState={prevMx:-1,prevMy:-1,prevTrig:false,wasHit:false,hitVX:0,hitVY:0};
 	function processMenuRayInput(frame)
 	{
 		if(!vr.menuRes||!vr.viewerSpace)
@@ -1563,7 +1705,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var quadTop =quadCY+quadH/2;
 
 		var sources=frame.session.inputSources;
-		var hitMx=-1,hitMy=-1,hitTrig=false;
+		var hitMx=-1,hitMy=-1,hitTrig=false,hitVX=0,hitVY=0;
 		for(var i=0; i<sources.length; ++i)
 		{
 			var src=sources[i];
@@ -1615,6 +1757,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 			hitMx=Math.round(u*texW);
 			hitMy=Math.round(v*texH);
+			hitVX=hx;
+			hitVY=hy;
 			// Trigger button = left mouse click.
 			var gp=src.gamepad;
 			hitTrig=!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5);
@@ -1623,8 +1767,31 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 		if(hitMx<0)
 		{
-			return; // No controller hit the menu this frame.
+			// No controller hit the menu this frame.  If the ray just left the
+			// quad, close out the interaction: release a held click (so a
+			// drag off the edge doesn't leave the button stuck down) and send
+			// one final MOVE at the last coordinates.  The engine's hover
+			// highlight stays on the last-pointed item -- there is no mouse
+			// coordinate that means "nowhere" -- which is a known cosmetic
+			// limitation (see PR body).
+			if(menuRayState.wasHit)
+			{
+				if(menuRayState.prevTrig)
+				{
+					_YsfwInjectMouseEvent(3,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
+				}
+				else
+				{
+					_YsfwInjectMouseEvent(1,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
+				}
+				menuRayState.prevTrig=false;
+				menuRayState.wasHit=false;
+			}
+			return;
 		}
+		menuRayState.wasHit=true;
+		menuRayState.hitVX=hitVX;
+		menuRayState.hitVY=hitVY;
 
 		// Inject mouse move.
 		if(hitMx!==menuRayState.prevMx||hitMy!==menuRayState.prevMy||hitTrig!==menuRayState.prevTrig)
@@ -3925,8 +4092,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// Sky equirect: placed between dials/perf and the menu quad so it fills
 		// the black void (no active 3D scene) while the menu is shown.
 		if(vr.skyRes && vr.skyRes.inLayers && vr.skyRes.layer){ layers.push(vr.skyRes.layer); }
-		// Menu quad: placed last (front-most) so it composites over the sky.
+		// Menu quad: placed after the sky so it composites over it.
 		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
+		// Ray cursor: front-most, floats just in front of the menu quad.
+		if(vr.cursorRes && vr.cursorRes.inLayers && vr.cursorRes.quad){ layers.push(vr.cursorRes.quad); }
 		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
 	}
 
@@ -4509,6 +4678,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 			processMenuRayInput(frame);
 		}
 
+		// Ring cursor at the ray hit point (reads the menuRayState the call
+		// above just refreshed; hides itself when the menu is not visible).
+		updateMenuCursor(frame);
+
 		// Watchdog: end the session when the engine stops presenting entirely
 		// (~1.5s of silence).  While the main menu is visible DrawMenu sets
 		// FsVrMarkSimDrawn every frame (keeping simSilentFrames at 0), so the
@@ -4769,14 +4942,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.helpRes={right:undefined,left:undefined};
 					vr.help={visible:false,shownAt:0};
 					vr.perfRes=undefined;
-					vr.menuRes=null;
-					vr.skyRes=null;
+					// menuRes/skyRes/cursorRes are nulled by their teardown
+					// functions below (nulling them first would make the
+					// teardowns early-return and leak the GL resources).
+					menuRayState.wasHit=false;
+					menuRayState.prevTrig=false;
+					menuRayState.prevMx=-1;
+					menuRayState.prevMy=-1;
 
 					teardownHud();
 					teardownGui();
 					teardownShadowFbo();
 					teardownMenu();
 					teardownSky();
+					teardownCursor();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -4794,6 +4973,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					setupShadowFbo();
 					setupMenu();
 					setupSky();
+					setupCursor();
 				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
