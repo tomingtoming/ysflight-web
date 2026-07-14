@@ -74,6 +74,20 @@ test('assemble -> analyzePack round-trip: aircraft registers with IDENTIFY sidec
   assert.equal(asm.packName, 'my_Test_Pack');
   assert.equal(asm.lstLine.trim().split(/\s+/).length, 4); // + cockpit
 
+  // Community addon layout: list in aircraft/, payload under user/<packName>/,
+  // list entries referencing the payload root-relative (YSFHQ convention).
+  const entries = Object.keys(unzipSync(asm.zipBytes)).sort();
+  assert.deepEqual(entries, [
+    'aircraft/air_my_test_pack.lst',
+    'user/my_Test_Pack/test1.dat',
+    'user/my_Test_Pack/test1.dnm',
+    'user/my_Test_Pack/test1coll.srf',
+    'user/my_Test_Pack/test2cockpit.srf',
+  ]);
+  assert.equal(asm.lstLine,
+    'user/my_Test_Pack/test1.dat user/my_Test_Pack/test1.dnm ' +
+    'user/my_Test_Pack/test1coll.srf user/my_Test_Pack/test2cockpit.srf\n');
+
   const a = await analyzePack(asm.zipBytes, { sha256 });
   assert.deepEqual(a.categories, ['aircraft']);
   assert.match(a.id, /^[0-9a-f]{16}$/);
@@ -137,13 +151,15 @@ test('assembleSceneryZip: minimal ocean field round-trips through analyzePack as
   assert.equal(a.diagnostics.missing, 0);
   const lst = a.generated.find((g) => !g.idx);
   assert.equal(lst.entries, 1);
-  assert.match(lst.text, /^MY_ISLAND "packs\/[0-9a-f]{16}\/scenery\/my_island\.fld" "packs\/[0-9a-f]{16}\/scenery\/my_island\.stp"$/m);
+  // Community layout: payload under user/<packName>/, list references rewritten
+  // by the analyzer to the isolated packs/<id>/ root.
+  assert.match(lst.text, /^MY_ISLAND "packs\/[0-9a-f]{16}\/user\/my_island\/my_island\.fld" "packs\/[0-9a-f]{16}\/user\/my_island\/my_island\.stp"$/m);
   // The generated field/start files carry the wizard's values.
-  const fld = new TextDecoder().decode(asm.zipBytes && (await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['scenery/my_island.fld']);
+  const fld = new TextDecoder().decode(asm.zipBytes && (await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['user/my_island/my_island.fld']);
   assert.match(fld, /^FIELD$/m);
   assert.match(fld, /^GND 40 90 60$/m);
   assert.match(fld, /^SKY 23 106 189$/m);
-  const stp = new TextDecoder().decode((await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['scenery/my_island.stp']);
+  const stp = new TextDecoder().decode((await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['user/my_island/my_island.stp']);
   assert.match(stp, new RegExp('^N ' + SCENERY_START + '$', 'm'));
   assert.match(stp, /^C POSITION 0\.00m 800\.00m 0\.00m$/m);
 });
@@ -155,7 +171,7 @@ test('assembleSceneryZip with islands: PC2 visual + PST AREA LAND, exact PCK lin
     name: 'DRAWN', islands: [{ points: tri }, { points: blob, color: [200, 180, 120] }],
   });
   const { unzipSync } = await import('../web/vendor/fflate.js');
-  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/drawn.fld']);
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/drawn/drawn.fld']);
 
   // PCK count must equal the embedded pc2 line count EXACTLY (loader counts
   // lines back to OUTSIDE state; a mismatch corrupts everything after it).
@@ -183,14 +199,14 @@ test('assembleSceneryZip with islands: PC2 visual + PST AREA LAND, exact PCK lin
   assert.equal(a.diagnostics.missing, 0);
 
   // The start position moves upwind so the drawn islands sit ahead of the nose.
-  const stp = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/drawn.stp']);
+  const stp = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/drawn/drawn.stp']);
   assert.match(stp, /^C POSITION 0\.00m 1000\.00m 6000\.00m$/m);
 });
 
 test('assembleSceneryZip without islands stays the proven 8-line header', async () => {
   const asm = assembleSceneryZip({ name: 'PLAIN' });
   const { unzipSync } = await import('../web/vendor/fflate.js');
-  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/plain.fld']);
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/plain/plain.fld']);
   assert.doesNotMatch(fld, /PCK|PC2|PST/);
   assert.equal(fld.trim().split('\n').length, 8);
 });
@@ -208,8 +224,8 @@ test('assembleSceneryZip rich: GOB objects, TER mountains, extra starts', async 
   });
   const { unzipSync } = await import('../web/vendor/fflate.js');
   const z = unzipSync(asm.zipBytes);
-  const fld = new TextDecoder().decode(z['scenery/rich.fld']);
-  const stp = new TextDecoder().decode(z['scenery/rich.stp']);
+  const fld = new TextDecoder().decode(z['user/rich/rich.fld']);
+  const stp = new TextDecoder().decode(z['user/rich/rich.stp']);
 
   // GOB: static placement (no MPN/MPS), heading in 32768=pi units (90deg -> 16384).
   assert.match(fld, /^GOB\nPOS 3000\.00 0\.00 -1000\.00 16384 0 0\nID 0\nTAG "WB_OBJ_0"\nNAM AIRCRAFTCARRIER\nIFF 0\nFLG 0\nEND$/m);
@@ -249,8 +265,8 @@ test('assembleSceneryZip runways: pavement PLGs + landable pad + threshold spawn
   });
   const { unzipSync } = await import('../web/vendor/fflate.js');
   const z = unzipSync(asm.zipBytes);
-  const fld = new TextDecoder().decode(z['scenery/rwy.fld']);
-  const stp = new TextDecoder().decode(z['scenery/rwy.stp']);
+  const fld = new TextDecoder().decode(z['user/rwy/rwy.fld']);
+  const stp = new TextDecoder().decode(z['user/rwy/rwy.stp']);
 
   // Pavement rides the shared .pc2 even with zero islands, PCK count exact.
   const m = fld.match(/^PCK "00000000\.pc2" (\d+)$/m);

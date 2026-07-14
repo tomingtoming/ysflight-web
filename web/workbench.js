@@ -127,16 +127,32 @@ const emit = (p) => (/\s/.test(p) ? `"${p}"` : p);
 export const RECIPE_FILE = 'workbench.json';
 const recipeEntry = (recipe) => new TextEncoder().encode(JSON.stringify({ schema: 1, ...recipe }));
 
+// Community addon layout (YSFHQ convention, same shape as the real community
+// packs the importer was built against, e.g. test/fixtures/testpack.zip): the
+// engine-scanned .lst lives in aircraft/ (air_<name>.lst) while the payload
+// ships under user/<packName>/, referenced root-relative from the list.  The
+// engine resolves list entries against the user-dir root either way, and the
+// importer resolves them case-insensitively — this is manners, not mechanics.
 export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coarse, recipe }) {
   if (!dat) throw new Error(ERR.NO_DAT);
   if (!visual) throw new Error(ERR.NO_VISUAL);
   if (!collision) throw new Error(ERR.NO_COLLISION);
 
   const warnings = [];
+  const datBytes = dat.bytes instanceof Uint8Array ? dat.bytes : new Uint8Array(dat.bytes);
+  const identity = parseDatIdentity(datBytes);
+  if (!identity) warnings.push('no-ascii-identify');
+
+  // The pack name doubles as the user/<packName>/ payload directory, so it is
+  // sanitized to ASCII-safe characters (it already was, for the .lst name).
+  const packName = (name || (identity && identity.identify) || stem(dat.name) || 'workbench')
+    .replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'workbench';
+  const payloadDir = 'user/' + packName + '/';
+
   const entries = {};
   const used = new Set();
   const add = (slot) => {
-    const entry = 'aircraft/' + sanitizeEntry(slot.name);
+    const entry = payloadDir + sanitizeEntry(slot.name);
     if (used.has(entry.toLowerCase())) throw new Error('workbench: duplicate file name: ' + slot.name);
     used.add(entry.toLowerCase());
     entries[entry] = slot.bytes instanceof Uint8Array ? slot.bytes : new Uint8Array(slot.bytes);
@@ -150,11 +166,6 @@ export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coa
     else warnings.push('coarse-needs-cockpit'); // positional slot 5 needs slot 4 occupied
   }
 
-  const identity = parseDatIdentity(entries[tokens[0]]);
-  if (!identity) warnings.push('no-ascii-identify');
-
-  const packName = (name || (identity && identity.identify) || stem(dat.name) || 'workbench')
-    .replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'workbench';
   const lstLine = tokens.map(emit).join(' ') + '\n';
   entries['aircraft/air_' + packName.toLowerCase() + '.lst'] = new TextEncoder().encode(lstLine);
   if (recipe) entries[RECIPE_FILE] = recipeEntry({ type: 'aircraft', ...recipe });
@@ -432,8 +443,8 @@ const num = (v, d) => (Math.round(v * 100) / 100).toFixed(d);
 // Assemble a minimal flyable scenery pack as plain text — .fld and .stp are
 // line-based text formats (yssceneryio.cpp), and the smallest field the engine
 // accepts is just the header block (ENDF is optional; LoadFld ends at EOF).
-// Ships the same normal-form zip as everything else: sce_<name>.lst pointing at
-// scenery/<name>.fld + .stp (3 tokens, same shape as the flying scnpack fixture).
+// Ships the same normal-form zip as everything else: scenery/sce_<name>.lst
+// pointing at user/<name>/<name>.fld + .stp (3 tokens, community layout).
 //
 // islands: [{points: [[xEastM, zSouthM], ...], color?: [r,g,b]}] — each becomes
 //   (a) a PC2 PLG polygon (the VISIBLE land; concave is fine, the engine
@@ -656,11 +667,14 @@ export function assembleSceneryZip({
   });
   const stp = stpBlocks.map((b) => b.join('\n')).join('\n\n') + '\n';
 
+  // Community addon layout (see assembleAircraftZip): the scanned .lst stays
+  // in scenery/, the payload ships under user/<packName>/.
   const enc = new TextEncoder();
+  const payloadDir = 'user/' + packName + '/';
   const entries = {
-    ['scenery/sce_' + packName + '.lst']: enc.encode(ident + ' scenery/' + fileStem + '.fld scenery/' + fileStem + '.stp\n'),
-    ['scenery/' + fileStem + '.fld']: enc.encode(fld),
-    ['scenery/' + fileStem + '.stp']: enc.encode(stp),
+    ['scenery/sce_' + packName + '.lst']: enc.encode(ident + ' ' + payloadDir + fileStem + '.fld ' + payloadDir + fileStem + '.stp\n'),
+    [payloadDir + fileStem + '.fld']: enc.encode(fld),
+    [payloadDir + fileStem + '.stp']: enc.encode(stp),
   };
   if (recipe) entries[RECIPE_FILE] = recipeEntry({ type: 'scenery', ...recipe });
   return { zipBytes: zipSync(entries), ident, packName };
