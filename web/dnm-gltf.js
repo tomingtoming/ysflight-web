@@ -111,7 +111,10 @@ export const CLA_NAME = {
   13: 'ConcordeVisor', 14: 'GearDoor', 15: 'GearRoomWall', 16: 'BrakeOrHook',
   17: 'GearDoorFast', 18: 'PropellerSlow', 20: 'PropellerFast', 21: 'Turret',
   22: 'Tire', 23: 'Steering', 24: 'RotorCustomAxis',
-  40: 'LeftDoor', 41: 'RightDoor',
+  // Lights (ysshelldnmident.h YSDNM_CLASSID_NAVLIGHT … LIGHTONLANDINGGEAR)
+  30: 'NavLight', 31: 'Beacon', 32: 'Strobe', 33: 'LandingLight', 34: 'LightOnGear',
+  // Doors / interior
+  40: 'LeftDoor', 41: 'RightDoor', 42: 'RearDoor', 43: 'Interior',
 };
 // Continuous-rotation classes -> which Euler slot spins ([x,y,z,h,p,b] index).
 const SPIN_SLOT = { 3: 3, 18: 5, 20: 5, 22: 4, 24: 3 };

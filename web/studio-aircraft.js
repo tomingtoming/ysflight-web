@@ -19,6 +19,7 @@ import {
 import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf, estimateCockpit } from './dnm-gltf.js';
 import { mountDatEditor } from './studio-dat.js';
+import { buildMovablesSection } from './studio-movables.js';
 
 const S = ({
   ja: {
@@ -201,6 +202,7 @@ let byName = new Map();  // basename -> entry, rebuilt by rebuildSlots
 let preview = null;
 let previewedBytes = null; // the visual bytes currently mounted — paint updates
                            // live via setPaint, so only a different FILE remounts
+let movablesEditor = null; // handle returned by buildMovablesSection
 
 // Cockpit eye point (YS aircraft coords = the .dat COCKPITP value) and where
 // it came from: 'recipe' | 'glb' | 'dat' | 'estimate' | 'user'.  Sticky
@@ -280,6 +282,10 @@ function refreshPreview() {
     animBar.appendChild(r);
   }
   if (!any) animBar.appendChild(el('div', 'msg', S.animNone));
+
+  // Notify the movables editor that the preview has been (re)mounted so gizmos
+  // can be injected into the new scene.
+  if (movablesEditor) movablesEditor.refresh();
 }
 
 // --- assemble section ---------------------------------------------------------------
@@ -309,7 +315,7 @@ function rebuildSlots(preset) {
     coarse: mkSel(S.slotCoarse, candidates.dnm, pre('coarse') || guess.coarse, false),
   };
   if (!preset && generatedDat) sels.dat.value = '@generated';
-  sels.visual.addEventListener('change', () => { refreshPreview(); renderPaint(); deriveCockpit(); });
+  sels.visual.addEventListener('change', () => { refreshPreview(); renderPaint(); deriveCockpit(); if (movablesEditor) movablesEditor.refresh(); });
   sels.dat.addEventListener('change', () => { deriveCockpit(); refreshDatEditor(); });
 
   const nameIn = Object.assign(document.createElement('input'), {
@@ -828,6 +834,22 @@ async function main() {
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
   buildCockpitSection(chrome.rail);
+
+  // Movable-part & light GUI editor.  Mounts into the rail; reads the visual
+  // entry and the live preview handle via closures over module state.
+  movablesEditor = buildMovablesSection(chrome.rail, {
+    getVisualEntry: () => visualEntry(),
+    getPreview: () => preview,
+    onBytesChanged: (newBytes, _name) => {
+      const ent = visualEntry();
+      if (!ent) return;
+      ent.bytes = newBytes;
+      previewedBytes = null; // force remount on next refresh
+      refreshPreview();
+      renderPaint();
+    },
+  });
+
   await buildDatSection(chrome.rail);
   buildBlenderSection(chrome.rail);
 
