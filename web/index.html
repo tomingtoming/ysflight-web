@@ -1296,7 +1296,7 @@
     ysfwBRStack().appendChild(vrBtn);
     setInterval(function () {
       var vr = Module.ysfwVr;
-      var show = !!(vr && vr.supported && (globalThis.ysfwInFlight || inVr));
+      var show = !!(vr && vr.supported);
       vrBtn.style.display = show ? '' : 'none';
     }, 500);
   })();
