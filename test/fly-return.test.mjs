@@ -1,17 +1,19 @@
 // Unit tests for the ?return= whitelist validator (web/fly-return.js).
-// Run with:  deno test test/fly-return.test.mjs
+// Runs with node --test (CI: scripts/test.sh) and also with deno test.
 //
 // The validator is the security gate that prevents open-redirect attacks when
 // index.html navigates back to the originating studio page after a Quick Flight.
 
-import { assertEquals, assertNotEquals } from 'jsr:@std/assert@1';
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
 import { validateReturnPage, RETURN_WHITELIST } from '../web/fly-return.js';
 
 // ── Whitelist completeness ───────────────────────────────────────────────────
 
-Deno.test('RETURN_WHITELIST contains exactly the four expected pages', () => {
+test('RETURN_WHITELIST contains exactly the four expected pages', () => {
   const sorted = [...RETURN_WHITELIST].sort();
-  assertEquals(sorted, [
+  assert.deepEqual(sorted, [
     'studio-aircraft.html',
     'studio-pack.html',
     'studio-scenery.html',
@@ -21,87 +23,86 @@ Deno.test('RETURN_WHITELIST contains exactly the four expected pages', () => {
 
 // ── Valid pages ──────────────────────────────────────────────────────────────
 
-Deno.test('accepts workbench.html', () => {
-  assertEquals(validateReturnPage('workbench.html'), 'workbench.html');
+test('accepts workbench.html', () => {
+  assert.equal(validateReturnPage('workbench.html'), 'workbench.html');
 });
 
-Deno.test('accepts studio-aircraft.html', () => {
-  assertEquals(validateReturnPage('studio-aircraft.html'), 'studio-aircraft.html');
+test('accepts studio-aircraft.html', () => {
+  assert.equal(validateReturnPage('studio-aircraft.html'), 'studio-aircraft.html');
 });
 
-Deno.test('accepts studio-scenery.html', () => {
-  assertEquals(validateReturnPage('studio-scenery.html'), 'studio-scenery.html');
+test('accepts studio-scenery.html', () => {
+  assert.equal(validateReturnPage('studio-scenery.html'), 'studio-scenery.html');
 });
 
-Deno.test('accepts studio-pack.html', () => {
-  assertEquals(validateReturnPage('studio-pack.html'), 'studio-pack.html');
+test('accepts studio-pack.html', () => {
+  assert.equal(validateReturnPage('studio-pack.html'), 'studio-pack.html');
 });
 
 // ── Rejection cases ───────────────────────────────────────────────────────────
 
-Deno.test('rejects empty string', () => {
-  assertEquals(validateReturnPage(''), null);
+test('rejects empty string', () => {
+  assert.equal(validateReturnPage(''), null);
 });
 
-Deno.test('rejects null', () => {
-  assertEquals(validateReturnPage(null), null);
+test('rejects null', () => {
+  assert.equal(validateReturnPage(null), null);
 });
 
-Deno.test('rejects undefined', () => {
-  assertEquals(validateReturnPage(undefined), null);
+test('rejects undefined', () => {
+  assert.equal(validateReturnPage(undefined), null);
 });
 
-Deno.test('rejects absolute URL (https://)', () => {
-  assertEquals(validateReturnPage('https://evil.example.com/'), null);
+test('rejects absolute URL (https://)', () => {
+  assert.equal(validateReturnPage('https://evil.example.com/'), null);
 });
 
-Deno.test('rejects absolute URL (http://)', () => {
-  assertEquals(validateReturnPage('http://evil.example.com/'), null);
+test('rejects absolute URL (http://)', () => {
+  assert.equal(validateReturnPage('http://evil.example.com/'), null);
 });
 
-Deno.test('rejects protocol-relative URL (//)', () => {
-  assertEquals(validateReturnPage('//evil.example.com/workbench.html'), null);
+test('rejects protocol-relative URL (//)', () => {
+  assert.equal(validateReturnPage('//evil.example.com/workbench.html'), null);
 });
 
-Deno.test('rejects dot-dot path traversal (../)', () => {
-  assertEquals(validateReturnPage('../index.html'), null);
+test('rejects dot-dot path traversal (../)', () => {
+  assert.equal(validateReturnPage('../index.html'), null);
 });
 
-Deno.test('rejects dot-dot embedded in value (../evil)', () => {
-  assertEquals(validateReturnPage('workbench.html/../../../etc/passwd'), null);
+test('rejects dot-dot embedded in value', () => {
+  assert.equal(validateReturnPage('workbench.html/../../../etc/passwd'), null);
 });
 
-Deno.test('rejects forward-slash injection', () => {
-  assertEquals(validateReturnPage('workbench.html/../../etc/passwd'), null);
+test('rejects forward-slash injection', () => {
+  assert.equal(validateReturnPage('workbench.html/../../etc/passwd'), null);
 });
 
-Deno.test('rejects backslash injection', () => {
-  assertEquals(validateReturnPage('workbench.html\\..\\evil'), null);
+test('rejects backslash injection', () => {
+  assert.equal(validateReturnPage('workbench.html\\..\\evil'), null);
 });
 
-Deno.test('rejects colon (scheme separator / javascript:)', () => {
-  assertEquals(validateReturnPage('javascript:alert(1)'), null);
+test('rejects colon (scheme separator / javascript:)', () => {
+  assert.equal(validateReturnPage('javascript:alert(1)'), null);
 });
 
-Deno.test('rejects unknown filename not in whitelist (index.html)', () => {
-  assertEquals(validateReturnPage('index.html'), null);
+test('rejects unknown filename (index.html)', () => {
+  assert.equal(validateReturnPage('index.html'), null);
 });
 
-Deno.test('rejects unknown filename not in whitelist (admin.html)', () => {
-  assertEquals(validateReturnPage('admin.html'), null);
+test('rejects unknown filename (admin.html)', () => {
+  assert.equal(validateReturnPage('admin.html'), null);
 });
 
-Deno.test('rejects whitespace-only value', () => {
-  assertEquals(validateReturnPage('   '), null);
+test('rejects whitespace-only value', () => {
+  assert.equal(validateReturnPage('   '), null);
 });
 
 // ── Edge cases ────────────────────────────────────────────────────────────────
 
-Deno.test('case-insensitive: Workbench.html passes whitelist', () => {
-  // validateReturnPage lower-cases for the whitelist check but returns the original.
-  assertEquals(validateReturnPage('Workbench.html'), 'Workbench.html');
+test('case-insensitive: Workbench.html is accepted (returns original case)', () => {
+  assert.equal(validateReturnPage('Workbench.html'), 'Workbench.html');
 });
 
-Deno.test('case-insensitive: Studio-Aircraft.html passes whitelist', () => {
-  assertEquals(validateReturnPage('Studio-Aircraft.html'), 'Studio-Aircraft.html');
+test('case-insensitive: Studio-Aircraft.html is accepted (returns original case)', () => {
+  assert.equal(validateReturnPage('Studio-Aircraft.html'), 'Studio-Aircraft.html');
 });
