@@ -145,6 +145,13 @@ check('menuData[5] (menuDrawn) becomes 1 after engine ticks (DrawMenu rendered i
 const stats = await page.evaluate(() => globalThis.Module.ysfwVr.readMenuStats());
 check('menu FBO has non-zero mean luminance (content was drawn)', stats.lum > 0.5, 'lum=' + stats.lum.toFixed(2));
 
+// ---- Sky: setupSky() graceful-degrade in test mode -------------------------
+// In test mode (forceMultiview with no real XR binding) setupSky() detects
+// the missing mvBinding and returns without allocating, leaving skyRes===null.
+// This verifies the sky path doesn't throw on a headless/non-layers browser.
+const skyRes = await page.evaluate(() => globalThis.Module.ysfwVr.skyRes);
+check('skyRes is null in test mode (no real XR binding -- graceful degrade)', skyRes === null, 'skyRes=' + JSON.stringify(skyRes));
+
 // ---- vr.simSilentFrames should be 0 (watchdog disarmed) -------------------
 // DrawMenu calls FsVrMarkSimDrawn, which increments the sim-drawn counter.
 // ConsumeSimDrawnFrames resets it and returns > 0, so onXRFrame keeps

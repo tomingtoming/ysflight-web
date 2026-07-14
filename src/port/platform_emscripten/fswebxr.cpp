@@ -459,6 +459,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// object = {fb,tex,fbId,texId,w,h,quad,inLayers} once setupMenu
 		// allocates the FBO + XRQuadLayer.
 		menuRes:null,
+		// Static equirect sky background for the menu (XREquirectLayer, layers
+		// path only). Rendered between the projection layer and the menu quad
+		// so it fills the black void while no 3D scene is drawing.
+		// null = not allocated, false = unavailable (createEquirectLayer threw),
+		// object = {layer,canvas,inLayers} once created.
+		skyRes:null,
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -1244,6 +1250,181 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.menuRes=null;
 	}
 
+	// ---- Static equirect sky background for the VR menu --------------------
+	// Procedurally generated pre-dawn sky on a 2048x1024 canvas using a seeded
+	// PRNG (mulberry32 with a fixed seed) for star placement.  Uploaded to the
+	// XREquirectLayer every presented frame following the "every-frame upload"
+	// discipline the help placards established (see uploadCanvasToSubImage's
+	// comment: compositor-side buffer loss requires freshness on every frame,
+	// so upload-once is NOT safe even for static content).
+	//
+	// Layer order (back-to-front): the equirect sits between the projection
+	// layer and the menu quad so it fills the black void the inactive 3D scene
+	// leaves while the menu is showing.  Array order:
+	//   [mvLayer (proj), ... dial/help/perf ..., equirect, menuQuad]
+	//
+	// Graceful degrade: createEquirectLayer may not exist on all WebXR
+	// implementations; failure sets skyRes=false and the menu keeps working
+	// on a black background.
+
+	// Seeded PRNG: mulberry32 (simple, fast, deterministic).
+	// See https://github.com/bryc/code/blob/master/jshash/PRNGs.md
+	function mulberry32(seed)
+	{
+		return function()
+		{
+			seed=(seed+0x6D2B79F5)|0;
+			var t=Math.imul(seed^(seed>>>15),1|seed);
+			t=t+Math.imul(t^(t>>>7),61|t)^t;
+			return ((t^(t>>>14))>>>0)/4294967296;
+		};
+	}
+
+	function buildSkyCanvas()
+	{
+		var W=2048, H=1024;
+		var canvas=document.createElement('canvas');
+		canvas.width=W; canvas.height=H;
+		var ctx=canvas.getContext('2d');
+		if(!ctx){ return null; }
+
+		// ---- Sky gradient (top -> horizon -> ground) -----------------------
+		var grad=ctx.createLinearGradient(0,0,0,H);
+		grad.addColorStop(0,   '#000005'); // zenith: almost black
+		grad.addColorStop(0.35,'#050a1a'); // upper sky: deep navy
+		grad.addColorStop(0.52,'#0c1830'); // mid sky
+		grad.addColorStop(0.60,'#1a2a48'); // approaching horizon
+		grad.addColorStop(0.65,'#2d3c5a'); // pre-dawn horizon glow
+		grad.addColorStop(0.70,'#4a4a58'); // ground horizon
+		grad.addColorStop(0.75,'#1a1a1e'); // near ground
+		grad.addColorStop(1,   '#0a0a0c'); // nadir
+		ctx.fillStyle=grad;
+		ctx.fillRect(0,0,W,H);
+
+		// ---- Subtle horizon glow -------------------------------------------
+		var hGrad=ctx.createRadialGradient(W/2,H*0.65,0,W/2,H*0.65,W*0.45);
+		hGrad.addColorStop(0,'rgba(100,120,160,0.18)');
+		hGrad.addColorStop(0.4,'rgba(70,90,130,0.08)');
+		hGrad.addColorStop(1,'rgba(0,0,0,0)');
+		ctx.fillStyle=hGrad;
+		ctx.fillRect(0,0,W,H);
+
+		// ---- Stars (upper sky only, seeded PRNG) ---------------------------
+		// Horizon is at y = H*0.65; stars only appear above that.
+		var rng=mulberry32(0x42a7f91c); // fixed seed
+		var starCount=1800;
+		for(var i=0; i<starCount; ++i)
+		{
+			var sx=rng()*W;
+			var sy=rng()*H*0.62; // confined to upper 62% (clear of horizon glow)
+			var ssize=0.3+rng()*1.1;
+			// Twinkle: slightly varied alpha so not all stars are the same brightness
+			var salpha=0.35+rng()*0.65;
+			ctx.beginPath();
+			ctx.arc(sx,sy,ssize,0,Math.PI*2);
+			// Mix of white-blue colours for realism
+			var hue=Math.floor(rng()*40); // 0-40 range: white to slightly warm
+			ctx.fillStyle='hsla('+hue+',20%,90%,'+salpha.toFixed(2)+')';
+			ctx.fill();
+		}
+
+		return canvas;
+	}
+
+	function setupSky()
+	{
+		// skyRes===false means we already tried and failed (createEquirectLayer
+		// not available); don't retry.
+		if(vr.skyRes===false || vr.skyRes)
+		{
+			return;
+		}
+		if(!vr.mvBinding || !vr.viewerSpace)
+		{
+			return; // Not available in test mode.
+		}
+
+		var canvas=buildSkyCanvas();
+		if(!canvas)
+		{
+			vr.skyRes=false;
+			return;
+		}
+
+		var layer;
+		try
+		{
+			layer=vr.mvBinding.createEquirectLayer({
+				space:vr.viewerSpace,
+				viewPixelWidth:2048,
+				viewPixelHeight:1024,
+				layout:'mono',
+				isStatic:false // we upload each frame (see header comment)
+			});
+		}
+		catch(e)
+		{
+			console.warn('[vr] equirect sky unavailable: '+(e&&e.message?e.message:e));
+			vr.skyRes=false;
+			return;
+		}
+
+		vr.skyRes={layer:layer,canvas:canvas,inLayers:false};
+		console.log('[vr] equirect sky 2048x1024 allocated');
+	}
+
+	function teardownSky()
+	{
+		if(!vr.skyRes || vr.skyRes===false)
+		{
+			vr.skyRes=null;
+			return;
+		}
+		try{ if(vr.skyRes.layer){ vr.skyRes.layer.destroy(); } }catch(e){}
+		vr.skyRes=null;
+	}
+
+	// Upload the sky canvas to the equirect layer every presented frame.
+	// Driven by the same menuVisible state as updateMenuLayer.
+	// Returns true if vr.skyRes.inLayers changed (caller must rebuild the
+	// layers list via syncRenderStateLayers -- updateMenuLayer owns that call
+	// so this function never calls syncRenderStateLayers itself).
+	function updateSkyLayer(frame,menuInLayers)
+	{
+		if(!vr.skyRes || vr.skyRes===false)
+		{
+			return false;
+		}
+
+		var layersChanged=false;
+		if(menuInLayers)
+		{
+			if(!vr.skyRes.inLayers)
+			{
+				vr.skyRes.inLayers=true;
+				layersChanged=true;
+			}
+			// Upload every presented frame (swapchain rotation means upload-once
+			// is not safe -- same rationale as the dial/help-placard uploads).
+			if(vr.skyRes.layer && vr.mvBinding)
+			{
+				try
+				{
+					var sub=vr.mvBinding.getSubImage(vr.skyRes.layer,frame);
+					uploadCanvasToSubImage(vr.skyRes.canvas,sub);
+				}
+				catch(e){}
+			}
+		}
+		else if(vr.skyRes.inLayers)
+		{
+			vr.skyRes.inLayers=false;
+			layersChanged=true;
+		}
+
+		return layersChanged;
+	}
+
 	// Called once per onXRFrame after _YsfwExternalTick().  Checks whether the
 	// engine wrote to the menu FBO this frame (menuDrawn flag), blits the
 	// content into the XRQuadLayer's swapchain texture, and adds/removes the
@@ -1285,6 +1466,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		else if(vr.menuRes.inLayers)
 		{
 			vr.menuRes.inLayers=false;
+			layersChanged=true;
+		}
+
+		// Sky equirect tracks the same menuDrawn state; drives its own inLayers
+		// and upload, returns true if inLayers changed (we OR into layersChanged
+		// so the single syncRenderStateLayers call below covers both).
+		if(updateSkyLayer(frame,menuDrawn))
+		{
 			layersChanged=true;
 		}
 
@@ -3727,7 +3916,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.helpRes.right && vr.helpRes.right.inLayers){ layers.push(vr.helpRes.right.quad); }
 		if(vr.helpRes.left && vr.helpRes.left.inLayers){ layers.push(vr.helpRes.left.quad); }
 		if(vr.perfRes && vr.perfRes.inLayers){ layers.push(vr.perfRes.quad); }
-		// Menu quad: placed last (front-most) so it composites over the scene.
+		// Sky equirect: placed between dials/perf and the menu quad so it fills
+		// the black void (no active 3D scene) while the menu is shown.
+		if(vr.skyRes && vr.skyRes.inLayers && vr.skyRes.layer){ layers.push(vr.skyRes.layer); }
+		// Menu quad: placed last (front-most) so it composites over the sky.
 		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
 		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
 	}
@@ -4563,11 +4755,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.help={visible:false,shownAt:0};
 					vr.perfRes=undefined;
 					vr.menuRes=null;
+					vr.skyRes=null;
 
 					teardownHud();
 					teardownGui();
 					teardownShadowFbo();
 					teardownMenu();
+					teardownSky();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -4584,6 +4778,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					setupGui();
 					setupShadowFbo();
 					setupMenu();
+					setupSky();
 				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
@@ -4829,6 +5024,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		setupGui();
 		setupShadowFbo();
 		setupMenu(); // Test mode: allocates menu FBO without XRQuadLayer.
+		setupSky();  // Test mode: setupSky checks for mvBinding and skips gracefully.
 		_YsfwVrSetPresenting(1);
 		// Headless stand-in for a real session start (see vr.enter): also
 		// auto-shows the help placards, so scripts/smoke-vrctl.mjs can drive
