@@ -386,6 +386,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// huge so the quad cannot appear before the engine's first real menu
 		// render of a session.
 		menuIdleFrames:1e9,
+		menuAnchor:null, // {pos:{x,y,z},quat:{x,y,z,w}} in vr.refSpace; null = not anchored yet
 		// Why the last session ended, when the JS side knows better than the
 		// bare 'end' event.  null = normal end; 'menu-unsupported' = the
 		// watchdog fired while the menu was up because the menu quad could
@@ -1155,11 +1156,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.gui=null;
 	}
 
-	// ---- VR main-menu off-screen FBO + head-locked quad layer ---------------
+	// ---- VR main-menu off-screen FBO + world-anchored quad layer ------------
 	// Called at session start (setupMenu) and end (teardownMenu).  The menu FBO
 	// is a plain mono RGBA 2D texture (not multiview) the engine renders the
 	// 2D main menu into each tick; updateMenuLayer blits it into the XRQuadLayer
 	// swapchain every frame the engine wrote to it (menuDrawn flag).
+	// The quad is anchored in vr.refSpace (world-fixed) so it stays put when
+	// the player's head moves (anchorMenuQuad; see also vrRecenter hook).
 	function setupMenu()
 	{
 		if(vr.menuRes)
@@ -1170,7 +1173,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// XRWebGLBinding, but we still allocate the FBO so the engine can render
 		// into it and the smoke test can read it back.
 		var inTestMode=(vr.testMode && !vr.mvBinding);
-		if(!inTestMode && (!vr.mvBinding||!vr.viewerSpace))
+		if(!inTestMode && (!vr.mvBinding||!vr.refSpace))
 		{
 			return;
 		}
@@ -1220,17 +1223,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			try
 			{
 				quad=vr.mvBinding.createQuadLayer({
-					space:vr.viewerSpace,
+					space:vr.refSpace,
 					viewPixelWidth:W,
 					viewPixelHeight:H,
 					layout:'mono',
 					width:1.6,
 					height:1.6*H/W
 				});
-				quad.transform=new XRRigidTransform(
-					{x:0,y:-0.1,z:-1.8},
-					{x:0,y:0,z:0,w:1}
-				);
+				// Placeholder; overwritten by anchorMenuQuad before the quad
+				// ever enters the layers list.
+				quad.transform=new XRRigidTransform({x:0,y:0,z:0},{x:0,y:0,z:0,w:1});
 			}
 			catch(e)
 			{
@@ -1263,8 +1265,33 @@ EM_JS(void,YsfwInstallWebXR,(),
 		try{ if(vr.menuRes.quad){ vr.menuRes.quad.destroy(); } }catch(e){}
 		GL.framebuffers[vr.menuRes.fbId]=null;
 		GL.textures[vr.menuRes.texId]=null;
+		vr.menuAnchor=null;
 		vr.menuRes=null;
 		vr.menuIdleFrames=1e9;
+	}
+
+	// Locks the menu quad to world space at the moment the menu becomes
+	// visible (or re-anchors on vrRecenter while visible).
+	// viewerPose: plain-object {position:{x,y,z},orientation:{x,y,z,w}} in
+	// vr.refSpace (same shape as vr.lastViewerPose).
+	// Places the quad 1.8 m ahead of the viewer's yaw-only forward direction,
+	// 0.1 m below head height, facing the viewer.
+	function anchorMenuQuad(viewerPose)
+	{
+		if(!viewerPose||!vr.menuRes||!vr.menuRes.quad)
+		{
+			return;
+		}
+		var pos=viewerPose.position;
+		var yawQ=yawOnlyQuatFromOrientation(viewerPose.orientation);
+		var fwd=rotateVecByQuat({x:0,y:0,z:-1},yawQ);
+		var menuPos={x:pos.x+fwd.x*1.8,y:pos.y-0.1,z:pos.z+fwd.z*1.8};
+		vr.menuAnchor={pos:menuPos,quat:yawQ};
+		try
+		{
+			vr.menuRes.quad.transform=new XRRigidTransform(menuPos,yawQ);
+		}
+		catch(e){}
 	}
 
 	// ---- Static equirect sky background for the VR menu --------------------
@@ -1485,7 +1512,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			return;
 		}
-		if(!vr.mvBinding || !vr.viewerSpace)
+		if(!vr.mvBinding || !vr.refSpace)
 		{
 			return; // Layers path only (test mode / non-layers browsers skip).
 		}
@@ -1499,7 +1526,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		try
 		{
 			quad=vr.mvBinding.createQuadLayer({
-				space:vr.viewerSpace,
+				space:vr.refSpace,
 				viewPixelWidth:32,
 				viewPixelHeight:32,
 				layout:'mono',
@@ -1541,17 +1568,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var layersChanged=false;
 		if(show)
 		{
-			// Reposition to the hit point, slightly in front of the menu quad
-			// (menu plane is z=-1.8 in viewer space -- see setupMenu /
-			// processMenuRayInput, which share that constant).
-			try
+			// Reposition to the hit point, slightly in front of the menu quad,
+			// in world space (refSpace).  hitVX/hitVY are in quad-LOCAL coords;
+			// transform to refSpace via the anchor.
+			if(vr.menuAnchor)
 			{
-				vr.cursorRes.quad.transform=new XRRigidTransform(
-					{x:menuRayState.hitVX,y:menuRayState.hitVY,z:-1.79},
-					{x:0,y:0,z:0,w:1}
-				);
+				try
+				{
+					var lp=rotateVecByQuat(
+						{x:menuRayState.hitVX,y:menuRayState.hitVY,z:0.01},
+						vr.menuAnchor.quat);
+					var wp={
+						x:lp.x+vr.menuAnchor.pos.x,
+						y:lp.y+vr.menuAnchor.pos.y,
+						z:lp.z+vr.menuAnchor.pos.z};
+					vr.cursorRes.quad.transform=new XRRigidTransform(wp,vr.menuAnchor.quat);
+				}
+				catch(e){}
 			}
-			catch(e){}
 			if(!vr.cursorRes.inLayers)
 			{
 				vr.cursorRes.inLayers=true;
@@ -1617,6 +1651,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 		if(menuVisible)
 		{
+			// Anchor (or re-anchor after vrRecenter) the menu quad in world
+			// space whenever it is visible without an anchor.  Rising edge
+			// (first show) and post-recenter recovery both hit this path.
+			if(!vr.menuAnchor)
+			{
+				anchorMenuQuad(vr.lastViewerPose);
+			}
 			if(!vr.menuRes.inLayers)
 			{
 				vr.menuRes.inLayers=true;
@@ -1640,6 +1681,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		else if(vr.menuRes.inLayers)
 		{
 			vr.menuRes.inLayers=false;
+			vr.menuAnchor=null; // Clear so next show re-anchors fresh.
 			layersChanged=true;
 		}
 
@@ -1700,27 +1742,30 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return out;
 	};
 
-	// ---- Menu ray-to-mouse synthesis ----------------------------------------
-	// Projects each controller's aim ray onto the menu quad plane (z=-1.8 in
-	// viewer space, centred at {0,-0.1,-1.8}) and injects a mouse-move event +
-	// left-button edge into the engine via YsfwInjectMouseEvent.  Only active
-	// while the menu quad is being shown (menuVisible, checked at call site).
-	//
-	// Menu quad geometry (viewer space):
-	//   centre = (0, -0.1, -1.8);  width = 1.6m;  height = 1.6*H/W
-	//   left edge x = -0.8,  right edge x = +0.8
-	//   top edge  y = -0.1 + 0.5*quadH,  bottom y = -0.1 - 0.5*quadH
-	//
-	// Axis convention from the XR aim space: +Z is the ray direction in view
-	// space (aim space has its +Z pointing forward toward the target).
-	// We intersect the aim ray with the plane at z = -1.8 (viewer-forward is -Z).
-	// wasHit / hitVX / hitVY: whether a controller ray is currently on the
-	// menu quad and where (viewer-space metres) -- read by updateMenuCursor
-	// to place the ring cursor.
+	// hitVX/hitVY: hit point in the menu quad's LOCAL coordinate system (quad
+	// face in the XY plane, +Z facing the viewer).  Read by updateMenuCursor
+	// to place the cursor in world space via vr.menuAnchor.
 	var menuRayState={prevMx:-1,prevMy:-1,prevTrig:false,wasHit:false,hitVX:0,hitVY:0};
+	// Projects each controller's aim ray onto the menu quad (anchored in
+	// vr.refSpace) and injects a mouse-move event + left-button edge into
+	// the engine via YsfwInjectMouseEvent.  Only active while the menu quad
+	// is being shown (menuVisible, checked at call site).
+	//
+	// Menu quad geometry (quad-LOCAL space; quad face in the XY plane):
+	//   centre = (0, 0);  width = 1.6m;  height = 1.6*H/W
+	//   visible face: the +Z side (viewer is at local +Z).
+	//
+	// Ray is fetched in vr.refSpace, then transformed into quad-local coords
+	// via inverse(vr.menuAnchor.quat) * (refRayPos - anchorPos), so the
+	// intersection stays correct when the head moves independently of the
+	// anchored quad.
+	//
+	// wasHit / hitVX / hitVY: whether a controller ray is currently on the
+	// menu quad and where (quad-LOCAL metres) -- read by updateMenuCursor to
+	// place the ring cursor in world space.
 	function processMenuRayInput(frame)
 	{
-		if(!vr.menuRes||!vr.viewerSpace)
+		if(!vr.menuRes||!vr.refSpace||!vr.menuAnchor)
 		{
 			return;
 		}
@@ -1734,9 +1779,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 		var quadW=1.6;
 		var quadH=1.6*texH/texW;
-		var quadCX=0, quadCY=-0.1, quadZ=-1.8;
-		var quadLeft=quadCX-quadW/2;
-		var quadTop =quadCY+quadH/2;
+		var halfW=quadW/2;
+		var halfH=quadH/2;
+
+		// Inverse of the anchor quaternion (unit quat: conjugate == inverse).
+		var aPos=vr.menuAnchor.pos;
+		var aQuat=vr.menuAnchor.quat;
+		var aQuatInv=quatConjugate(aQuat);
 
 		var sources=frame.session.inputSources;
 		var hitMx=-1,hitMy=-1,hitTrig=false,hitVX=0,hitVY=0;
@@ -1747,42 +1796,50 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				continue;
 			}
-			var rayPose=frame.getPose(src.targetRaySpace,vr.viewerSpace);
+			// Ray in refSpace.
+			var rayPose=frame.getPose(src.targetRaySpace,vr.refSpace);
 			if(!rayPose)
 			{
 				continue;
 			}
-			// Ray origin and direction in viewer space.
+			// Transform ray origin into quad-local space.
 			var ro=rayPose.transform.position;
+			var roLocal=rotateVecByQuat(
+				{x:ro.x-aPos.x,y:ro.y-aPos.y,z:ro.z-aPos.z},
+				aQuatInv);
+
+			// Transform ray direction into quad-local space.
+			// Rotate unit forward (0,0,-1) by aim orientation to get world
+			// direction, then rotate into quad-local space.
 			var rd=rayPose.transform.orientation;
-			// Rotate unit forward vector (0,0,-1) by the aim quaternion to get
-			// the ray direction in viewer space.
-			// Rodrigues: v' = v + 2*q.w*(q.xyz x v) + 2*(q.xyz x (q.xyz x v))
 			var vx=0,vy=0,vz=-1;
 			var qx=rd.x,qy=rd.y,qz=rd.z,qw=rd.w;
 			var cx=qy*vz-qz*vy, cy=qz*vx-qx*vz, cz=qx*vy-qy*vx;
-			var dx=qy*cz-qz*cy, dy=qz*cx-qx*cz, dz=qx*cy-qy*cx;
-			var rayDX=vx+2*(qw*cx+dx);
-			var rayDY=vy+2*(qw*cy+dy);
-			var rayDZ=vz+2*(qw*cz+dz);
+			var dx2=qy*cz-qz*cy, dy2=qz*cx-qx*cz, dz2=qx*cy-qy*cx;
+			var worldDX=vx+2*(qw*cx+dx2);
+			var worldDY=vy+2*(qw*cy+dy2);
+			var worldDZ=vz+2*(qw*cz+dz2);
+			var rdLocal=rotateVecByQuat({x:worldDX,y:worldDY,z:worldDZ},aQuatInv);
 
-			// Intersect with the plane at z = quadZ.
-			// t = (quadZ - ro.z) / rayDZ
-			if(Math.abs(rayDZ)<1e-6)
+			// Intersect with the quad's local z=0 plane.
+			// (Visible face is at z=0, viewer is on the +Z side.)
+			// t = -roLocal.z / rdLocal.z
+			if(Math.abs(rdLocal.z)<1e-6)
 			{
-				continue; // Ray is parallel to the plane.
+				continue; // Ray is parallel to the quad face.
 			}
-			var t=(quadZ-ro.z)/rayDZ;
+			var t=-roLocal.z/rdLocal.z;
 			if(t<0)
 			{
-				continue; // Intersection behind the origin.
+				continue; // Intersection is behind the ray origin (or on back face).
 			}
-			var hx=ro.x+t*rayDX;
-			var hy=ro.y+t*rayDY;
+			var hx=roLocal.x+t*rdLocal.x;
+			var hy=roLocal.y+t*rdLocal.y;
 
 			// Map hit point to UV on the quad.
-			var u=(hx-quadLeft)/quadW;
-			var v=(quadTop-hy)/quadH; // y is flipped: top=0, bottom=1
+			// hx in [-halfW, +halfW] -> u in [0,1]; hy in [-halfH, +halfH] -> v in [1,0]
+			var u=(hx+halfW)/quadW;
+			var v=(halfH-hy)/quadH; // y is flipped: top=0, bottom=1
 
 			if(u<0||u>1||v<0||v>1)
 			{
@@ -1791,8 +1848,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 			hitMx=Math.round(u*texW);
 			hitMy=Math.round(v*texH);
-			hitVX=hx;
-			hitVY=hy;
+			hitVX=hx; // quad-local X (read by updateMenuCursor)
+			hitVY=hy; // quad-local Y
 			// Trigger button = left mouse click.
 			var gp=src.gamepad;
 			hitTrig=!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5);
@@ -2313,6 +2370,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			console.warn('[vr] recenter failed: '+(e&&e.message?e.message:e));
 			return;
+		}
+		// If the menu is currently showing, clear the anchor so it re-
+		// positions relative to the new refSpace on the very next frame.
+		if(vr.menuRes&&vr.menuRes.inLayers)
+		{
+			vr.menuAnchor=null;
 		}
 		vrHapticPulse(vr.lastRawSrc.right);
 		setTimeout(function(){ vrHapticPulse(vr.lastRawSrc.right); },120);
@@ -4707,7 +4770,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// Ray-to-mouse synthesis: project controller aim rays onto the menu quad
 		// plane and inject synthetic mouse events into the engine while the
 		// menu is being shown.
-		if(vr.menuRes&&vr.menuRes.inLayers&&pose)
+		if(vr.menuRes&&vr.menuRes.inLayers&&vr.menuAnchor)
 		{
 			processMenuRayInput(frame);
 		}
