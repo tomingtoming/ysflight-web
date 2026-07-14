@@ -384,6 +384,25 @@ export function mountPreview(container, bytes) {
   mirror.add(built.object3d);
   scene.add(mirror);
 
+  // Cockpit eye-point marker: a small cross with a longer arm toward the nose
+  // (+Z in YS coords).  Parented INTO the model so the recenter / mirror /
+  // face-the-camera rotation all apply — marker coordinates are plain YS
+  // aircraft coordinates, the same numbers as the .dat COCKPITP line.
+  const ckMarker = new THREE.Group();
+  ckMarker.visible = false;
+  {
+    const s = Math.max(radius * 0.045, 0.25);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      -s, 0, 0, s, 0, 0, 0, -s, 0, 0, s, 0, 0, 0, -s, 0, 0, s * 2.4,
+    ], 3));
+    const cross = new THREE.LineSegments(geo,
+      new THREE.LineBasicMaterial({ color: 0xffd24d, depthTest: false }));
+    cross.renderOrder = 999; // visible through the hull
+    ckMarker.add(cross);
+  }
+  built.object3d.add(ckMarker);
+
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
   const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(1, 2, 1.5); scene.add(key);
   const fill = new THREE.DirectionalLight(0x99bbff, 0.35); fill.position.set(-1, -0.5, -1); scene.add(fill);
@@ -394,9 +413,32 @@ export function mountPreview(container, bytes) {
   container.appendChild(renderer.domElement);
   renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;cursor:grab';
 
-  // Orbit state.
+  // Orbit state — plus the first-person cockpit-view state.  In cockpit mode
+  // the camera sits AT the marker looking toward the nose, with a simple
+  // yaw/pitch look-around on drag (no orbit); meshes are already DoubleSide,
+  // so the hull stays visible from inside.
   let yaw = Math.PI * 0.15, pitch = 0.35, dist = radius * 2.4, dragging = false, lx = 0, ly = 0;
+  let ckPos = null;                          // {x,y,z} YS coords, or null
+  let ckMode = false, ckYaw = 0, ckPitch = 0; // look-around angles (0 = nose)
+  const eye = new THREE.Vector3(), look = new THREE.Vector3();
   const place = () => {
+    if (ckMode && ckPos) {
+      // World position of the eye point through the model transform chain.
+      eye.set(ckPos.x, ckPos.y, ckPos.z);
+      built.object3d.updateWorldMatrix(true, false);
+      built.object3d.localToWorld(eye);
+      cam.position.copy(eye);
+      // YS +Z (nose) lands at world -Z, YS +X (starboard) at world +X after
+      // the display rotation+mirror, so this dir looks at the nose at 0/0
+      // and ckYaw > 0 looks to starboard.
+      look.set(
+        Math.sin(ckYaw) * Math.cos(ckPitch),
+        Math.sin(ckPitch),
+        -Math.cos(ckYaw) * Math.cos(ckPitch),
+      ).add(eye);
+      cam.lookAt(look);
+      return;
+    }
     cam.position.set(
       dist * Math.cos(pitch) * Math.sin(yaw),
       dist * Math.sin(pitch),
@@ -404,19 +446,36 @@ export function mountPreview(container, bytes) {
     );
     cam.lookAt(0, 0, 0);
   };
+  const setCockpitView = (on) => {
+    ckMode = !!(on && ckPos);
+    if (ckMode) {
+      ckYaw = 0; ckPitch = 0;
+      cam.fov = 60; cam.near = 0.05;
+      ckMarker.visible = false; // it would sit right in the lens
+    } else {
+      cam.fov = 45; cam.near = 0.1;
+      ckMarker.visible = !!ckPos;
+    }
+    cam.updateProjectionMatrix();
+  };
   const el = renderer.domElement;
   el.addEventListener('pointerdown', (e) => { dragging = true; lx = e.clientX; ly = e.clientY; el.setPointerCapture(e.pointerId); el.style.cursor = 'grabbing'; });
   el.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    yaw -= (e.clientX - lx) * 0.01; pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - ly) * 0.01));
+    if (ckMode) {
+      ckYaw += (e.clientX - lx) * 0.005;
+      ckPitch = Math.max(-1.4, Math.min(1.4, ckPitch - (e.clientY - ly) * 0.005));
+    } else {
+      yaw -= (e.clientX - lx) * 0.01; pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - ly) * 0.01));
+    }
     lx = e.clientX; ly = e.clientY;
   });
   el.addEventListener('pointerup', (e) => { dragging = false; el.style.cursor = 'grab'; try { el.releasePointerCapture(e.pointerId); } catch (_) {} });
-  el.addEventListener('wheel', (e) => { e.preventDefault(); dist = Math.max(radius * 0.6, Math.min(radius * 8, dist * (1 + Math.sign(e.deltaY) * 0.1))); }, { passive: false });
+  el.addEventListener('wheel', (e) => { e.preventDefault(); if (!ckMode) dist = Math.max(radius * 0.6, Math.min(radius * 8, dist * (1 + Math.sign(e.deltaY) * 0.1))); }, { passive: false });
 
   let raf = 0, spin = true;
   const tick = () => {
-    if (spin && !dragging) yaw += 0.004;
+    if (spin && !dragging && !ckMode) yaw += 0.004;
     place();
     renderer.render(scene, cam);
     raf = requestAnimationFrame(tick);
@@ -428,6 +487,16 @@ export function mountPreview(container, bytes) {
     setMovable: (group, t) => setMovable(group, t),
     setPaint: (mapping) => applyPaint(built.meshesByLabel, mapping),
     setAutoSpin: (on) => { spin = on; },
+    // Cockpit eye point in YS aircraft coords ({x,y,z} = the COCKPITP value),
+    // or null to clear.  Marker shows whenever set (except while inside).
+    setCockpit: (p) => {
+      ckPos = p && [p.x, p.y, p.z].every(Number.isFinite) ? { x: p.x, y: p.y, z: p.z } : null;
+      if (ckPos) ckMarker.position.set(ckPos.x, ckPos.y, ckPos.z);
+      if (!ckPos && ckMode) setCockpitView(false);
+      ckMarker.visible = !!ckPos && !ckMode;
+    },
+    setCockpitView,
+    getCockpitView: () => ckMode,
     dispose: () => {
       cancelAnimationFrame(raf);
       renderer.dispose();
