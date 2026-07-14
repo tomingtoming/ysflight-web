@@ -16,6 +16,7 @@
 
 import { studioChrome, LANG, el, row, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, saveOrReplace, listCreations, loadCreation } from './studio-shared.js';
 import { RECIPE_FILE, SCENERY_START } from './workbench.js';
+import { sanitize, uniqueSan, namespaceSnapshot, composeEntries } from './studio-pack-core.js';
 import * as opfs from './opfs-store.js';
 import { zipSync } from './vendor/fflate.js';
 
@@ -87,44 +88,15 @@ const S = ({
 // --- member snapshots -------------------------------------------------------------
 
 // A member = a snapshot of one creation's payload, namespaced per member so
-// nothing collides: every file becomes <dir>/<memberSan>_<base>, and path
-// references inside the member's own .lst text are rewritten to match.
+// nothing collides (see namespaceSnapshot in studio-pack-core.js).
 // files: [{path, bytes}] (final, namespaced paths).
-const sanitize = (s) => (String(s || 'work').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'work').slice(0, 24);
-
 async function snapshotFromRecord(rec, memberSan) {
   const raw = [];
   for (const f of rec.files || []) {
     if (f.path === RECIPE_FILE) continue; // the pack gets its OWN recipe
     raw.push({ path: f.path, bytes: await opfs.getBlob(f.sha256) });
   }
-  const rename = new Map(); // old path -> new path
-  for (const f of raw) {
-    const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : '';
-    const base = f.path.slice(dir.length);
-    if (/\.lst$/i.test(base)) {
-      // The pack analyzer requires list names to KEEP their air*/sce*/gro*
-      // prefix (chooseLayout in packs.js) — namespace after it, not before.
-      const m = base.match(/^(air|sce|gro)/i);
-      const lead = m ? m[1] : ({ 'aircraft/': 'air', 'scenery/': 'sce', 'ground/': 'gro' }[dir] || 'air');
-      rename.set(f.path, dir + lead + '_' + memberSan + '_' + base.slice(m ? m[1].length : 0).replace(/^_+/, ''));
-    } else {
-      rename.set(f.path, dir + memberSan + '_' + base);
-    }
-  }
-  const td = new TextDecoder(), te = new TextEncoder();
-  return raw.map((f) => {
-    let bytes = f.bytes;
-    if (/\.lst$/i.test(f.path)) {
-      let text = td.decode(bytes);
-      for (const [oldP, newP] of rename) {
-        if (oldP === f.path) continue;
-        text = text.split(oldP).join(newP);
-      }
-      bytes = te.encode(text);
-    }
-    return { path: rename.get(f.path), bytes };
-  });
+  return namespaceSnapshot(raw, memberSan);
 }
 
 // Rebuild a member snapshot out of an already-saved PACK record (for re-editing
@@ -149,22 +121,9 @@ let editingId = null;
 let savedName = null; // last saved pack name (enables export)
 let savedZip = null;  // last composed zip bytes (export without recompose)
 
-const uniqueSan = (name) => {
-  let base = sanitize(name), san = base, n = 2;
-  while (members.some((m) => m.san === san)) san = base + '_' + (n++);
-  return san;
-};
+const memberSan = (name) => uniqueSan(name, members.map((m) => m.san));
 
-function composeZip(packName) {
-  const entries = {};
-  for (const m of members) for (const f of m.files) entries[f.path] = f.bytes;
-  entries[RECIPE_FILE] = new TextEncoder().encode(JSON.stringify({
-    type: 'pack',
-    packName,
-    members: members.map((m) => ({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind })),
-  }));
-  return zipSync(entries);
-}
+const composeZip = (packName) => zipSync(composeEntries(members, packName));
 
 // --- page -------------------------------------------------------------------------
 
@@ -234,7 +193,7 @@ renderAvail = async () => {
       msg.textContent = S.working;
       try {
         const rec = await opfs.getRecord(c.id);
-        const san = uniqueSan(c.name || c.id);
+        const san = memberSan(c.name || c.id);
         members.push({
           sourceId: c.id, san, name: c.name || c.id, kind: c.kind,
           files: await snapshotFromRecord(rec, san), orphan: false,
@@ -390,7 +349,7 @@ async function main2() {
       const creations = (await listCreations()).filter((c) => c.kind === 'aircraft' || c.kind === 'scenery');
       for (const c of creations) {
         const rec = await opfs.getRecord(c.id);
-        const san = uniqueSan(c.name || c.id);
+        const san = memberSan(c.name || c.id);
         members.push({ sourceId: c.id, san, name: c.name || c.id, kind: c.kind, files: await snapshotFromRecord(rec, san), orphan: false });
       }
       renderMembers();
