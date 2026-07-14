@@ -300,3 +300,44 @@ test('editDatKey: editing a commented value keeps the comment (form write shape)
   assert.match(out, /THRAFTBN 15t #both pods/);
   assert.match(out, /COCKPITP 0m 1.5m 4.50m #eye/);
 });
+
+// --- unit normalization: fsutil.cpp tables (sanity metrics) ------------------------
+
+test('weightKg / forceN / areaM2 mirror FsGetWeight / FsGetForce / FsGetArea', async () => {
+  const { weightKg, forceN, areaM2 } = await import('../web/studio-dat.js');
+  const G = 9.807; // FsGravityConst (fsdef.h)
+  // FsGetWeight: KG, LB*0.453597, T*1000, N/g
+  assert.equal(weightKg('12.0t'), 12000);
+  assert.equal(weightKg('500kg'), 500);
+  assert.ok(Math.abs(weightKg('100lb') - 45.3597) < 1e-9);
+  assert.ok(Math.abs(weightKg('9807N') - 9807 / G) < 1e-9);
+  // FsGetForce: KG*g, LB*0.453597*g, T*1000*g, N
+  assert.ok(Math.abs(forceN('22.6t') - 22.6 * 1000 * G) < 1e-6);
+  assert.equal(forceN('1000N'), 1000);
+  assert.ok(Math.abs(forceN('100kg') - 100 * G) < 1e-9);
+  // FsGetArea: M^2, IN^2*0.000645
+  assert.equal(areaM2('58m^2'), 58);
+  assert.ok(Math.abs(areaM2('1000in^2') - 0.645) < 1e-9);
+  // Engine behavior: a bare number or unknown unit is a load ERROR -> null (N/A).
+  assert.equal(weightKg('12.0'), null);
+  assert.equal(forceN('22.6'), null);
+  assert.equal(areaM2('58'), null);
+  assert.equal(forceN('5furlong'), null);
+  // Inline comments are stripped before unit parsing.
+  assert.ok(Math.abs(forceN('22.6t   #THRUST WITH AFTERBURNER') - 22.6 * 1000 * G) < 1e-6);
+});
+
+test('sanity metrics on real f15.dat values: T/W and wing loading are physical', async () => {
+  const { weightKg, forceN, areaM2 } = await import('../web/studio-dat.js');
+  const bytes = readFileSync(join(AIRCRAFT_DIR, 'f15.dat'));
+  const { parsed } = parseDat(bytes);
+  const val = (kw) => parsed.get(kw)[0].value;
+  const G = 9.807;
+  // Both sides in tonnes: T/W = 22.6/12.0 (raw numbers with the old kg/N
+  // assumption gave 0.19 — an unphysical value for an F-15).
+  const tw = forceN(val('THRAFTBN')) / (weightKg(val('WEIGHCLN')) * G);
+  assert.ok(Math.abs(tw - 22.6 / 12.0) < 1e-9, 'T/W in tonne-force over tonnes: ' + tw);
+  assert.ok(tw > 1 && tw < 3, 'an F-15 clean T/W must be > 1: ' + tw);
+  const wl = weightKg(val('WEIGHCLN')) / areaM2(val('WINGAREA'));
+  assert.ok(wl > 100 && wl < 400, 'fighter wing loading in the physical range: ' + wl);
+});

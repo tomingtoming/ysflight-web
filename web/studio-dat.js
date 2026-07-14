@@ -57,6 +57,31 @@ export function splitComment(valueStr) {
   return { body: s.slice(0, i).trimEnd(), comment: s.slice(i) };
 }
 
+// --- unit normalization (sanity metrics) -------------------------------------------
+//
+// Mirrors fsutil.cpp exactly: FsGetUnit requires a digit immediately before a
+// KNOWN suffix and returns an ERROR for a bare number — there is no default
+// unit for weight/force/area.  So these return null (the metric shows N/A)
+// instead of guessing.  Conversion tables are FsGetWeight / FsGetForce /
+// FsGetArea verbatim; FS_G is FsGravityConst (fsdef.h).
+//
+const FS_G = 9.807;
+const unitScaled = (valueStr, table) => {
+  // First whitespace token of the comment-stripped body is the value.
+  const tok = splitComment(valueStr).body.trim().split(/\s+/)[0] || '';
+  const u = splitUnit(tok);
+  if (u.num === null) return null;
+  const suffix = u.suffix.trim().toUpperCase();
+  if (!(suffix in table)) return null;
+  return parseFloat(u.num) * table[suffix];
+};
+// Mass in kg (FsGetWeight): KG, LB, T, N (a weight given as force, / g).
+export const weightKg = (v) => unitScaled(v, { KG: 1, LB: 0.453597, T: 1000, N: 1 / FS_G });
+// Force in N (FsGetForce): KG = kgf, LB = lbf, T = tonne-force, N.
+export const forceN = (v) => unitScaled(v, { KG: FS_G, LB: 0.453597 * FS_G, T: 1000 * FS_G, N: 1 });
+// Area in m^2 (FsGetArea): M^2, IN^2.
+export const areaM2 = (v) => unitScaled(v, { 'M^2': 1, 'IN^2': 0.000645 });
+
 // --- parseDat -------------------------------------------------------------------
 //
 // Returns:
@@ -270,41 +295,39 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
     setBytes(serializeDat(parsed));
   });
 
-  // ---- helper: get first numeric value of a keyword ----
-  const numVal = (kw) => {
+  // ---- helper: first value of a keyword through a unit normalizer ----
+  // null = keyword absent OR unit missing/unknown (the engine would reject
+  // such a value anyway) -> the metric shows N/A rather than a guess.
+  const valOf = (kw, normalize) => {
     const entries = parsed && parsed.parsed.get(kw);
     if (!entries || !entries.length) return null;
-    const v = entries[0].value;
-    // Strip units: trim trailing non-numeric suffix (t, kg, m, deg, rad, kt, m/s, mach, etc.)
-    const m = v.match(/^-?[\d.]+/);
-    return m ? parseFloat(m[0]) : null;
+    return normalize(entries[0].value);
   };
 
   const updateSanity = () => {
     if (!parsed) { sanityTWR.textContent = 'N/A'; sanityWL.textContent = 'N/A'; sanityFF.textContent = 'N/A'; return; }
-    const thrust = numVal('THRAFTBN');
-    const clean  = numVal('WEIGHCLN');
-    const fuel   = numVal('WEIGFUEL');
-    const load   = numVal('WEIGLOAD');
-    const wing   = numVal('WINGAREA');
-    // The .dat uses suffix units (t, kg, N). Try to figure out the scale:
-    // THRAFTBN in N or kg? WEIGHCLN in kg or t?
-    // We just show raw ratio since units vary per file.
-    if (thrust !== null && clean !== null && clean !== 0) {
-      sanityTWR.textContent = (thrust / (clean * 9.81)).toFixed(2);
-    } else if (thrust !== null && clean !== null && clean === 0) {
-      sanityTWR.textContent = 'inf';
+    // Unit-normalized per fsutil.cpp — stock files mix t/kg/N per line, so raw
+    // numbers are NOT comparable (f15: THRAFTBN 22.6t over WEIGHCLN 12.0t is
+    // T/W 1.88, not 22.6/(12*g)).
+    const abN     = valOf('THRAFTBN', forceN);
+    const thrustN = abN !== null ? abN : valOf('THRMILIT', forceN); // AB, else military power
+    const cleanKg = valOf('WEIGHCLN', weightKg);
+    const fuelKg  = valOf('WEIGFUEL', weightKg);
+    const loadKg  = valOf('WEIGLOAD', weightKg);
+    const wingM2  = valOf('WINGAREA', areaM2);
+    if (thrustN !== null && cleanKg !== null && cleanKg > 0) {
+      sanityTWR.textContent = (thrustN / (cleanKg * FS_G)).toFixed(2);
     } else {
       sanityTWR.textContent = 'N/A';
     }
-    if (clean !== null && wing !== null && wing !== 0) {
-      sanityWL.textContent = (clean / wing).toFixed(1) + ' kg/m²';
+    if (cleanKg !== null && wingM2 !== null && wingM2 > 0) {
+      sanityWL.textContent = (cleanKg / wingM2).toFixed(1) + ' kg/m²';
     } else {
       sanityWL.textContent = 'N/A';
     }
-    if (fuel !== null && clean !== null) {
-      const total = clean + (fuel || 0) + (load || 0);
-      sanityFF.textContent = total > 0 ? (fuel / total).toFixed(3) : 'N/A';
+    if (fuelKg !== null && cleanKg !== null) {
+      const total = cleanKg + fuelKg + (loadKg || 0);
+      sanityFF.textContent = total > 0 ? (fuelKg / total).toFixed(3) : 'N/A';
     } else {
       sanityFF.textContent = 'N/A';
     }
