@@ -773,6 +773,7 @@ async function main() {
     page: 'scenery',
     counts: () => ({ islands: islands.length, objects: objects.length, mountains: mountains.length, starts: starts.length, runways: runways.length }),
     selection: () => (sel ? { ...sel } : null),
+    state: () => JSON.parse(JSON.stringify(state)),
   };
 }
 
