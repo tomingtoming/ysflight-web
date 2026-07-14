@@ -222,6 +222,55 @@ check('FsVrMarkSimDrawn fed the watchdog (consumed > 0 menu frames)', simFed > 0
 await page.screenshot({ path: outDir + '/vrmenu-test-1-vr.png' });
 console.log('wrote ' + outDir + '/vrmenu-test-1-vr.png');
 
+// ---- Pure ray-vs-quad intersection math (no XR state needed) ---------------
+// vr.intersectRayWithAnchoredQuad is the exact function processMenuRayInput
+// uses to turn a controller ray into menu UV coordinates; it is pure math
+// (same test-hook pattern as vr.yawOnlyQuatFromOrientation), so headless CI
+// can pin down the geometry: centre hit, edge precision, arbitrary-yaw
+// anchors, and backface/behind-origin rejection.
+// Quad: 1.6m x 1.2m.  u/v convention: u,v in [0,1], v=0 at the TOP edge.
+const rayTests = await page.evaluate(() => {
+  const isect = globalThis.Module.ysfwVr.intersectRayWithAnchoredQuad;
+  const I = { x: 0, y: 0, z: 0, w: 1 };            // identity quat
+  const yaw90 = { x: 0, y: Math.sin(Math.PI / 4), z: 0, w: Math.cos(Math.PI / 4) }; // +90deg yaw: local -Z -> world -X
+  const yaw180 = { x: 0, y: 1, z: 0, w: 0 };       // 180deg yaw: local -Z -> world +Z
+  const W = 1.6, H = 1.2;
+  const front = { x: 0, y: 0, z: -1.8 };           // quad 1.8m in front, facing +Z
+  const side = { x: -1.8, y: 0, z: 0 };            // quad 1.8m to the left, facing +X
+  return {
+    centre: isect({ x: 0, y: 0, z: 0 }, I, front, I, W, H),
+    edge: isect({ x: -0.7999, y: 0.5999, z: 0 }, I, front, I, W, H),
+    yawed: isect({ x: 0, y: 0, z: 0 }, yaw90, side, yaw90, W, H),
+    backface: isect({ x: 0, y: 0, z: -3.6 }, yaw180, front, I, W, H),
+    behind: isect({ x: 0, y: 0, z: 0 }, yaw180, front, I, W, H),
+  };
+});
+{
+  const c = rayTests.centre;
+  check('ray-quad: head-on ray hits quad centre (u,v ~ 0.5)',
+    c !== null && Math.abs(c.u - 0.5) < 0.001 && Math.abs(c.v - 0.5) < 0.001,
+    'hit=' + JSON.stringify(c));
+  // 0.1mm inside the top-left corner: u = ( -0.7999 + 0.8 ) / 1.6 = 6.25e-5
+  // and v = ( 0.6 - 0.5999 ) / 1.2 ~ 8.33e-5 -- on an 800x600 texture that is
+  // u*800 = 0.05px / v*600 = 0.05px, i.e. within the outermost pixel, so the
+  // whole quad surface is reachable down to the last pixel.
+  const e = rayTests.edge;
+  check('ray-quad: ray 0.1mm inside the top-left corner still hits, within the edge pixel',
+    e !== null && e.u > 0 && e.u < 1 / 800 && e.v > 0 && e.v < 1 / 600,
+    'hit=' + JSON.stringify(e));
+  // Anchor yawed 90deg (quad face normal = world +X), ray from the origin
+  // aimed -X with the same yaw: must be a head-on centre hit -- the math may
+  // not assume an axis-aligned anchor.
+  const y = rayTests.yawed;
+  check('ray-quad: 90deg-yawed anchor hit head-on lands at centre',
+    y !== null && Math.abs(y.u - 0.5) < 0.001 && Math.abs(y.v - 0.5) < 0.001,
+    'hit=' + JSON.stringify(y));
+  check('ray-quad: ray from behind the quad (backface) is rejected',
+    rayTests.backface === null, 'hit=' + JSON.stringify(rayTests.backface));
+  check('ray-quad: ray aimed away from the quad is rejected',
+    rayTests.behind === null, 'hit=' + JSON.stringify(rayTests.behind));
+}
+
 // ---- teardownMenu: menuData cleared on session teardown -------------------
 // Run the REAL teardown (vr.teardownMenuForTest wraps teardownMenu): it must
 // zero the whole data block and free the GL resources -- the same code a real
