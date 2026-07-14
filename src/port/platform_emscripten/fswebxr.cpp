@@ -382,6 +382,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		xrFb:null,
 		origBind:null,
 		simSilentFrames:0,
+		// Why the last session ended, when the JS side knows better than the
+		// bare 'end' event.  null = normal end; 'menu-unsupported' = the
+		// watchdog fired while the menu was up because the menu quad could
+		// never be created (no WebXR layers support) -- index.html's onVrEnd
+		// turns that into a user-facing toast.  Reset on every vr.enter().
+		endReason:null,
 		// single-pass stereo (OVR_multiview2 / WebXR layers)
 		mvExt:null,
 		mvBinding:null,
@@ -4506,13 +4512,21 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// Watchdog: end the session when the engine stops presenting entirely
 		// (~1.5s of silence).  While the main menu is visible DrawMenu sets
 		// FsVrMarkSimDrawn every frame (keeping simSilentFrames at 0), so the
-		// watchdog is safely disarmed during normal menu navigation.
+		// watchdog is safely disarmed during normal menu navigation.  On
+		// browsers without WebXR-layers support the menu quad can never be
+		// created (setupMenu is gated on vr.mvLayer) and DrawMenu deliberately
+		// stays silent, so the watchdog fires here and returns the user to the
+		// 2D page -- record why so index.html's onVrEnd can explain it.
 		if(0<_YsfwVrConsumeSimDrawnFrames())
 		{
 			vr.simSilentFrames=0;
 		}
 		else if(100<++vr.simSilentFrames)
 		{
+			if(!globalThis.ysfwInFlight && (!vr.menuRes || !vr.menuRes.quad))
+			{
+				vr.endReason='menu-unsupported';
+			}
 			session.end().catch(function(){});
 		}
 	}
@@ -4548,6 +4562,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var antialias=(undefined!==opts.antialias ? !!opts.antialias : false);
 		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0};
 		vr.jsPerf={ctl:0,dial:0,layers:0};
+		vr.endReason=null;
 		vr.jsPerfWindow=0;
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
 		return navigator.xr.requestSession('immersive-vr',{requiredFeatures:['local'],optionalFeatures:['layers']}).then(function(session)
