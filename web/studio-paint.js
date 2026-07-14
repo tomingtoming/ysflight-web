@@ -221,27 +221,35 @@ export function splitFacesAtY(bytes, nodeLabel, cutY) {
   };
 
   let facesAbove = 0, facesBelow = 0;
-  const newFaces = []; // [{indices, color, unlit, nom, alpha?}]
+  const newFaces = []; // [{idx, color, unlit, nom, zaVal}] — output order = new raw index
 
   for (const f of srfFaces) {
+    // Copier that keeps ALL per-face metadata — split children inherit their
+    // parent's zaVal (translucency), so a straddling canopy-glass face stays
+    // glass on both sides of the cut.
+    const mkFace = (indices) => ({ idx: indices, color: f.color, unlit: f.unlit, nom: f.nom, zaVal: f.zaVal });
+    if (f.idx.length < 3) {
+      // Degenerate face: pass through verbatim (keeps raw-index parity source).
+      newFaces.push(mkFace(f.idx.slice()));
+      continue;
+    }
     const fverts = f.idx.map((i) => vertices[i] || [0, 0, 0]);
     const ys = fverts.map((v) => v[1]);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     if (minY >= cutY) {
       // entirely above
-      newFaces.push({ idx: f.idx.slice(), color: f.color, unlit: f.unlit, nom: f.nom, alpha: f.alpha });
+      newFaces.push(mkFace(f.idx.slice()));
       facesAbove++;
     } else if (maxY <= cutY) {
       // entirely below
-      newFaces.push({ idx: f.idx.slice(), color: f.color, unlit: f.unlit, nom: f.nom, alpha: f.alpha });
+      newFaces.push(mkFace(f.idx.slice()));
       facesBelow++;
     } else {
-      // straddles the cut plane
+      // straddles the cut plane -> 1:N (parent's ZA value inherited by each child)
       for (const above of [true, false]) {
         const piece = clip(fverts, above);
         if (piece.length >= 3) {
-          const indices = piece.map(getVert);
-          newFaces.push({ idx: indices, color: f.color, unlit: f.unlit, nom: f.nom, alpha: f.alpha });
+          newFaces.push(mkFace(piece.map(getVert)));
           if (above) facesAbove++; else facesBelow++;
         }
       }
@@ -263,6 +271,19 @@ export function splitFacesAtY(bytes, nodeLabel, cutY) {
     if (f.unlit) newBlock.push(' B');
     newBlock.push('E');
   }
+  // Re-emit ZA (per-polygon translucency) against the NEW face indices.  The
+  // output face order is deterministic (input order; straddling faces emit
+  // above-piece then below-piece), so newFaces[i] is the new raw polygon index
+  // i.  Values are the raw integers read from the source ZA lines — the exact
+  // engine semantics (alpha = (255-value)/255) are preserved, only the index
+  // grouping is regenerated.  Chunked like dnm-gltf.js srfText / stock files.
+  const za = [];
+  newFaces.forEach((f, i) => {
+    if (f.zaVal !== undefined) za.push(i, f.zaVal);
+  });
+  for (let k = 0; k < za.length; k += 30) {
+    newBlock.push('ZA ' + za.slice(k, k + 30).join(' '));
+  }
 
   // Rebuild the full DNM lines array with the replacement PCK block.
   const header = 'PCK ' + JSON.stringify(srfName) + ' ' + newBlock.length;
@@ -276,11 +297,19 @@ export function splitFacesAtY(bytes, nodeLabel, cutY) {
 }
 
 // Internal full SRF parser (returns vertices + faces with all metadata).
-// Subset of parseDnm's parseSrf but with nom/alpha/unlit preserved.
+// Subset of parseDnm's parseSrf but with nom/zaVal/unlit preserved.  ALL F
+// blocks are kept — including degenerate (<3 vertex) ones — so face array
+// index == raw polygon index, which is what ZA lines refer to (matching
+// dnm-preview.js's byRaw convention).  ZA VALUES are kept as raw integers
+// (zaVal), not a derived alpha float, so re-emission is bit-exact.
+// ZA is the ONLY face-index-referencing attribute line in the DNM/SRF text
+// format handled by this repo's parsers (dnm-preview.js parseSrf and
+// dnm-gltf.js srfText both read/write only ZA by polygon index).
 function parseSrfFull(lines) {
   const vertices = [];
   const smooth = [];
   const faces = [];
+  const zaPairs = []; // [rawFaceIdx, value] — applied after all faces parse
   let inFace = false;
   let curFace = null;
   for (let i = 0; i < lines.length; i++) {
@@ -290,9 +319,9 @@ function parseSrfFull(lines) {
       smooth.push(t.length >= 5 && (t[4] === 'R' || t[4] === 'r'));
     } else if (t[0] === 'F') {
       inFace = true;
-      curFace = { idx: [], color: [200, 200, 200], unlit: false, nom: null, alpha: 1 };
+      curFace = { idx: [], color: [200, 200, 200], unlit: false, nom: null, zaVal: undefined };
     } else if (t[0] === 'E' && inFace) {
-      if (curFace && curFace.idx.length >= 3) faces.push(curFace);
+      if (curFace) faces.push(curFace); // keep even degenerate — raw index parity
       inFace = false;
       curFace = null;
     } else if (inFace && curFace) {
@@ -307,11 +336,15 @@ function parseSrfFull(lines) {
         if (n[0] || n[1] || n[2]) curFace.nom = n;
       }
     } else if (t[0] === 'ZA') {
+      // '<raw polygon index> <value>' pairs, possibly many per line (stock
+      // files chunk ~15 pairs per line — see dnm-gltf.js srfText).
       for (let k = 1; k + 1 < t.length; k += 2) {
-        const fi = Number(t[k]);
-        if (fi < faces.length) faces[fi].alpha = (255 - (Number(t[k + 1]) || 0)) / 255;
+        zaPairs.push([Number(t[k]), Number(t[k + 1]) || 0]);
       }
     }
+  }
+  for (const [fi, val] of zaPairs) {
+    if (fi >= 0 && fi < faces.length) faces[fi].zaVal = val;
   }
   return { vertices, smooth, faces };
 }

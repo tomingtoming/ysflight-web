@@ -327,6 +327,137 @@ test('(c) splitFacesAtY: split does not change faces outside the target node', (
   assert.ok(cLines.some((l) => l === 'C 77 88 99'), 'other SRF is untouched');
 });
 
+// DNM with ZA (per-polygon translucency): a straddling glass face + an
+// opaque face + a non-straddling glass face.  ZA refers to RAW polygon
+// indices (dnm-preview.js byRaw convention), value semantics
+// alpha = (255 - value)/255 (ysshellextio.cpp).
+const makeZaDnm = () => {
+  const lines = [
+    'DYNAMODEL', 'DNMVER 1',
+    'PCK "canopy.srf" 25',
+    'SURF',
+    'V -1 1 0',   // 0 above
+    'V  1 1 0',   // 1 above
+    'V  1 -1 0',  // 2 below
+    'V -1 -1 0',  // 3 below
+    'V -1 2 1',   // 4 entirely above
+    'V  1 2 1',   // 5 entirely above
+    'V  1 3 1',   // 6 entirely above
+    'V -1 3 1',   // 7 entirely above
+    // face 0: GLASS, straddles y=0  (ZA 0 128)
+    'F',
+    ' V 0 1 2 3',
+    ' N 0 0 1 0 0 1',
+    ' C 22 28 40',
+    'E',
+    // face 1: opaque, entirely above (no ZA)
+    'F',
+    ' V 4 5 6',
+    ' N 0 1 0 0 1 0',
+    ' C 200 200 200',
+    'E',
+    // face 2: GLASS, entirely above (ZA 2 96)
+    'F',
+    ' V 4 6 7',
+    ' N 0 1 0 0 1 0',
+    ' C 22 28 40',
+    'E',
+    'ZA 0 128 2 96',
+    'SRF "Canopy"',
+    'FIL "canopy.srf"',
+    'CLA 0',
+    'NST 1',
+    'STA 0 0 0 0 0 0 1',
+    'CNT 0 0 0',
+    'POS 0 0 0 0 0 0 1',
+    '',
+  ];
+  return new TextEncoder().encode(lines.join('\n'));
+};
+
+// Independent mini-parser: ZA pairs (any per-line chunking) + face colors by
+// raw polygon index, within one PCK block.
+function readZaAndFaces(dnmStr, srfName) {
+  const lines = dnmStr.split('\n');
+  const za = new Map(); // rawFaceIdx -> value
+  const faceColors = [];
+  let inBlock = false, remaining = 0, inFace = false, curColor = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^PCK\s+("?)([^"\s]+)\1\s+(\d+)/.exec(lines[i]);
+    if (m) {
+      if (m[2] === srfName) { inBlock = true; remaining = parseInt(m[3], 10); }
+      continue;
+    }
+    if (!inBlock) continue;
+    remaining--;
+    const t = lines[i].trim().split(/\s+/);
+    if (t[0] === 'F') { inFace = true; curColor = null; }
+    else if (t[0] === 'E' && inFace) { faceColors.push(curColor); inFace = false; }
+    else if (inFace && t[0] === 'C') curColor = t.slice(1, 4).map(Number);
+    else if (t[0] === 'ZA') {
+      for (let k = 1; k + 1 < t.length; k += 2) za.set(Number(t[k]), Number(t[k + 1]));
+    }
+    if (remaining <= 0) inBlock = false;
+  }
+  return { za, faceColors };
+}
+
+test('(c+) ZA: straddling glass face — children inherit the parent ZA value', () => {
+  const bytes = makeZaDnm();
+  const { bytes: out } = splitFacesAtY(bytes, 'Canopy', 0);
+  const { za, faceColors } = readZaAndFaces(decode(out), 'canopy.srf');
+
+  // Face 0 (glass quad, ZA 128) straddles y=0 -> 2 children.
+  // Face 1 (opaque) and face 2 (glass, ZA 96) are entirely above -> preserved.
+  // Deterministic output order: [face0-above, face0-below, face1, face2].
+  assert.equal(faceColors.length, 4, 'four faces after split');
+  assert.equal(za.get(0), 128, 'above child inherits ZA 128');
+  assert.equal(za.get(1), 128, 'below child inherits ZA 128');
+  assert.ok(!za.has(2), 'opaque face has no ZA');
+  assert.equal(za.get(3), 96, 'non-split glass face ZA remapped to new index, value intact');
+  assert.equal(za.size, 3, 'exactly three ZA entries');
+  // Sanity: glass faces still carry the glass color.
+  assert.deepEqual(faceColors[0], [22, 28, 40]);
+  assert.deepEqual(faceColors[1], [22, 28, 40]);
+  assert.deepEqual(faceColors[3], [22, 28, 40]);
+});
+
+test('(c+) ZA: split with no straddling face leaves ZA values identical', () => {
+  // Cut plane below everything: no face straddles, indices are unchanged.
+  const bytes = makeZaDnm();
+  const { bytes: out } = splitFacesAtY(bytes, 'Canopy', -100);
+  const { za } = readZaAndFaces(decode(out), 'canopy.srf');
+  assert.equal(za.get(0), 128, 'face 0 ZA intact');
+  assert.equal(za.get(2), 96, 'face 2 ZA intact');
+  assert.equal(za.size, 2, 'no extra ZA entries');
+});
+
+test('(c+) ZA: multi-line chunked ZA is parsed and re-emitted', () => {
+  // Same shape but ZA split across two lines (stock files chunk pairs).
+  const lines = [
+    'DYNAMODEL', 'DNMVER 1',
+    'PCK "glass.srf" 26',
+    'SURF',
+    'V -1 1 0', 'V 1 1 0', 'V 1 -1 0', 'V -1 -1 0',
+    'V -1 2 1', 'V 1 2 1', 'V 1 3 1', 'V -1 3 1',
+    'F', ' V 0 1 2 3', ' N 0 0 1 0 0 1', ' C 22 28 40', 'E',
+    'F', ' V 4 5 6', ' N 0 1 0 0 1 0', ' C 200 200 200', 'E',
+    'F', ' V 4 6 7', ' N 0 1 0 0 1 0', ' C 22 28 40', 'E',
+    'ZA 0 128',
+    'ZA 2 96',
+    'SRF "Glass"', 'FIL "glass.srf"', 'CLA 0',
+    'NST 1', 'STA 0 0 0 0 0 0 1', 'CNT 0 0 0', 'POS 0 0 0 0 0 0 1',
+    '',
+  ];
+  const bytes = new TextEncoder().encode(lines.join('\n'));
+  const { bytes: out } = splitFacesAtY(bytes, 'Glass', 0);
+  const { za } = readZaAndFaces(decode(out), 'glass.srf');
+  assert.equal(za.get(0), 128);
+  assert.equal(za.get(1), 128);
+  assert.equal(za.get(3), 96);
+  assert.equal(za.size, 3);
+});
+
 test('(d) navlight protection: CLA 30 node is not painted', () => {
   const bytes = makeDnm({ lightCla: true });
   const { bytes: out, replaced } = repaintFacesById(
