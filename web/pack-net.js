@@ -393,18 +393,37 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
       try { if (pc) pc.close(); } catch (e) {}
       resolve({ installed, failed });
     };
-    // Overall safety timeout: STUN-only with no TURN, an unreachable peer never
-    // completes the ICE handshake and the transfer would hang forever.  Mark the
-    // outstanding wants failed (so a missing REQUIRED field surfaces in the
-    // obtain-failure UX rather than a silent hang) and resolve.  Per design,
-    // TURN is out of scope; this makes the unreachable case visible (M7).
-    guard = setTimeout(() => {
-      log('transfer timed out after ' + timeoutMs + 'ms');
+    // Progress-based safety timeout: STUN-only with no TURN, an unreachable
+    // peer never completes the ICE handshake and the transfer would hang
+    // forever.  Mark the outstanding wants failed (so a missing REQUIRED field
+    // surfaces in the obtain-failure UX rather than a silent hang) and resolve.
+    // Per design, TURN is out of scope; this makes the unreachable case
+    // visible (M7).
+    //
+    // timeoutMs is the budget for NO PROGRESS, not total wall clock: every
+    // sign of life on the channel (delivery, open, any message or chunk)
+    // re-arms the timer via bumpGuard.  The old fixed wall-clock guard
+    // conflated connection establishment with the transfer itself -- when the
+    // issue-18 rejoin cycle below burned 2 attempts (8s each), a perfectly
+    // healthy transfer had only a few seconds of budget left and timed out
+    // mid-flight.  That was the CI flake (every flaky first attempt logged
+    // "serving ... to peer 3" = two dead rejoins, then "transfer timed out"),
+    // and the same math bites a real slow network pulling big packs.  An
+    // unreachable peer still fails at exactly timeoutMs: it never produces a
+    // single channel event, so the guard is never bumped.
+    const onGuardTimeout = () => {
+      log('transfer timed out after ' + timeoutMs + 'ms without progress');
       if (current !== null) { failed.push({ id: current, reason: 'timeout' }); current = null; }
       for (const id of want) failed.push({ id, reason: 'timeout' });
       want.length = 0;
       finish();
-    }, timeoutMs);
+    };
+    guard = setTimeout(onGuardTimeout, timeoutMs);
+    const bumpGuard = () => {
+      if (done) return;
+      clearTimeout(guard);
+      guard = setTimeout(onGuardTimeout, timeoutMs);
+    };
     const requestNext = () => {
       if (current !== null) return;
       if (want.length === 0) { finish(); return; }
@@ -413,7 +432,10 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
       ch.send(JSON.stringify({ op: 'want', id: current }));
     };
 
+    let gotAnyMessage = false; // host traffic seen on the channel (see armRejoin)
     async function onChMessage(data) {
+      gotAnyMessage = true;
+      bumpGuard(); // any traffic on the channel is transfer progress
       if (typeof data === 'string') {
         let m; try { m = JSON.parse(data); } catch (e) { return; }
         if (m.op === 'begin') { chunks = []; received = 0; }
@@ -459,15 +481,27 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
     // host never even seeing the peer's request connection while a LATER
     // connection to the same host works fine), don't burn the whole 30s budget:
     // tear the pc down and re-join the room for a fresh offer.
+    //
+    // The stand-down condition is "open AND we heard something", not just
+    // "open": a 2026-07-14 flake-hunt capture shows a channel DELIVERED AS
+    // OPEN on the joiner whose sends never reach the host ('want' sent, host
+    // never logs a single serve) — the same SCTP race in a deafer costume.
+    // readyState alone therefore proves nothing; only host traffic does.  A
+    // rejoin while a transfer request is outstanding requeues it so the fresh
+    // channel's requestNext() re-sends the 'want' (otherwise `current` stays
+    // occupied and the new channel sits idle forever).
     let rejoinTimer = null, rejoins = 0;
     const armRejoin = () => {
       if (rejoinTimer) clearTimeout(rejoinTimer);
       rejoinTimer = setTimeout(() => {
-        if (done || (ch && ch.readyState === 'open') || rejoins >= 2) return;
+        if (done || (ch && ch.readyState === 'open' && gotAnyMessage) || rejoins >= 2) return;
         rejoins++;
-        log('no datachannel after ' + REJOIN_MS + 'ms — rejoining (attempt ' + rejoins + ')');
+        log('no host traffic after ' + REJOIN_MS + 'ms — rejoining (attempt ' + rejoins + ')');
         try { if (pc) pc.close(); } catch (e) {}
         pc = null; ch = null; remoteSet = false; iceQ.length = 0;
+        if (current !== null) { want.unshift(current); current = null; }
+        chunks = []; received = 0;
+        gotAnyMessage = false; // the fresh channel must prove itself too
         sig({ t: 'join', room });
         armRejoin();
       }, REJOIN_MS);
@@ -488,6 +522,7 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
           // connected, SCTP never completes).  The rejoin cycle only stands
           // down once the channel is actually open.
           log('datachannel delivered (' + e.channel.readyState + ')');
+          bumpGuard(); // channel delivery is progress -- the transfer budget starts fresh
           ch = e.channel;
           ch.binaryType = 'arraybuffer';
           // The channel can already be OPEN when ondatachannel delivers it
@@ -495,7 +530,7 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
           // the fact then never fires and the joiner never sends a single
           // request — the all-timeout flake (issue #18).  requestNext() is
           // idempotent (`current` guard), so kick both ways.
-          ch.onopen = () => requestNext();
+          ch.onopen = () => { bumpGuard(); requestNext(); };
           ch.onmessage = (ev2) => onChMessage(ev2.data);
           if (ch.readyState === 'open') requestNext();
         };
@@ -545,9 +580,19 @@ export function fetchMetaBundle(gameRoom, ids, opts) {
       try { if (pc) pc.close(); } catch (e) {}
       resolve({ installed: installed || [] });
     };
-    guard = setTimeout(() => { log('meta bundle timed out after ' + timeoutMs + 'ms'); finish([]); }, timeoutMs);
+    // Progress-based, like joinPackHost's guard above: timeoutMs of NO
+    // channel activity, re-armed on every event, so connection-establishment
+    // latency (incl. any rejoin churn) can never eat the transfer budget.
+    const onGuardTimeout = () => { log('meta bundle timed out after ' + timeoutMs + 'ms without progress'); finish([]); };
+    guard = setTimeout(onGuardTimeout, timeoutMs);
+    const bumpGuard = () => {
+      if (done) return;
+      clearTimeout(guard);
+      guard = setTimeout(onGuardTimeout, timeoutMs);
+    };
 
     async function onChMessage(data) {
+      bumpGuard(); // any traffic on the channel is transfer progress
       if (typeof data === 'string') {
         let m; try { m = JSON.parse(data); } catch (e) { return; }
         if (m.op === 'begin') { chunks = []; received = 0; }
@@ -575,6 +620,7 @@ export function fetchMetaBundle(gameRoom, ids, opts) {
         pc.onicecandidate = (e) => { if (e.candidate) sig({ t: 'ice', data: e.candidate }); };
         pc.ondatachannel = (e) => {
           if (e.channel.label !== 'ysf-pack') return;
+          bumpGuard(); // channel delivery is progress -- the transfer budget starts fresh
           ch = e.channel;
           ch.binaryType = 'arraybuffer';
           // Same already-open race as joinPackHost (issue #18); guard the
@@ -583,6 +629,7 @@ export function fetchMetaBundle(gameRoom, ids, opts) {
           const kick = () => {
             if (sent) return;
             sent = true;
+            bumpGuard();
             try { ch.send(JSON.stringify({ op: 'want-meta', ids })); } catch (e2) {}
           };
           ch.onopen = kick;
