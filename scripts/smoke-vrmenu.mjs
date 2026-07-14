@@ -60,9 +60,14 @@ page.on('pageerror', (e) => fatal.push('[pageerror] ' + e.message));
 page.on('requestfailed', (r) => fatal.push('[requestfailed] ' + r.url() + ' -- ' + (r.failure() ? r.failure().errorText : '?')));
 
 // ---- Boot to the main menu (NOT a free flight) ----------------------------
-// Just wait for the Module to initialise -- do NOT click away dialogs or
-// wait for ysfwInFlight (the whole point is testing the menu, not the flight).
+// The bare page (no ?freeflight/?join/?replay) holds the engine boot at the
+// pre-boot pack panel by design: index.html's preRun keeps the 'ysfw-packs'
+// run dependency until packs-ui.js's start() -- i.e. until the user presses
+// "▶ Play" (#ysfw-pack-play).  So do what a user does: wait for the panel's
+// Play button and click it, THEN wait for the engine to reach the main menu.
 await page.goto(baseUrl);
+await page.waitForSelector('#ysfw-pack-play', { timeout: 30000 });
+await page.click('#ysfw-pack-play');
 // `globalThis.Module` exists long before the wasm engine finishes booting (it
 // is the plain config object the HTML shell defines up front), so waiting for
 // it plus a fixed sleep raced the boot on CI ("VR menu test hooks missing").
