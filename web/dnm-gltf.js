@@ -3,7 +3,8 @@
 // what lets the workbench treat Blender as a first-class modeler:
 //
 //   dnmToGlb(dnmBytes) -> { glb: Uint8Array, nodes, meshes, animations }
-//   glbToDnm(glbBytes) -> { dnm: Uint8Array, nodes, srfs, triangles }
+//   glbToDnm(glbBytes) -> { dnm: Uint8Array, nodes, srfs, triangles,
+//                           cockpit, excameras }
 //
 // Forward: full node hierarchy with engine-exact rest transforms (the same
 // CacheTransformation math dnm-preview.js renders with), fan-triangulated
@@ -38,6 +39,7 @@
 import { parseDnm, faceNormal, smoothVertexNormals } from './dnm-preview.js';
 
 const A2R = Math.PI / 32768;
+const D2R = Math.PI / 180;
 
 // --- tiny row-major 4x4 (column-vector convention, matching the engine) --------
 
@@ -100,6 +102,39 @@ function matToTQ(M) {
   return { t, q: [x, y, z, w] };
 }
 
+// --- YS view attitude (YsAtt3 h/p/b) <-> forward/up vectors -----------------------
+
+// The engine turns a viewpoint attitude into camera vectors with
+// att.GetForwardVector()/GetUpVector() (fssimulation.cpp SimDecideViewpoint):
+// forward = RotateXZ(h)·RotateZY(p)·RotateXY(b)·(0,0,1), up = same·(0,1,0),
+// in YS aircraft coords (+Z nose, +Y up, +X starboard; h yaws LEFT for +).
+// Angles in radians here — .dat EXCAMERA lines carry degrees, convert at edges.
+export function ysAttVectors(h, p, b) {
+  const R = mul(mul(rotXZ(h || 0), rotZY(p || 0)), rotXY(b || 0));
+  return { forward: [R[2], R[6], R[10]], up: [R[1], R[5], R[9]] };
+}
+
+// Inverse of ysAttVectors: recover {h,p,b} (radians) from orthonormal
+// forward/up.  At the gimbal poles (forward = ±Y, e.g. the stock b29 bomb-bay
+// camera at p = -90deg) h and b collapse into one parameter; we pick b = 0 and
+// put the whole twist in h — same rotation, engine-identical view.
+export function ysAttFromForwardUp(f, u) {
+  const cl = (v) => Math.max(-1, Math.min(1, v));
+  const p = Math.asin(cl(f[1]));
+  let h, b;
+  if (Math.abs(f[0]) < 1e-9 && Math.abs(f[2]) < 1e-9) {
+    h = f[1] > 0 ? Math.atan2(u[0], -u[2]) : Math.atan2(-u[0], u[2]);
+    b = 0;
+  } else {
+    h = Math.atan2(-f[0], f[2]);
+    const HP = mul(rotXZ(h), rotZY(p));
+    const dot = (a, c) => a[0] * c[0] + a[1] * c[1] + a[2] * c[2];
+    // right0/up0 = the h,p frame's lateral/up axes; b rolls u away from up0.
+    b = Math.atan2(-dot(u, [HP[0], HP[4], HP[8]]), dot(u, [HP[1], HP[5], HP[9]]));
+  }
+  return { h: h + 0, p: p + 0, b: b + 0 }; // +0: never hand back -0
+}
+
 const staDiffers = (sta) => sta && sta.length >= 2 &&
   sta[0].slice(0, 6).some((v, i) => Math.abs(v - sta[sta.length - 1][i]) > 1e-6);
 
@@ -123,6 +158,9 @@ const SPIN_SLOT = { 3: 3, 18: 5, 20: 5, 22: 4, 24: 3 };
 // nose, so Blender shows the pilot's view and the studio import can restore
 // the value.  The pose goes through the same X-mirror conjugation as every
 // node; the engine-exact YS value rides extras.ysflight.cockpit verbatim.
+// opts.excameras = [{name, x,y,z, h,p,b(DEG), type, noHud, noInstPanel}] (the
+// getDatExCameras shape): one more named camera node per EXCAMERA, oriented
+// by its h/p/b, dat-verbatim values in extras.ysflight.excamera.
 export function dnmToGlb(dnmBytes, opts) {
   const dnm = parseDnm(dnmBytes);
 
@@ -312,20 +350,40 @@ export function dnmToGlb(dnmBytes, opts) {
   const rootIx = dnm.roots.map(emitNode).filter((ix) => ix !== null);
   if (!rootIx.length) throw new Error('no nodes exported (is this a DNM?)');
 
-  // Cockpit camera node (see the opts note above dnmToGlb).
+  // Viewpoint camera nodes (see the opts note above dnmToGlb).
   const ck = opts && opts.cockpit;
   let cameras;
+  const pushCamNode = (name, M, extras) => {
+    cameras = cameras || [];
+    // Conjugate by the X mirror like every other node pose; the engine-exact
+    // YS values ride extras.ysflight verbatim.
+    const pose = matToTQ(conjX(M));
+    gnodes.push({ name, camera: cameras.length, translation: pose.t, rotation: pose.q, extras: { ysflight: extras } });
+    cameras.push({ type: 'perspective', perspective: { yfov: Math.PI / 3, znear: 0.05 } });
+    rootIx.push(gnodes.length - 1);
+  };
   if (ck && [ck.x, ck.y, ck.z].every(Number.isFinite)) {
-    cameras = [{ type: 'perspective', perspective: { yfov: Math.PI / 3, znear: 0.05 } }];
     // In YS coords the eye sits at the COCKPITP point looking down +Z (nose);
     // a glTF camera looks down its local -Z, so the YS pose is T(p)·RotXZ(pi).
-    // Conjugate by the X mirror like every other node pose.
-    const pose = matToTQ(conjX(mul(T(ck.x, ck.y, ck.z), rotXZ(Math.PI))));
-    gnodes.push({
-      name: 'Cockpit', camera: 0, translation: pose.t, rotation: pose.q,
-      extras: { ysflight: { rh: 1, cockpit: { x: ck.x, y: ck.y, z: ck.z } } },
+    pushCamNode('Cockpit', mul(T(ck.x, ck.y, ck.z), rotXZ(Math.PI)),
+      { rh: 1, cockpit: { x: ck.x, y: ck.y, z: ck.z } });
+  }
+  // EXCAMERA extra viewpoints (opts.excameras, the getDatExCameras shape with
+  // DEGREE angles): one named camera node each, extras carry the .dat line
+  // verbatim.  YS orientation = RotXZ(h)·RotZY(p)·RotXY(b) applied to the
+  // nose-facing pose, so Blender shows each viewpoint looking its real way.
+  for (const c of (opts && opts.excameras) || []) {
+    if (!c || ![c.x, c.y, c.z].every(Number.isFinite)) continue;
+    const R = mul(mul(rotXZ((c.h || 0) * D2R), rotZY((c.p || 0) * D2R)), rotXY((c.b || 0) * D2R));
+    pushCamNode(c.name || 'EXCAMERA', mul(mul(T(c.x, c.y, c.z), R), rotXZ(Math.PI)), {
+      rh: 1,
+      excamera: {
+        name: c.name || 'EXCAMERA',
+        x: c.x, y: c.y, z: c.z, h: c.h || 0, p: c.p || 0, b: c.b || 0,
+        type: c.type === 'OUTSIDE' || c.type === 'CABIN' ? c.type : 'INSIDE',
+        ...(c.noHud ? { noHud: 1 } : {}), ...(c.noInstPanel ? { noInstPanel: 1 } : {}),
+      },
     });
-    rootIx.push(gnodes.length - 1);
   }
 
   const gltf = {
@@ -767,12 +825,16 @@ export function glbToDnm(glbBytes) {
   for (const nix of scene.nodes || []) walk(nix, I16);
   if (!nodeCount) throw new Error('no nodes in the glTF scene');
 
-  // Cockpit eye point: a camera node (name "Cockpit" preferred) restores the
-  // recipe's COCKPITP.  extras.ysflight.cockpit is the engine-exact YS value
-  // (Blender round-trips node extras as custom properties); without it, fall
-  // back to the camera's world translation, mirrored back when the file is
-  // right-handed.  No camera at all -> null (foreign glbs are untouched).
+  // Viewpoint cameras.  The cockpit eye point (name "Cockpit" preferred, else
+  // the first camera NOT tagged as an excamera) restores the recipe's
+  // COCKPITP; every other camera node becomes an EXCAMERA entry.
+  // extras.ysflight.{cockpit,excamera} are the engine-exact YS values (Blender
+  // round-trips node extras as custom properties); without them, fall back to
+  // the node's world pose — translation mirrored back when the file is
+  // right-handed, attitude recovered from the camera's -Z/+Y axes.  No camera
+  // at all -> cockpit null, excameras [] (foreign glbs are untouched).
   let cockpit = null;
+  const excameras = [];
   {
     const camNodes = [];
     const visit = (nix, M) => {
@@ -782,13 +844,45 @@ export function glbToDnm(glbBytes) {
       for (const c of n.children || []) visit(c, W);
     };
     for (const nix of scene.nodes || []) visit(nix, I16);
-    const pick = camNodes.find((c) => (c.n.name || '') === 'Cockpit') || camNodes[0];
+    const exOf = (c) => {
+      const e = ysExtras(c.n);
+      return e && e.excamera && [e.excamera.x, e.excamera.y, e.excamera.z].every(Number.isFinite) ? e.excamera : null;
+    };
+    const pick = camNodes.find((c) => (c.n.name || '') === 'Cockpit')
+      || camNodes.find((c) => !exOf(c));
     if (pick) {
       const e = ysExtras(pick.n);
       if (e && e.cockpit && [e.cockpit.x, e.cockpit.y, e.cockpit.z].every(Number.isFinite)) {
         cockpit = { x: e.cockpit.x, y: e.cockpit.y, z: e.cockpit.z };
       } else {
         cockpit = { x: flip ? -pick.W[3] : pick.W[3], y: pick.W[7], z: pick.W[11] };
+      }
+    }
+    for (const c of camNodes) {
+      if (c === pick) continue;
+      const e = exOf(c);
+      if (e) {
+        excameras.push({
+          name: e.name || c.n.name || 'EXCAMERA',
+          x: e.x, y: e.y, z: e.z, h: e.h || 0, p: e.p || 0, b: e.b || 0,
+          type: e.type === 'OUTSIDE' || e.type === 'CABIN' ? e.type : 'INSIDE',
+          noHud: !!e.noHud, noInstPanel: !!e.noInstPanel,
+        });
+      } else {
+        // Pose fallback (Blender-added camera, or extras lost): glTF cameras
+        // look down local -Z with +Y up; mirror x back into YS coords when
+        // the file is right-handed, then invert ysAttVectors.
+        const W = c.W, sx = flip ? -1 : 1;
+        const nrm = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+        const att = ysAttFromForwardUp(
+          nrm([sx * -W[2], -W[6], -W[10]]),
+          nrm([sx * W[1], W[5], W[9]]));
+        excameras.push({
+          name: c.n.name || 'EXCAMERA',
+          x: sx * W[3], y: W[7], z: W[11],
+          h: att.h / D2R, p: att.p / D2R, b: att.b / D2R,
+          type: 'INSIDE', noHud: false, noInstPanel: false,
+        });
       }
     }
   }
@@ -803,7 +897,7 @@ export function glbToDnm(glbBytes) {
   return {
     dnm: new TextEncoder().encode(out.join('\n') + '\n'),
     nodes: nodeCount, srfs: pcks.length, triangles: triCount,
-    cockpit,
+    cockpit, excameras,
   };
 }
 
