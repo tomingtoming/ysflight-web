@@ -17,9 +17,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 // data URL that stubs THREE.  Simpler: import with a THREE stub through a loader
 // isn't available here, so we test parseDnm by copying its contract against a
 // known DNM and asserting structure through a dynamic import guarded by a stub.
-let parseDnm, buildObject, setMovable, THREE;
+let parseDnm, buildObject, setMovable, axisSnapAngles, gizmoPointerToNDC, THREE;
 try {
-  ({ parseDnm, buildObject, setMovable } = await import('../web/dnm-preview.js'));
+  ({ parseDnm, buildObject, setMovable, axisSnapAngles, gizmoPointerToNDC } =
+    await import('../web/dnm-preview.js'));
   THREE = await import('../web/vendor/three.module.js');
 } catch (e) {
   // three.module.js uses browser globals; if the import fails under Node, skip
@@ -90,4 +91,65 @@ test('movable part rotates about its hinge (CNT stationary, tip moves)', { skip:
   setMovable(grp, 1); const h1 = wp(hingeLocal), t1 = wp(tipLocal);
   assert.ok(h0.distanceTo(h1) < 1e-6, 'hinge point stays fixed: ' + h0.distanceTo(h1));
   assert.ok(t0.distanceTo(t1) > 0.2, 'tip actually swings: ' + t0.distanceTo(t1));
+});
+
+// ── Gizmo pure-logic tests ────────────────────────────────────────────────────
+
+test('axisSnapAngles: snaps to target when far away', { skip: !axisSnapAngles }, () => {
+  const r = axisSnapAngles(0, 0, Math.PI / 2, 0, -Math.PI / 2, 0);
+  assert.ok(Math.abs(r.yaw - Math.PI / 2) < 1e-10, 'yaw snapped to PI/2, got ' + r.yaw);
+  assert.ok(Math.abs(r.pitch) < 1e-10, 'pitch snapped to 0, got ' + r.pitch);
+});
+
+test('axisSnapAngles: already at target → flips to opposite', { skip: !axisSnapAngles }, () => {
+  const r = axisSnapAngles(Math.PI / 2, 0, Math.PI / 2, 0, -Math.PI / 2, 0);
+  assert.ok(Math.abs(r.yaw - (-Math.PI / 2)) < 1e-10, 'flipped to -PI/2, got ' + r.yaw);
+  assert.ok(Math.abs(r.pitch) < 1e-10, 'pitch stays 0, got ' + r.pitch);
+});
+
+test('axisSnapAngles: yaw=2π wraps to near 0 and flips to opposite', { skip: !axisSnapAngles }, () => {
+  // 2π is equivalent to 0, so already at snapYaw=0 → should flip to opposite PI.
+  const r = axisSnapAngles(2 * Math.PI, 0, 0, 0, Math.PI, 0);
+  assert.ok(Math.abs(r.yaw - Math.PI) < 1e-10, '2π treated as 0, flipped to PI, got ' + r.yaw);
+});
+
+test('axisSnapAngles: negative yaw snaps correctly', { skip: !axisSnapAngles }, () => {
+  // -PI/2 is far from snapYaw=0, so it snaps forward, not flips.
+  const r = axisSnapAngles(-Math.PI / 2, 0, 0, 0, Math.PI, 0);
+  assert.ok(Math.abs(r.yaw) < 1e-10, 'yaw snapped to 0, got ' + r.yaw);
+});
+
+test('gizmoPointerToNDC: center of gizmo → NDC (0, 0)', { skip: !gizmoPointerToNDC }, () => {
+  // Container 400×300; gizmo 80×80 at margin 8 from top-right.
+  const rect = { left: 0, top: 0, width: 400, height: 300 };
+  const cx = 400 - 8 - 80 + 40; // horizontal centre of gizmo
+  const cy = 8 + 40;              // vertical centre of gizmo (from top)
+  const nd = gizmoPointerToNDC(cx, cy, rect, 80, 8);
+  assert.ok(Math.abs(nd.x) < 1e-10, 'NDC x=0 at centre: ' + nd.x);
+  assert.ok(Math.abs(nd.y) < 1e-10, 'NDC y=0 at centre: ' + nd.y);
+  assert.ok(nd.inGizmo, 'centre is inside gizmo');
+});
+
+test('gizmoPointerToNDC: top-left corner of gizmo → NDC (-1, +1)', { skip: !gizmoPointerToNDC }, () => {
+  const rect = { left: 0, top: 0, width: 400, height: 300 };
+  const nd = gizmoPointerToNDC(400 - 8 - 80, 8, rect, 80, 8);
+  assert.ok(Math.abs(nd.x - (-1)) < 1e-10, 'NDC x=-1 at gizmo left edge: ' + nd.x);
+  assert.ok(Math.abs(nd.y - 1) < 1e-10, 'NDC y=+1 at gizmo top edge: ' + nd.y);
+});
+
+test('gizmoPointerToNDC: pointer outside gizmo → inGizmo false', { skip: !gizmoPointerToNDC }, () => {
+  const rect = { left: 0, top: 0, width: 400, height: 300 };
+  const nd = gizmoPointerToNDC(0, 0, rect, 80);
+  assert.ok(!nd.inGizmo, 'top-left of container is not in gizmo');
+});
+
+test('gizmoPointerToNDC: respects containerRect offset', { skip: !gizmoPointerToNDC }, () => {
+  // Container is offset 50px from viewport left/top.
+  const rect = { left: 50, top: 50, width: 400, height: 300 };
+  const cx = 50 + 400 - 8 - 80 + 40; // same calculation but with offset
+  const cy = 50 + 8 + 40;
+  const nd = gizmoPointerToNDC(cx, cy, rect, 80, 8);
+  assert.ok(Math.abs(nd.x) < 1e-10, 'NDC x=0 with rect offset: ' + nd.x);
+  assert.ok(Math.abs(nd.y) < 1e-10, 'NDC y=0 with rect offset: ' + nd.y);
+  assert.ok(nd.inGizmo, 'centre with offset is inside gizmo');
 });
