@@ -41,6 +41,8 @@ export const OBJECT_PALETTE = [
   { nam: 'M1A1ABRAMS', ja: '戦車', en: 'Tank', glyph: '🛡' },
   { nam: 'SAM', ja: '対空ミサイル（撃ってくる）', en: 'SAM (it shoots!)', glyph: '🚀' },
   { nam: 'VOR', ja: 'VORビーコン', en: 'VOR beacon', glyph: '📡' },
+  { nam: 'VORDME', ja: 'VOR/DMEビーコン（距離つき）', en: 'VOR/DME beacon (with distance)', glyph: '📶' },
+  { nam: 'NDB', ja: 'NDBビーコン', en: 'NDB beacon', glyph: '📻' },
 ];
 
 export const LANG = (function () {

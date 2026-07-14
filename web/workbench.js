@@ -499,6 +499,48 @@ function runwayShapes({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45 }) {
   };
 }
 
+// Approach aids for a runway, expressed as the stock ground objects the ENGINE
+// actually interprets (there are no dedicated light primitives in .fld):
+//   ILS        — fsgroundproperty.cpp reads ground/ils.acp: a 3deg / 33km
+//                instrument beam offset 50m to the object's local +x.  The
+//                object faces the APPROACHING aircraft (FsILS::GetDeviation
+//                needs the aircraft in front), so heading = landing + 180 and
+//                standing 50m right of the threshold puts the beam origin
+//                exactly on the centerline (stock oracle: atsugi 01/19 — the
+//                two beam origins line up at compass 010.0).
+//   PAPI_LEFT / PAPI_RIGHT / VASI — VISLDAID templates; the engine recolors
+//                their light faces by your live approach angle (SetPapiColor /
+//                SetVasiColor).  Placement mirrors the stock fields: PAPI pair
+//                ~300m past the threshold either side of the pavement,
+//                VASI as near/far bar pairs (two-bar slope reference).
+// Returns [{nam, x, z, headingDeg(compass), tag?}] for one runway.
+export function runwayLightFixtures({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45, ils, vaid, tag }) {
+  const h = ((headingDeg || 0) * Math.PI) / 180;
+  const fx = Math.sin(h), fz = Math.cos(h);   // landing direction
+  const rx = Math.cos(h), rz = -Math.sin(h);  // pilot's right
+  const at = (cf, cr) => ({ x: x + fx * cf + rx * cr, z: z + fz * cf + rz * cr });
+  const back = ((headingDeg || 0) + 180) % 360; // faces the approach
+  const halfL = lengthM / 2;
+  const out = [];
+  if (ils) out.push({ nam: 'ILS', ...at(-halfL, 50), headingDeg: back, tag });
+  if (vaid === 'papi') {
+    const side = widthM / 2 + 30;
+    out.push({ nam: 'PAPI_LEFT',  ...at(-halfL + 300, -side), headingDeg: back });
+    out.push({ nam: 'PAPI_RIGHT', ...at(-halfL + 300,  side), headingDeg: back });
+  } else if (vaid === 'vasi') {
+    const side = widthM / 2 + 25;
+    for (const cf of [200, 375]) {   // downwind + upwind bars, 175m apart
+      out.push({ nam: 'VASI', ...at(-halfL + cf, -side), headingDeg: back });
+      out.push({ nam: 'VASI', ...at(-halfL + cf,  side), headingDeg: back });
+    }
+  }
+  return out;
+}
+
+// "RW09"-style designator from a compass heading (0/360 -> 36, aviation style).
+export const runwayDesignator = (headingDeg) =>
+  'RW' + String(((Math.round(((headingDeg || 0) % 360 + 360) % 360 / 10) + 35) % 36) + 1).padStart(2, '0');
+
 export function assembleSceneryZip(opts) {
   const {
     name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80],
@@ -583,6 +625,23 @@ export function assembleSceneryZip(opts) {
       'FLG 0',
       'END',
     );
+  });
+  // Runway approach aids ride as GOBs too; the ILS TAG is the name shown in
+  // the in-flight ILS picker, stock style ("09-MYMAP" like "01-ATSUGI").
+  (runways || []).forEach((rw) => {
+    const tag = runwayDesignator(rw.headingDeg).slice(2) + '-' + ident;
+    for (const g of runwayLightFixtures({ ...rw, tag })) {
+      fldLines.push(
+        'GOB',
+        'POS ' + num(g.x, 2) + ' 0.00 ' + num(g.z, 2) + ' ' + deg32768(compassToEngineDeg(g.headingDeg)) + ' 0 0',
+        'ID 0',
+        ...(g.tag ? ['TAG "' + g.tag + '"'] : []),
+        'NAM ' + g.nam,
+        'IFF 0',
+        'FLG 0',
+        'END',
+      );
+    }
   });
   fldLines.push('');
   const fld = fldLines.join('\n');

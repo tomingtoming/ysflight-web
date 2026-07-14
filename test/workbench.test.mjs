@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, migrateScenery, SCENERY_START, extractDnmColors, repaintDnm } from '../web/workbench.js';
+import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, migrateScenery, runwayLightFixtures, SCENERY_START, extractDnmColors, repaintDnm } from '../web/workbench.js';
 import { analyzePack } from '../web/packs.js';
 import { unzipSync } from '../web/vendor/fflate.js';
 
@@ -304,6 +304,55 @@ test('scenery conv 2: headingDeg is compass — engine attitude is its negation'
   assert.match(stp, /^N RUNWAY01$/m);
   assert.match(stp, /^C POSITION 0\.00m 0\.00m -940\.00m$/m);
   assert.match(stp, /^C ATTITUDE (-0\.00|0\.00)deg 0\.00deg 0\.00deg$/m);
+});
+
+test('runwayLightFixtures: stock-style ILS / PAPI / VASI geometry', () => {
+  // Compass-0 runway, 2000x45 at the origin: threshold (approach end) at
+  // (0, -1000), landing toward +z (north).  All aids FACE the approach
+  // (compass 180), matching stock fields (crescent / n-kyusyu / atsugi).
+  const rw = { x: 0, z: 0, headingDeg: 0, lengthM: 2000, widthM: 45 };
+  const ils = runwayLightFixtures({ ...rw, ils: true, tag: '36-T' });
+  // The antenna stands 50m right of the threshold; ground/ils.acp shifts the
+  // beam 50m to its local +x, which puts the beam origin ON the centerline.
+  assert.deepEqual(ils, [{ nam: 'ILS', x: 50, z: -1000, headingDeg: 180, tag: '36-T' }]);
+  const papi = runwayLightFixtures({ ...rw, vaid: 'papi' });
+  assert.deepEqual(papi.map((g) => [g.nam, g.x, g.z, g.headingDeg]), [
+    ['PAPI_LEFT', -52.5, -700, 180],   // pilot's left, 300m past the threshold
+    ['PAPI_RIGHT', 52.5, -700, 180],
+  ]);
+  const vasi = runwayLightFixtures({ ...rw, vaid: 'vasi' });
+  assert.deepEqual(vasi.map((g) => [g.nam, g.x, g.z]), [
+    ['VASI', -47.5, -800], ['VASI', 47.5, -800],   // downwind bar
+    ['VASI', -47.5, -625], ['VASI', 47.5, -625],   // upwind bar, 175m apart
+  ]);
+  assert.equal(runwayLightFixtures(rw).length, 0); // no aids requested
+});
+
+test('assembleSceneryZip: runway aids become GOBs the engine interprets', async () => {
+  const asm = assembleSceneryZip({
+    name: 'LIT', conv: 2,
+    runways: [{ x: 0, z: 0, headingDeg: 90, lengthM: 2000, widthM: 45, ils: true, vaid: 'papi' }],
+  });
+  const z = unzipSync(asm.zipBytes);
+  const fld = new TextDecoder().decode(z['scenery/lit.fld']);
+  // ILS: at the west threshold (compass 90 lands eastward), 50m on the
+  // pilot's right (south, z=-50), facing the approach (compass 270 = engine
+  // attitude 90deg = 16384).  TAG is the in-flight ILS picker label.
+  assert.match(fld, /^GOB\nPOS -1000\.00 0\.00 -50\.00 16384 0 0\nID 0\nTAG "09-LIT"\nNAM ILS\nIFF 0\nFLG 0\nEND$/m);
+  assert.match(fld, /^POS -700\.00 0\.00 52\.50 16384 0 0\nID 0\nNAM PAPI_LEFT$/m);
+  assert.match(fld, /^POS -700\.00 0\.00 -52\.50 16384 0 0\nID 0\nNAM PAPI_RIGHT$/m);
+  // The recipe round-trips the aid switches for the ✏️ re-edit path.
+  const asm2 = assembleSceneryZip({
+    name: 'LIT2', conv: 2,
+    runways: [{ x: 0, z: 0, headingDeg: 0, vaid: 'vasi' }],
+    recipe: { scenery: { conv: 2, runways: [{ x: 0, z: 0, headingDeg: 0, vaid: 'vasi' }] } },
+  });
+  const rec = JSON.parse(new TextDecoder().decode(unzipSync(asm2.zipBytes)['workbench.json']));
+  assert.equal(rec.scenery.runways[0].vaid, 'vasi');
+  assert.equal((new TextDecoder().decode(unzipSync(asm2.zipBytes)['scenery/lit2.fld']).match(/^NAM VASI$/gm) || []).length, 4);
+  // Legacy recipes (no conv) still compile with no aids and no GOBs at all.
+  const legacy = assembleSceneryZip({ name: 'OLDRW', runways: [{ x: 0, z: 0, headingDeg: 90 }] });
+  assert.doesNotMatch(new TextDecoder().decode(unzipSync(legacy.zipBytes)['scenery/oldrw.fld']), /^GOB$/m);
 });
 
 test('migrateScenery: legacy headings negate once, conv 2 is idempotent', () => {

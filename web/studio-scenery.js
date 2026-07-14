@@ -7,7 +7,7 @@ import {
   saveOrReplace, loadCreation, OBJECT_PALETTE, WORLD_M,
   DEFAULT_FLY_AIRCRAFT, stockIndex,
 } from './studio-shared.js';
-import { assembleSceneryZip, migrateScenery, SCENERY_START } from './workbench.js';
+import { assembleSceneryZip, migrateScenery, runwayLightFixtures, SCENERY_START } from './workbench.js';
 import {
   hitTest, itemAt, moveSelected, setHeading, duplicateSelected, deleteSelected,
   runwayCorners,
@@ -53,6 +53,9 @@ const S = ({
     selX: '東西 (m)', selZ: '南北 (m)',
     selVerts: (n) => '頂点 ' + n + ' 個',
     selDup: '⧉ 複製', selDel: '🗑 削除',
+    rwIls: '📡 ILS（計器進入）',
+    rwVaid: '進入角指示灯',
+    vaidNone: 'なし', vaidPapi: 'PAPI', vaidVasi: 'VASI',
     isDone: (n, k) => '✓ マップ「' + n + '」（島 ' + k + ' 個）を保存しました',
     flyWhat: 'テスト飛行の機体',
     fly: (n) => '🛫 ' + n + ' で飛ぶ',
@@ -99,6 +102,9 @@ const S = ({
     selX: 'East (m)', selZ: 'North (m)',
     selVerts: (n) => n + ' vertices',
     selDup: '⧉ Duplicate', selDel: '🗑 Delete',
+    rwIls: '📡 ILS (instrument approach)',
+    rwVaid: 'Approach slope lights',
+    vaidNone: 'None', vaidPapi: 'PAPI', vaidVasi: 'VASI',
     isDone: (n, k) => '✓ Saved map "' + n + '" (' + k + ' island' + (k === 1 ? '' : 's') + ')',
     flyWhat: 'Test-fly aircraft',
     fly: (n) => '🛫 Fly ' + n,
@@ -221,15 +227,40 @@ async function main() {
   stCtl.appendChild(clab(S.stSpeed));  stCtl.appendChild(stSpd);
   stCtl.appendChild(clab(S.headingDeg)); stCtl.appendChild(stHead);
 
+  // Small helpers for the approach-aid controls (used in runway mode and in
+  // the select panel for an existing runway).
+  const ilsCheck = (get, set) => {
+    const lb = el('label');
+    lb.style.cssText = 'display:inline-flex;align-items:center;gap:4px;color:#8fa3bb;font-size:12px;white-space:nowrap;cursor:pointer';
+    const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!get() });
+    cb.addEventListener('change', () => set(cb.checked));
+    lb.appendChild(cb);
+    lb.appendChild(document.createTextNode(S.rwIls));
+    return lb;
+  };
+  const vaidSel = (get, set) => {
+    const sl = document.createElement('select');
+    sl.style.cssText = 'padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+    for (const [v, label] of [['', S.vaidNone], ['papi', S.vaidPapi], ['vasi', S.vaidVasi]]) {
+      sl.appendChild(Object.assign(el('option'), { value: v, textContent: label }));
+    }
+    sl.value = get() || '';
+    sl.addEventListener('change', () => set(sl.value || undefined));
+    return sl;
+  };
+
   // Runway mode controls
   const rwLen  = numIn(2000, 400, 6000, 90);
   const rwWid  = numIn(45,   20,  120,  80);
   const rwHead = numIn(0,    0,   359,  70);
+  let rwIls = false, rwVaid;
   const rwCtl  = el('div');
   rwCtl.style.cssText = 'display:none;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px';
   rwCtl.appendChild(clab(S.rwLength));   rwCtl.appendChild(rwLen);
   rwCtl.appendChild(clab(S.rwWidth));    rwCtl.appendChild(rwWid);
   rwCtl.appendChild(clab(S.headingDeg)); rwCtl.appendChild(rwHead);
+  rwCtl.appendChild(ilsCheck(() => rwIls, (v) => { rwIls = v; }));
+  rwCtl.appendChild(clab(S.rwVaid));     rwCtl.appendChild(vaidSel(() => rwVaid, (v) => { rwVaid = v; }));
 
   // Select mode: property mini-panel (rebuilt per selection by renderSelPanel).
   const selCtl = el('div');
@@ -379,6 +410,12 @@ async function main() {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
+      // Approach aids, where they will stand in the compiled field.
+      for (const g of runwayLightFixtures(rw)) {
+        const [gx, gy] = fromWorld([g.x, g.z]);
+        ctx.fillStyle = g.nam === 'ILS' ? '#39d5ff' : g.nam === 'VASI' ? '#ffb84d' : '#ff5964';
+        ctx.fillRect(gx - 2, gy - 2, 4, 4);
+      }
     }
 
     ctx.textAlign    = 'center';
@@ -476,7 +513,11 @@ async function main() {
     } else if (mode === 'mountain') {
       mountains.push({ x: wx, z: wz, radiusM: Number(mtRad.value) || 1500, heightM: Number(mtHt.value) || 300 });
     } else if (mode === 'runway') {
-      runways.push({ x: wx, z: wz, headingDeg: Number(rwHead.value) || 0, lengthM: Number(rwLen.value) || 2000, widthM: Number(rwWid.value) || 45 });
+      runways.push({
+        x: wx, z: wz, headingDeg: Number(rwHead.value) || 0,
+        lengthM: Number(rwLen.value) || 2000, widthM: Number(rwWid.value) || 45,
+        ils: rwIls || undefined, vaid: rwVaid,
+      });
     } else if (mode === 'start') {
       starts.push({ x: wx, z: wz, altM: Number(stAlt.value) || 0, speedMS: Number(stSpd.value) || 0, headingDeg: Number(stHead.value) || 0 });
     }
@@ -598,6 +639,9 @@ async function main() {
       selCtl.appendChild(propIn(() => Math.round(it.lengthM || 2000), (v) => { it.lengthM = v; }, { min: 400, max: 6000 }));
       selCtl.appendChild(clab(S.rwWidth));
       selCtl.appendChild(propIn(() => Math.round(it.widthM || 45), (v) => { it.widthM = v; }, { min: 20, max: 120, w: 80 }));
+      selCtl.appendChild(ilsCheck(() => it.ils, (v) => { pushUndo(); it.ils = v || undefined; redraw(); }));
+      selCtl.appendChild(clab(S.rwVaid));
+      selCtl.appendChild(vaidSel(() => it.vaid, (v) => { pushUndo(); it.vaid = v; redraw(); }));
     }
     const dupBtn = el('button', null, S.selDup);
     dupBtn.addEventListener('click', () => {
