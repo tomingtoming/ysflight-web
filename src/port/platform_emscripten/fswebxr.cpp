@@ -1746,6 +1746,41 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// face in the XY plane, +Z facing the viewer).  Read by updateMenuCursor
 	// to place the cursor in world space via vr.menuAnchor.
 	var menuRayState={prevMx:-1,prevMy:-1,prevTrig:false,wasHit:false,hitVX:0,hitVY:0};
+	// Pure ray-vs-anchored-quad intersection (no XR/session state) so
+	// headless tests can drive it -- same pattern as
+	// vr.yawOnlyQuatFromOrientation.  Inputs: ray origin/orientation
+	// ({x,y,z} / {x,y,z,w}) and the quad anchor pose, all in the SAME
+	// (reference) space, plus the quad's metric size.  Returns null when
+	// the ray misses, or {u,v,localX,localY} on the visible (+Z) face:
+	// u/v in [0,1] with v=0 at the TOP edge (texture convention), localX/
+	// localY in quad-local metres (for cursor placement).
+	// Backface and behind-origin hits are rejected: the ray must originate
+	// on the quad's +Z side and travel toward -Z.
+	function intersectRayWithAnchoredQuad(rayPos,rayQuat,anchorPos,anchorQuat,quadW,quadH)
+	{
+		var aQuatInv=quatConjugate(anchorQuat);
+		var roLocal=rotateVecByQuat(
+			{x:rayPos.x-anchorPos.x,y:rayPos.y-anchorPos.y,z:rayPos.z-anchorPos.z},
+			aQuatInv);
+		var worldDir=rotateVecByQuat({x:0,y:0,z:-1},rayQuat);
+		var rdLocal=rotateVecByQuat(worldDir,aQuatInv);
+		// Visible face is local z=0 seen from +Z: require the origin in
+		// front and the ray heading into the plane (backface exclusion).
+		if(roLocal.z<=0 || rdLocal.z>=-1e-6)
+		{
+			return null;
+		}
+		var t=-roLocal.z/rdLocal.z;
+		var hx=roLocal.x+t*rdLocal.x;
+		var hy=roLocal.y+t*rdLocal.y;
+		var u=(hx+quadW/2)/quadW;
+		var v=(quadH/2-hy)/quadH; // top=0, bottom=1
+		if(u<0||u>1||v<0||v>1)
+		{
+			return null;
+		}
+		return {u:u,v:v,localX:hx,localY:hy};
+	}
 	// Projects each controller's aim ray onto the menu quad (anchored in
 	// vr.refSpace) and injects a mouse-move event + left-button edge into
 	// the engine via YsfwInjectMouseEvent.  Only active while the menu quad
@@ -1755,8 +1790,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 	//   centre = (0, 0);  width = 1.6m;  height = 1.6*H/W
 	//   visible face: the +Z side (viewer is at local +Z).
 	//
-	// Ray is fetched in vr.refSpace, then transformed into quad-local coords
-	// via inverse(vr.menuAnchor.quat) * (refRayPos - anchorPos), so the
+	// The ray is fetched in vr.refSpace and intersected with the quad via
+	// intersectRayWithAnchoredQuad (see above for the math), so the
 	// intersection stays correct when the head moves independently of the
 	// anchored quad.
 	//
@@ -1779,13 +1814,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 		var quadW=1.6;
 		var quadH=1.6*texH/texW;
-		var halfW=quadW/2;
-		var halfH=quadH/2;
 
-		// Inverse of the anchor quaternion (unit quat: conjugate == inverse).
 		var aPos=vr.menuAnchor.pos;
 		var aQuat=vr.menuAnchor.quat;
-		var aQuatInv=quatConjugate(aQuat);
 
 		var sources=frame.session.inputSources;
 		var hitMx=-1,hitMy=-1,hitTrig=false,hitVX=0,hitVY=0;
@@ -1802,54 +1833,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				continue;
 			}
-			// Transform ray origin into quad-local space.
-			var ro=rayPose.transform.position;
-			var roLocal=rotateVecByQuat(
-				{x:ro.x-aPos.x,y:ro.y-aPos.y,z:ro.z-aPos.z},
-				aQuatInv);
-
-			// Transform ray direction into quad-local space.
-			// Rotate unit forward (0,0,-1) by aim orientation to get world
-			// direction, then rotate into quad-local space.
-			var rd=rayPose.transform.orientation;
-			var vx=0,vy=0,vz=-1;
-			var qx=rd.x,qy=rd.y,qz=rd.z,qw=rd.w;
-			var cx=qy*vz-qz*vy, cy=qz*vx-qx*vz, cz=qx*vy-qy*vx;
-			var dx2=qy*cz-qz*cy, dy2=qz*cx-qx*cz, dz2=qx*cy-qy*cx;
-			var worldDX=vx+2*(qw*cx+dx2);
-			var worldDY=vy+2*(qw*cy+dy2);
-			var worldDZ=vz+2*(qw*cz+dz2);
-			var rdLocal=rotateVecByQuat({x:worldDX,y:worldDY,z:worldDZ},aQuatInv);
-
-			// Intersect with the quad's local z=0 plane.
-			// (Visible face is at z=0, viewer is on the +Z side.)
-			// t = -roLocal.z / rdLocal.z
-			if(Math.abs(rdLocal.z)<1e-6)
+			var hit=intersectRayWithAnchoredQuad(
+				rayPose.transform.position,rayPose.transform.orientation,
+				aPos,aQuat,quadW,quadH);
+			if(!hit)
 			{
-				continue; // Ray is parallel to the quad face.
+				continue;
 			}
-			var t=-roLocal.z/rdLocal.z;
-			if(t<0)
-			{
-				continue; // Intersection is behind the ray origin (or on back face).
-			}
-			var hx=roLocal.x+t*rdLocal.x;
-			var hy=roLocal.y+t*rdLocal.y;
-
-			// Map hit point to UV on the quad.
-			// hx in [-halfW, +halfW] -> u in [0,1]; hy in [-halfH, +halfH] -> v in [1,0]
-			var u=(hx+halfW)/quadW;
-			var v=(halfH-hy)/quadH; // y is flipped: top=0, bottom=1
-
-			if(u<0||u>1||v<0||v>1)
-			{
-				continue; // Hit outside the quad.
-			}
-
-			hitMx=Math.round(u*texW);
-			hitMy=Math.round(v*texH);
-			hitVX=hx; // quad-local X (read by updateMenuCursor)
-			hitVY=hy; // quad-local Y
+			hitMx=Math.round(hit.u*texW);
+			hitMy=Math.round(hit.v*texH);
+			hitVX=hit.localX;
+			hitVY=hit.localY;
 			// Trigger button = left mouse click.
 			var gp=src.gamepad;
 			hitTrig=!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5);
@@ -5272,6 +5266,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return [r.x,r.y,r.z,r.w];
 	};
 	vr.recenter=vrRecenter;
+	// Pure-math test hook (no XR state) -- see intersectRayWithAnchoredQuad.
+	vr.intersectRayWithAnchoredQuad=intersectRayWithAnchoredQuad;
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read
