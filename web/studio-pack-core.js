@@ -97,6 +97,56 @@ export function refreshPlan(members, creations) {
   return { stale, orphans, fresh };
 }
 
+// --- attribution -------------------------------------------------------------------
+
+// Attribution / license metadata carried BY the pack (recipe + a human-readable
+// README transcription in the zip).  This is a RECORD, not a mechanism: nothing
+// is enforced, verified, or inferred.  It exists so (a) one's own works can
+// carry an author name and redistribution intent, and (b) provenance of works
+// can be written down in line with community norms (YSFHQ-style author
+// consent).  The default is 'unspecified' and an all-empty attribution is
+// dropped entirely — never auto-attached.
+export const ATTRIBUTION_POLICIES = ['unspecified', 'redist-mod-ok', 'redist-nomod', 'no-redist', 'ask-author'];
+
+export function normalizeAttribution(a) {
+  if (!a || typeof a !== 'object') return null;
+  const author = String(a.author || '').trim();
+  const terms = String(a.terms || '').trim();
+  const url = String(a.url || '').trim();
+  const policy = ATTRIBUTION_POLICIES.includes(a.policy) ? a.policy : 'unspecified';
+  if (!author && !terms && !url && policy === 'unspecified') return null;
+  return { author, policy, terms, url };
+}
+
+// English transcription of the policy presets for the zip's README.
+const POLICY_TEXT = {
+  'redist-mod-ok': 'Redistribution OK / modification OK',
+  'redist-nomod': 'Redistribution OK / no modification',
+  'no-redist': 'No redistribution',
+  'ask-author': 'Contact the author for permission',
+};
+
+// The README.txt dropped into the composed zip when attribution exists.
+// STRICTLY a transcription of the recorded fields plus the member inventory
+// (with per-member credits) — no generated prose.
+export function buildReadme(packName, attribution, members) {
+  const a = normalizeAttribution(attribution);
+  const lines = ['Pack: ' + packName];
+  if (a) {
+    if (a.author) lines.push('Author: ' + a.author);
+    if (a.policy !== 'unspecified') lines.push('Redistribution: ' + POLICY_TEXT[a.policy]);
+    if (a.terms) lines.push('Terms: ' + a.terms);
+    if (a.url) lines.push('Source / contact: ' + a.url);
+  }
+  if (members && members.length) {
+    lines.push('', 'Included works:');
+    for (const m of members) {
+      lines.push('- ' + m.name + ' (' + m.kind + ')' + (m.credit ? ' -- credit: ' + String(m.credit).trim() : ''));
+    }
+  }
+  return lines.join('\n') + '\n';
+}
+
 // --- recipe -----------------------------------------------------------------------
 
 // The pack recipe object embedded as workbench.json.  Field order and the
@@ -104,16 +154,21 @@ export function refreshPlan(members, creations) {
 // same bytes (records are content-addressed: same bytes = same id = no-op
 // save), and a pack saved by an OLDER studio round-trips byte-identically.
 // addedAt = when the member snapshot was (re-)frozen (add or ↺), epoch ms.
-export function buildRecipe(packName, members) {
-  return {
+// credit = free-form per-member original-author note (attribution).
+export function buildRecipe(packName, members, attribution) {
+  const r = {
     type: 'pack',
     packName,
     members: members.map((m) => {
       const e = { sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind };
       if (m.addedAt) e.addedAt = m.addedAt;
+      if (m.credit && String(m.credit).trim()) e.credit = String(m.credit).trim();
       return e;
     }),
   };
+  const a = normalizeAttribution(attribution);
+  if (a) r.attribution = a;
+  return r;
 }
 
 // Normalize a parsed pack recipe, tolerating recipes written by OLDER studios
@@ -127,18 +182,26 @@ export function parseRecipe(recipe) {
       name: m.name,
       kind: m.kind,
       addedAt: m.addedAt || null,
+      credit: m.credit || '',
     })),
+    attribution: normalizeAttribution(recipe && recipe.attribution),
   };
 }
 
 // --- compose ----------------------------------------------------------------------
 
-// The zip entry map for a pack: every member's namespaced files + the recipe.
+// The zip entry map for a pack: every member's namespaced files + the recipe,
+// plus — only when attribution was recorded — a human-readable README.txt
+// transcription.  Both extra files are inert to the engine (only air/sce/gro
+// lists are scanned) and to the analyzer (root-level files don't affect the
+// wrapper-peel, exactly like the recipe that already rides at the root).
 // The caller zips this (fflate zipSync) and hands it to the install pipeline.
-export function composeEntries(members, packName) {
+export function composeEntries(members, packName, attribution) {
   const entries = {};
   for (const m of members) for (const f of m.files) entries[f.path] = f.bytes;
-  entries[RECIPE_FILE] = te.encode(JSON.stringify(buildRecipe(packName, members)));
+  const a = normalizeAttribution(attribution);
+  entries[RECIPE_FILE] = te.encode(JSON.stringify(buildRecipe(packName, members, a)));
+  if (a) entries['README.txt'] = te.encode(buildReadme(packName, a, members));
   return entries;
 }
 

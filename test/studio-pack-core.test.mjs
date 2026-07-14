@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import {
   sanitize, uniqueSan, namespaceSnapshot, buildRecipe, parseRecipe,
   composeEntries, fmtBytes, summarize, memberState, refreshPlan, memberFlight,
+  normalizeAttribution, buildReadme, ATTRIBUTION_POLICIES,
 } from '../web/studio-pack-core.js';
 import { RECIPE_FILE } from '../web/workbench.js';
 import { analyzePack } from '../web/packs.js';
@@ -164,6 +165,56 @@ test('memberFlight reads launch targets from the snapshot bytes', () => {
   // a .dat without an ASCII IDENTIFY yields no launchable identity
   const noIdn = mkMember('X', 'aircraft', [{ path: 'aircraft/x.dat', bytes: E('WEIGHCLN 5t\n') }]);
   assert.deepEqual(memberFlight(noIdn).identities, []);
+});
+
+test('normalizeAttribution: empty stays null (never auto-recorded), bad policy downgrades', () => {
+  assert.equal(normalizeAttribution(null), null);
+  assert.equal(normalizeAttribution({}), null);
+  assert.equal(normalizeAttribution({ author: '  ', policy: 'unspecified', terms: '', url: '' }), null);
+  // an unknown policy value never round-trips as-is
+  assert.deepEqual(normalizeAttribution({ author: 'toming', policy: 'do-anything' }),
+    { author: 'toming', policy: 'unspecified', terms: '', url: '' });
+  assert.ok(ATTRIBUTION_POLICIES.includes('no-redist'));
+});
+
+test('attribution + per-member credit round-trip through the recipe', () => {
+  const members = [{ ...mkMember('F-15', 'aircraft', []), credit: 'base model by X' }];
+  const attribution = { author: 'toming', policy: 'redist-nomod', terms: 'keep this readme', url: 'https://example.com' };
+  const back = parseRecipe(JSON.parse(JSON.stringify(buildRecipe('P', members, attribution))));
+  assert.deepEqual(back.attribution, { author: 'toming', policy: 'redist-nomod', terms: 'keep this readme', url: 'https://example.com' });
+  assert.equal(back.members[0].credit, 'base model by X');
+  // absent in an old recipe -> null / ''
+  const old = parseRecipe({ type: 'pack', packName: 'L', members: [{ sourceId: 'a', san: 'x', name: 'X', kind: 'aircraft' }] });
+  assert.equal(old.attribution, null);
+  assert.equal(old.members[0].credit, '');
+});
+
+test('README.txt rides in the zip only when attribution exists, as a pure transcription', async () => {
+  const members = [
+    { ...mkMember('F-15', 'aircraft', namespaceSnapshot(aircraftFiles(), 'f15'), 'f15'), credit: 'orig by Y' },
+  ];
+  // no attribution -> no README (and no phantom recipe field)
+  const plain = composeEntries(members, 'P');
+  assert.equal(plain['README.txt'], undefined);
+  assert.equal(JSON.parse(D(plain[RECIPE_FILE])).attribution, undefined);
+  // with attribution -> README transcribes the fields and the member inventory
+  const entries = composeEntries(members, 'P', { author: 'toming', policy: 'no-redist', terms: 'contact first', url: 'https://example.com' });
+  const readme = D(entries['README.txt']);
+  assert.equal(readme,
+    'Pack: P\n' +
+    'Author: toming\n' +
+    'Redistribution: No redistribution\n' +
+    'Terms: contact first\n' +
+    'Source / contact: https://example.com\n' +
+    '\n' +
+    'Included works:\n' +
+    '- F-15 (aircraft) -- credit: orig by Y\n');
+  // the extra root-level README must not break the analyzer / install pipeline
+  const a = await analyzePack(zipSync(entries), { sha256, name: 'P', now: 1700000000000 });
+  assert.deepEqual(a.categories, ['aircraft']);
+  assert.ok(a.hashed.some((h) => h.path === 'README.txt'), 'README is ordinary payload');
+  const back = parseRecipe(JSON.parse(D(a.files.find((f) => f.path === RECIPE_FILE).bytes)));
+  assert.equal(back.attribution.policy, 'no-redist');
 });
 
 test('fmtBytes / summarize', () => {

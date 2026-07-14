@@ -18,7 +18,7 @@ import { studioChrome, LANG, el, row, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, sav
 import { RECIPE_FILE, SCENERY_START } from './workbench.js';
 import {
   sanitize, uniqueSan, namespaceSnapshot, composeEntries, memberState, refreshPlan,
-  parseRecipe, fmtBytes, memberBytes, summarize, memberFlight,
+  parseRecipe, fmtBytes, memberBytes, summarize, memberFlight, ATTRIBUTION_POLICIES,
 } from './studio-pack-core.js';
 import * as opfs from './opfs-store.js';
 import { zipSync } from './vendor/fflate.js';
@@ -61,6 +61,22 @@ const S = ({
     saved: (n, k) => '✓ パック「' + n + '」（' + k + ' 作品収録）を保存しました',
     needMembers: '収録する作品を選んでください',
     needName: 'パック名を入れてください',
+    attrTitle: '🏷 作者・再配布条件',
+    attrIntro: 'パックに「出自の記録」として同梱します（レシピとzip内README.txtに転記。配布機能ではなく、強制・検証もしません）。未入力なら何も記録しません。',
+    attrAuthor: '作者名',
+    attrPolicy: '再配布',
+    attrTerms: '条件メモ',
+    attrTermsPh: '（任意）条件の自由記述',
+    attrUrl: '出典/連絡先URL',
+    attrPolicyLabels: {
+      'unspecified': '明示なし',
+      'redist-mod-ok': '再配布可・改変可',
+      'redist-nomod': '再配布可・改変不可',
+      'no-redist': '再配布不可',
+      'ask-author': '要許可（作者に連絡）',
+    },
+    creditLabel: '原作者クレジット',
+    creditPh: '（任意）この作品の原作者・出典のメモ',
     exportTitle: '⬇ 配布用に書き出す',
     exportIntro: '保存済みのパックをzipファイルとして手元にダウンロードします（YSFLIGHT本体でも使える形式）',
     exportBtn: '⬇ zipをダウンロード',
@@ -110,6 +126,22 @@ const S = ({
     saved: (n, k) => '✓ Saved pack “' + n + '” (' + k + ' work' + (k === 1 ? '' : 's') + ')',
     needMembers: 'Add at least one work',
     needName: 'Enter a pack name',
+    attrTitle: '🏷 Author & redistribution terms',
+    attrIntro: 'Recorded INSIDE the pack as provenance (transcribed into the recipe and a README.txt in the zip). Not a distribution feature; nothing is enforced or verified. Leave empty to record nothing.',
+    attrAuthor: 'Author',
+    attrPolicy: 'Redistribution',
+    attrTerms: 'Terms note',
+    attrTermsPh: '(optional) free-form terms',
+    attrUrl: 'Source / contact URL',
+    attrPolicyLabels: {
+      'unspecified': 'Unspecified',
+      'redist-mod-ok': 'Redistribution OK / mods OK',
+      'redist-nomod': 'Redistribution OK / no mods',
+      'no-redist': 'No redistribution',
+      'ask-author': 'Ask the author',
+    },
+    creditLabel: 'Credit (original author)',
+    creditPh: '(optional) note the original author / source of this work',
     exportTitle: '⬇ Export for sharing',
     exportIntro: 'Download the saved pack as a zip (also usable in desktop YSFLIGHT)',
     exportBtn: '⬇ Download zip',
@@ -179,6 +211,19 @@ const writeLastMembers = (ids) => { try { localStorage.setItem(LAST_MEMBERS_KEY,
 
 const memberSan = (name) => uniqueSan(name, members.map((m) => m.san));
 
+// Attribution inputs (buildRail).  Read at compose time; normalizeAttribution
+// (in composeEntries) drops an all-empty set, so nothing is ever auto-recorded.
+let attrUI = null; // {author, policy, terms, url} input elements
+const attrValues = () => attrUI && {
+  author: attrUI.author.value, policy: attrUI.policy.value,
+  terms: attrUI.terms.value, url: attrUI.url.value,
+};
+
+// Author-name default: remembered once entered (localStorage, guarded).
+const AUTHOR_KEY = 'ysfwPackAuthor';
+const readAuthorDefault = () => { try { return localStorage.getItem(AUTHOR_KEY) || ''; } catch (e) { return ''; } };
+const writeAuthorDefault = (v) => { try { if (v) localStorage.setItem(AUTHOR_KEY, v); } catch (e) {} };
+
 // Snapshot one library creation and append it as a member (shared by the
 // per-row ＋, the bulk add, and the composeAll smoke driver).
 async function addMember(c) {
@@ -190,7 +235,7 @@ async function addMember(c) {
   });
 }
 
-const composeZip = (packName) => zipSync(composeEntries(members, packName));
+const composeZip = (packName) => zipSync(composeEntries(members, packName, attrValues()));
 
 // --- page -------------------------------------------------------------------------
 
@@ -467,6 +512,15 @@ function memberDetail(m) {
     else webSha256(f.bytes).then((h) => { f.sha = h; hs.textContent = h.slice(0, 10); }).catch(() => { hs.textContent = '?'; });
     d.appendChild(line);
   }
+  // Per-member original-author credit (attribution) — rides in the recipe.
+  const credRow = el('div');
+  credRow.style.cssText = 'display:flex;gap:6px;align-items:center;margin-top:6px';
+  credRow.appendChild(Object.assign(el('span', null, S.creditLabel), { style: 'flex:none;color:#8fa3bb' }));
+  const credIn = Object.assign(document.createElement('input'), { type: 'text', value: m.credit || '', placeholder: S.creditPh });
+  credIn.style.cssText = 'flex:1;min-width:0;padding:4px 8px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:11.5px';
+  credIn.addEventListener('input', () => { m.credit = credIn.value; });
+  credRow.appendChild(credIn);
+  d.appendChild(credRow);
   return d;
 }
 
@@ -477,6 +531,26 @@ function buildRail() {
   const editBadge = el('div', 'msg');
   rail.appendChild(editBadge);
   const nameIn = row(rail, S.packName, Object.assign(document.createElement('input'), { type: 'text' }));
+
+  // Attribution / license — a carried record, never enforced (see core).
+  rail.appendChild(el('h2', null, S.attrTitle));
+  rail.appendChild(el('p', 'intro', S.attrIntro));
+  const authorIn = row(rail, S.attrAuthor, Object.assign(document.createElement('input'), { type: 'text', value: readAuthorDefault() }));
+  const policySel = document.createElement('select');
+  for (const p of ATTRIBUTION_POLICIES) {
+    const o = document.createElement('option');
+    o.value = p;
+    o.textContent = S.attrPolicyLabels[p] || p;
+    policySel.appendChild(o);
+  }
+  policySel.value = 'unspecified'; // the default is ALWAYS "unspecified" — never auto-assigned
+  row(rail, S.attrPolicy, policySel);
+  const termsIn = Object.assign(document.createElement('textarea'), { rows: 2, placeholder: S.attrTermsPh });
+  termsIn.style.cssText = 'flex:1;min-width:0;padding:6px 9px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:12.5px;resize:vertical';
+  row(rail, S.attrTerms, termsIn);
+  const urlIn = row(rail, S.attrUrl, Object.assign(document.createElement('input'), { type: 'url' }));
+  attrUI = { author: authorIn, policy: policySel, terms: termsIn, url: urlIn };
+
   const btnRow = el('div', 'btnrow');
   const saveBtn = el('button', 'accent', S.save);
   btnRow.appendChild(saveBtn);
@@ -506,6 +580,7 @@ function buildRail() {
       savedName = name;
       savedZip = zip;
       writeLastMembers(members.map((m) => m.sourceId).filter(Boolean));
+      writeAuthorDefault(attrUI.author.value.trim());
       msg.textContent = S.saved(name, members.length);
       expMsg.textContent = '';
     } catch (e) {
@@ -553,10 +628,21 @@ async function main2() {
           const files = await snapshotFromPack(packRec, m.san);
           // fresh/stale/orphan is derived at render time (memberState vs. the
           // library snapshot), so nothing else is loaded here.
-          members.push({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind, files, addedAt: m.addedAt });
+          members.push({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind, files, addedAt: m.addedAt, credit: m.credit });
         }
         editingId = editId;
         nameIn.value = parsed.packName || c.name || '';
+        // Attribution: restore what the pack recorded.  A pack saved WITHOUT
+        // attribution stays blank (incl. the author default) — re-saving it
+        // must not silently start recording.
+        if (parsed.attribution) {
+          attrUI.author.value = parsed.attribution.author;
+          attrUI.policy.value = parsed.attribution.policy;
+          attrUI.terms.value = parsed.attribution.terms;
+          attrUI.url.value = parsed.attribution.url;
+        } else {
+          attrUI.author.value = '';
+        }
         editBadge.textContent = S.editingBadge(c.name || editId);
       } else if (c && c.recipe) {
         location.replace(pageUrl(c.recipe.type === 'scenery' ? 'studio-scenery.html' : 'studio-aircraft.html', { edit: editId }));
