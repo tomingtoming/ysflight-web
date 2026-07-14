@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 
 import {
   sanitize, uniqueSan, namespaceSnapshot, buildRecipe, parseRecipe,
-  composeEntries, fmtBytes, summarize,
+  composeEntries, fmtBytes, summarize, memberState, refreshPlan,
 } from '../web/studio-pack-core.js';
 import { RECIPE_FILE } from '../web/workbench.js';
 import { analyzePack } from '../web/packs.js';
@@ -110,6 +110,43 @@ test('composeEntries serializes an unchanged pack to identical recipe bytes (sta
     type: 'pack', packName: 'P',
     members: [{ sourceId: 'src_F-15', san: 'f15', name: 'F-15', kind: 'aircraft' }],
   }));
+});
+
+test('memberState: content-hash id comparison yields fresh / stale / orphan', () => {
+  // Library newest-first, as listCreations returns it.
+  const creations = [
+    { id: 'new_f15', name: 'F-15', kind: 'aircraft' },
+    { id: 'isle_1', name: 'Isle', kind: 'scenery' },
+  ];
+  // fresh: the member's snapshot id still exists (same content hash)
+  assert.deepEqual(memberState({ sourceId: 'isle_1', name: 'Isle', kind: 'scenery' }, creations),
+    { state: 'fresh', currentId: 'isle_1' });
+  // stale: the id vanished (work was edited -> new content hash) but the same
+  // name+kind creation exists — that successor is the ↺ target
+  assert.deepEqual(memberState({ sourceId: 'old_f15', name: 'F-15', kind: 'aircraft' }, creations),
+    { state: 'stale', currentId: 'new_f15' });
+  // name matches but kind differs -> NOT a successor
+  assert.deepEqual(memberState({ sourceId: 'old_x', name: 'Isle', kind: 'aircraft' }, creations),
+    { state: 'orphan', currentId: null });
+  // orphan: deleted work
+  assert.deepEqual(memberState({ sourceId: 'gone', name: 'Zero', kind: 'aircraft' }, creations),
+    { state: 'orphan', currentId: null });
+});
+
+test('refreshPlan drives the bulk-↺ summary (stale targets + counts)', () => {
+  const creations = [
+    { id: 'new_f15', name: 'F-15', kind: 'aircraft' },
+    { id: 'isle_1', name: 'Isle', kind: 'scenery' },
+  ];
+  const members = [
+    { sourceId: 'old_f15', name: 'F-15', kind: 'aircraft' }, // stale
+    { sourceId: 'isle_1', name: 'Isle', kind: 'scenery' },   // fresh
+    { sourceId: 'gone', name: 'Zero', kind: 'aircraft' },    // orphan
+  ];
+  const plan = refreshPlan(members, creations);
+  assert.deepEqual(plan.stale, [{ index: 0, name: 'F-15', currentId: 'new_f15' }]);
+  assert.deepEqual(plan.orphans, ['Zero']);
+  assert.equal(plan.fresh, 1);
 });
 
 test('fmtBytes / summarize', () => {

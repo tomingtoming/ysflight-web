@@ -62,6 +62,40 @@ export function namespaceSnapshot(rawFiles, memberSan) {
   });
 }
 
+// --- freshness ---------------------------------------------------------------------
+
+// Creations are content-addressed records (id = content hash of the payload),
+// so member freshness is a pure hash/id comparison against the library:
+//   fresh  — a record with the member's sourceId still exists: the snapshot IS
+//            the library's current bytes (same hash, nothing to refresh).
+//   stale  — no record with that id, but a creation of the same name+kind
+//            exists: editing a work replaces its record under a NEW id
+//            (saveOrReplace), so that creation is the member's edited
+//            successor.  currentId is the ↺ target; the library list is
+//            newest-first, so the newest name match wins.
+//   orphan — neither: the source work was deleted; only the snapshot remains.
+// `creations` is the studio's library list ([{id, name, kind}], newest first).
+export function memberState(member, creations) {
+  if (creations.some((c) => c.id === member.sourceId)) return { state: 'fresh', currentId: member.sourceId };
+  const cur = creations.find((c) => c.kind === member.kind && (c.name || c.id) === member.name);
+  if (cur) return { state: 'stale', currentId: cur.id };
+  return { state: 'orphan', currentId: null };
+}
+
+// The bulk-↺ plan: which members are outdated (with their refresh targets) and
+// the counts the confirmation summary shows before anything is touched.
+export function refreshPlan(members, creations) {
+  const stale = [], orphans = [];
+  let fresh = 0;
+  members.forEach((m, index) => {
+    const st = memberState(m, creations);
+    if (st.state === 'stale') stale.push({ index, name: m.name, currentId: st.currentId });
+    else if (st.state === 'orphan') orphans.push(m.name);
+    else fresh++;
+  });
+  return { stale, orphans, fresh };
+}
+
 // --- recipe -----------------------------------------------------------------------
 
 // The pack recipe object embedded as workbench.json.  Field order and the

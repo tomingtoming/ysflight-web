@@ -16,7 +16,7 @@
 
 import { studioChrome, LANG, el, row, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, saveOrReplace, listCreations, loadCreation } from './studio-shared.js';
 import { RECIPE_FILE, SCENERY_START } from './workbench.js';
-import { sanitize, uniqueSan, namespaceSnapshot, composeEntries } from './studio-pack-core.js';
+import { sanitize, uniqueSan, namespaceSnapshot, composeEntries, memberState, refreshPlan } from './studio-pack-core.js';
 import * as opfs from './opfs-store.js';
 import { zipSync } from './vendor/fflate.js';
 
@@ -39,6 +39,11 @@ const S = ({
     remove: '−', removeTitle: '収録から外す',
     refresh: '↺', refreshTitle: '元の作品の最新版に更新する（収録は追加時点で固定です）',
     refreshed: (n) => '✓ ' + n + ' を最新版に更新しました',
+    staleBadge: '↺ 更新あり',
+    staleTitle: 'ライブラリの現行版と内容が異なります（content-hash不一致）。↺で最新版に更新できます',
+    refreshAllBtn: (n) => '↺ 全部最新化（' + n + ' 件）',
+    refreshAllConfirm: (n, names) => n + ' 件を最新版に更新します（収録は更新時点で再固定されます）:\n・' + names.join('\n・'),
+    refreshAllDone: (n) => '✓ ' + n + ' 件を最新版に更新しました',
     snapshotNote: '追加時点の内容で固定（↺で最新版に更新できます）',
     orphanNote: '元の作品は削除済み — このパック内のスナップショットだけが残っています',
     kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
@@ -77,6 +82,11 @@ const S = ({
     remove: '−', removeTitle: 'Remove from the pack',
     refresh: '↺', refreshTitle: 'Refresh to the source work’s latest version (members are frozen at add time)',
     refreshed: (n) => '✓ Refreshed ' + n + ' to its latest version',
+    staleBadge: '↺ update',
+    staleTitle: 'Differs from the library’s current version (content-hash mismatch). ↺ refreshes it',
+    refreshAllBtn: (n) => '↺ Refresh all (' + n + ')',
+    refreshAllConfirm: (n, names) => 'Refresh ' + n + ' member(s) to their latest versions (re-frozen as of now):\n· ' + names.join('\n· '),
+    refreshAllDone: (n) => '✓ Refreshed ' + n + ' member(s)',
     snapshotNote: 'Frozen as of when it was added (↺ refreshes to latest)',
     orphanNote: 'The source work was deleted — only this pack’s snapshot remains',
     kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
@@ -130,7 +140,7 @@ async function snapshotFromPack(packRec, memberSan) {
 
 // --- page state -------------------------------------------------------------------
 
-let members = [];   // [{sourceId, san, name, kind, files:[{path,bytes}], orphan}]
+let members = [];   // [{sourceId, san, name, kind, files:[{path,bytes}]}]
 let editingId = null;
 let savedName = null; // last saved pack name (enables export)
 let savedZip = null;  // last composed zip bytes (export without recompose)
@@ -161,7 +171,7 @@ async function addMember(c) {
   const san = memberSan(c.name || c.id);
   members.push({
     sourceId: c.id, san, name: c.name || c.id, kind: c.kind,
-    files: await snapshotFromRecord(rec, san), orphan: false,
+    files: await snapshotFromRecord(rec, san),
   });
 }
 
@@ -328,6 +338,17 @@ renderAvail = () => {
   renderAvailRows();
 };
 
+// Re-snapshot one member from the library record `currentId` (its source, or
+// its edited successor when the source id was replaced) and re-bind sourceId
+// so the saved recipe points at what the member now holds.
+async function refreshMember(m, currentId) {
+  const rec = await opfs.getRecord(currentId);
+  if (!rec) return false;
+  m.files = await snapshotFromRecord(rec, m.san);
+  m.sourceId = currentId;
+  return true;
+}
+
 renderMembers = () => {
   memberCol.innerHTML = '';
   memberCol.appendChild(el('h2', null, S.membersTitle));
@@ -336,18 +357,44 @@ renderMembers = () => {
     memberCol.appendChild(el('div', 'msg', S.membersEmpty));
     return;
   }
+  // Bulk ↺: shown only when the hash diff found outdated members; the confirm
+  // lists exactly what would be re-frozen before anything happens.
+  const plan = refreshPlan(members, creationsCache);
+  if (plan.stale.length > 0) {
+    const rb = el('button', 'accent', S.refreshAllBtn(plan.stale.length));
+    rb.style.cssText += ';font-size:12px;margin-bottom:8px';
+    rb.addEventListener('click', async () => {
+      if (!self.confirm(S.refreshAllConfirm(plan.stale.length, plan.stale.map((s) => s.name)))) return;
+      rb.disabled = true;
+      msg.textContent = S.working;
+      try {
+        let done = 0;
+        for (const s of plan.stale) if (await refreshMember(members[s.index], s.currentId)) done++;
+        msg.textContent = S.refreshAllDone(done);
+        renderMembers();
+      } catch (e) {
+        msg.textContent = S.errorPrefix + ((e && e.message) || e);
+        renderMembers();
+      }
+    });
+    memberCol.appendChild(rb);
+  }
   members.forEach((m, i) => {
-    const r = itemRow(S.kindGlyph[m.kind] || '📦', m.name, m.orphan ? S.orphanNote : (m.files.length + 'f'));
-    if (!m.orphan) {
+    const st = memberState(m, creationsCache);
+    const r = itemRow(S.kindGlyph[m.kind] || '📦', m.name, st.state === 'orphan' ? S.orphanNote : (m.files.length + 'f'));
+    if (st.state === 'stale') {
+      const badge = el('span', null, S.staleBadge);
+      badge.title = S.staleTitle;
+      badge.style.cssText = 'flex:none;color:#e3b341;font-size:10.5px;border:1px solid #5c4a1a;border-radius:5px;padding:1px 6px';
+      r.appendChild(badge);
+    }
+    if (st.state !== 'orphan') {
       const rf = smallBtn(r, S.refresh, S.refreshTitle, false);
       rf.addEventListener('click', async () => {
         rf.disabled = true;
         msg.textContent = S.working;
         try {
-          const rec = await opfs.getRecord(m.sourceId);
-          if (!rec) { m.orphan = true; renderMembers(); return; }
-          m.files = await snapshotFromRecord(rec, m.san);
-          msg.textContent = S.refreshed(m.name);
+          if (await refreshMember(m, st.currentId)) msg.textContent = S.refreshed(m.name);
           renderMembers();
         } catch (e) {
           msg.textContent = S.errorPrefix + ((e && e.message) || e);
@@ -441,8 +488,9 @@ async function main2() {
         members = [];
         for (const m of c.recipe.members || []) {
           const files = await snapshotFromPack(packRec, m.san);
-          const srcAlive = m.sourceId ? !!(await opfs.getRecord(m.sourceId)) : false;
-          members.push({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind, files, orphan: !srcAlive });
+          // fresh/stale/orphan is derived at render time (memberState vs. the
+          // library snapshot), so nothing else is loaded here.
+          members.push({ sourceId: m.sourceId, san: m.san, name: m.name, kind: m.kind, files });
         }
         editingId = editId;
         nameIn.value = c.recipe.packName || c.name || '';
