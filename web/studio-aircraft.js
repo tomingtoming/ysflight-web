@@ -18,6 +18,7 @@ import {
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf } from './dnm-gltf.js';
+import { mountPartPaint } from './studio-paint.js';
 
 const S = ({
   ja: {
@@ -180,11 +181,13 @@ let byName = new Map();  // basename -> entry, rebuilt by rebuildSlots
 let preview = null;
 let previewedBytes = null; // the visual bytes currently mounted — paint updates
                            // live via setPaint, so only a different FILE remounts
+let partPaint = null;      // mountPartPaint handle; torn down on visual slot change
 
 // DOM handles filled during boot.
 let previewWrap, surfaceHint, animBar;
 let editBadge, slotsBox, acMsg, btnRow;
 let paintPanel, paintMsg;
+let partPaintPanel; // container for studio-paint.js UI
 
 // --- the big preview surface (main) ------------------------------------------------
 
@@ -209,8 +212,10 @@ const visualEntry = () => {
 };
 
 function disposePreview() {
+  if (partPaint) { partPaint.dispose(); partPaint = null; }
   if (preview) { preview.dispose(); preview = null; }
   previewedBytes = null;
+  if (partPaintPanel) partPaintPanel.innerHTML = '';
 }
 
 function refreshPreview() {
@@ -233,6 +238,20 @@ function refreshPreview() {
     acMsg.textContent = S.errorPrefix + ((e && e.message) || e);
     return;
   }
+  // Mount the part-paint panel (requires scene/camera/built from the extended mountPreview).
+  if (partPaintPanel && preview.built) {
+    partPaint = mountPartPaint({
+      container: partPaintPanel,
+      previewHandle: preview,
+      getBytes: () => ent.bytes,
+      setBytes: (b) => {
+        ent.bytes = b;
+        previewedBytes = b;
+      },
+      lang: LANG,
+    });
+  }
+
   // Animation sliders for whatever movable parts this model has.
   const labels = { gear: S.animGear, flap: S.animFlap, vgw: S.animVgw, elevator: S.animElevator, aileron: S.animAileron, rudder: S.animRudder };
   let any = false;
@@ -516,6 +535,15 @@ function buildPaintSection(rail) {
   rail.appendChild(paintMsg);
 }
 
+// --- part paint section (new) --------------------------------------------------------
+
+function buildPartPaintSection(rail) {
+  partPaintPanel = document.createElement('div');
+  partPaintPanel.style.cssText = 'padding:0';
+  rail.appendChild(partPaintPanel);
+  // Content is populated by mountPartPaint after preview is ready.
+}
+
 // --- dat wizard section ---------------------------------------------------------------
 
 async function buildDatSection(rail) {
@@ -664,6 +692,7 @@ async function main() {
   buildAssembleSection(chrome.rail);
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
+  buildPartPaintSection(chrome.rail);
   await buildDatSection(chrome.rail);
   buildBlenderSection(chrome.rail);
 
