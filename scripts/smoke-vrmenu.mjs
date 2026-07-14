@@ -56,25 +56,39 @@ page.on('pageerror', (e) => fatal.push('[pageerror] ' + e.message));
 // Just wait for the Module to initialise -- do NOT click away dialogs or
 // wait for ysfwInFlight (the whole point is testing the menu, not the flight).
 await page.goto(baseUrl);
-await page.waitForFunction(() => !!globalThis.Module, null, { timeout: 90000 });
-// Give the engine a moment to reach the main menu draw loop.
-await page.waitForTimeout(2000);
+// `globalThis.Module` exists long before the wasm engine finishes booting (it
+// is the plain config object the HTML shell defines up front), so waiting for
+// it plus a fixed sleep raced the boot on CI ("VR menu test hooks missing").
+// Wait for the actual VR test hooks instead: Module.ysfwVr and its helpers
+// are installed by YsfwInstallWebXR during engine startup, right before the
+// main-menu loop begins.
+await page.waitForFunction(() => {
+  const M = globalThis.Module;
+  const vr = M && M.ysfwVr;
+  return !!(vr && vr.forceMultiview && vr.readMenuData && vr.readMenuStats);
+}, null, { timeout: 120000 });
+// Let the engine settle into the main-menu draw loop.
+await page.waitForTimeout(1000);
 
 await page.screenshot({ path: outDir + '/vrmenu-test-0-menu.png' });
 console.log('wrote ' + outDir + '/vrmenu-test-0-menu.png');
 
 // ---- Check VR test hooks are present ---------------------------------------
-const hooksOk = await page.evaluate(() => {
+// The vr.* hooks are guaranteed by the boot wait above; this additionally
+// verifies the wasm export is attached to Module (the direct HEAPF32 reads
+// below depend on it), and names the missing hook on failure.
+const missingHook = await page.evaluate(() => {
   const M = globalThis.Module;
   const vr = M && M.ysfwVr;
-  return !!(vr &&
-    vr.forceMultiview &&
-    vr.readMenuData &&
-    vr.readMenuStats &&
-    typeof M._YsfwVrMenuDataPointer === 'function');
+  if (!vr) return 'Module.ysfwVr';
+  for (const k of ['forceMultiview', 'readMenuData', 'readMenuStats']) {
+    if (!vr[k]) return 'vr.' + k;
+  }
+  if (typeof M._YsfwVrMenuDataPointer !== 'function') return 'Module._YsfwVrMenuDataPointer';
+  return null;
 });
-if (!hooksOk) {
-  console.error('FAILED: VR menu test hooks missing');
+if (missingHook) {
+  console.error('FAILED: VR menu test hook missing: ' + missingHook);
   await browser.close();
   process.exit(1);
 }
@@ -127,7 +141,7 @@ check('menuData[2] (menuTex) > 0 (valid GL texture id)', menuData[2] > 0, 'tex='
 // few hundred ms to render at least one frame.
 let menuDrawn = false;
 const pollT0 = Date.now();
-while (Date.now() - pollT0 < 5000) {
+while (Date.now() - pollT0 < 15000) {
   // Direct HEAPF32 read -- bypass the JS helper so we see the flag BEFORE
   // updateMenuLayer clears it this same JS task.
   const drawn = await page.evaluate(() => {
