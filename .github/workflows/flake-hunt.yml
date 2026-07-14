@@ -11,6 +11,11 @@ name: Flake hunt
 #
 # The run fails (red) if ANY iteration fails, so a surviving flake is visible
 # at a glance; the pass/fail tally lands in the run's step summary either way.
+#
+# Also triggers on push to flake-hunt/** branches (with the default inputs):
+# workflow_dispatch only works once the file reaches the default branch, so an
+# A-B on a fix branch is done by pushing the before/after states to e.g.
+# flake-hunt/baseline and flake-hunt/after-fix.
 
 on:
   workflow_dispatch:
@@ -23,6 +28,8 @@ on:
         description: 'How many times to run it'
         required: true
         default: '20'
+  push:
+    branches: ['flake-hunt/**']
 
 permissions:
   contents: read
@@ -49,8 +56,8 @@ jobs:
 
       - name: Loop the smoke
         run: |
-          n='${{ github.event.inputs.iterations }}'
-          smoke='${{ github.event.inputs.smoke }}'
+          n='${{ github.event.inputs.iterations || 20 }}'
+          smoke='${{ github.event.inputs.smoke || 'smoke-mp-pack.sh' }}'
           pass=0; fail=0; failed_iters=""
           for i in $(seq 1 "$n"); do
             echo "::group::iteration $i/$n"
