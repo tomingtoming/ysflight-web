@@ -432,7 +432,9 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
       ch.send(JSON.stringify({ op: 'want', id: current }));
     };
 
+    let gotAnyMessage = false; // host traffic seen on the channel (see armRejoin)
     async function onChMessage(data) {
+      gotAnyMessage = true;
       bumpGuard(); // any traffic on the channel is transfer progress
       if (typeof data === 'string') {
         let m; try { m = JSON.parse(data); } catch (e) { return; }
@@ -479,15 +481,27 @@ export function joinPackHost(gameRoom, wantedIds, opts) {
     // host never even seeing the peer's request connection while a LATER
     // connection to the same host works fine), don't burn the whole 30s budget:
     // tear the pc down and re-join the room for a fresh offer.
+    //
+    // The stand-down condition is "open AND we heard something", not just
+    // "open": a 2026-07-14 flake-hunt capture shows a channel DELIVERED AS
+    // OPEN on the joiner whose sends never reach the host ('want' sent, host
+    // never logs a single serve) — the same SCTP race in a deafer costume.
+    // readyState alone therefore proves nothing; only host traffic does.  A
+    // rejoin while a transfer request is outstanding requeues it so the fresh
+    // channel's requestNext() re-sends the 'want' (otherwise `current` stays
+    // occupied and the new channel sits idle forever).
     let rejoinTimer = null, rejoins = 0;
     const armRejoin = () => {
       if (rejoinTimer) clearTimeout(rejoinTimer);
       rejoinTimer = setTimeout(() => {
-        if (done || (ch && ch.readyState === 'open') || rejoins >= 2) return;
+        if (done || (ch && ch.readyState === 'open' && gotAnyMessage) || rejoins >= 2) return;
         rejoins++;
-        log('no datachannel after ' + REJOIN_MS + 'ms — rejoining (attempt ' + rejoins + ')');
+        log('no host traffic after ' + REJOIN_MS + 'ms — rejoining (attempt ' + rejoins + ')');
         try { if (pc) pc.close(); } catch (e) {}
         pc = null; ch = null; remoteSet = false; iceQ.length = 0;
+        if (current !== null) { want.unshift(current); current = null; }
+        chunks = []; received = 0;
+        gotAnyMessage = false; // the fresh channel must prove itself too
         sig({ t: 'join', room });
         armRejoin();
       }, REJOIN_MS);
