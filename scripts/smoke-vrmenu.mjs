@@ -46,11 +46,18 @@ const browser = await chromium.launch({
   args: ['--autoplay-policy=no-user-gesture-required', '--use-angle=gl']
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+// Ring buffer of recent console output for boot-failure diagnostics: when the
+// engine never boots there is no assertion to point at the cause, so the boot
+// wait's catch block dumps this instead.
+const consoleTail = [];
 page.on('console', (m) => {
   const t = m.text();
+  consoleTail.push(t.length > 300 ? t.slice(0, 300) + '...' : t);
+  if (consoleTail.length > 60) consoleTail.shift();
   if (FATAL_PATTERNS.some((re) => re.test(t))) fatal.push('[console] ' + t);
 });
 page.on('pageerror', (e) => fatal.push('[pageerror] ' + e.message));
+page.on('requestfailed', (r) => fatal.push('[requestfailed] ' + r.url() + ' -- ' + (r.failure() ? r.failure().errorText : '?')));
 
 // ---- Boot to the main menu (NOT a free flight) ----------------------------
 // Just wait for the Module to initialise -- do NOT click away dialogs or
@@ -62,11 +69,42 @@ await page.goto(baseUrl);
 // Wait for the actual VR test hooks instead: Module.ysfwVr and its helpers
 // are installed by YsfwInstallWebXR during engine startup, right before the
 // main-menu loop begins.
-await page.waitForFunction(() => {
-  const M = globalThis.Module;
-  const vr = M && M.ysfwVr;
-  return !!(vr && vr.forceMultiview && vr.readMenuData && vr.readMenuStats);
-}, null, { timeout: 120000 });
+try {
+  await page.waitForFunction(() => {
+    const M = globalThis.Module;
+    const vr = M && M.ysfwVr;
+    return !!(vr && vr.forceMultiview && vr.readMenuData && vr.readMenuStats);
+  }, null, { timeout: 120000 });
+} catch (e) {
+  // Boot never reached the VR-hook install (FsAfterOpenWindow).  Dump enough
+  // state to diagnose from the CI log alone: page errors / failed requests,
+  // the console tail, and a probe of how far the shell got.
+  console.error('FAILED: engine boot did not reach the VR hooks in 120s');
+  const probe = await page.evaluate(() => {
+    const M = globalThis.Module;
+    return {
+      readyState: document.readyState,
+      engineScripts: Array.from(document.querySelectorAll('script[src]')).map((s) => s.src.split('/').pop()),
+      hasCanvas: !!document.getElementById('canvas'),
+      overlayShown: (() => { const o = document.getElementById('overlay'); return o ? getComputedStyle(o).display : 'no-overlay'; })(),
+      moduleKeys: M ? Object.keys(M).slice(0, 30) : null,
+      calledRun: !!(M && M.calledRun),
+      ysfwVr: !!(M && M.ysfwVr),
+      inFlight: globalThis.ysfwInFlight,
+    };
+  }).catch((err) => 'probe failed: ' + err.message);
+  console.error('probe: ' + JSON.stringify(probe, null, 1));
+  if (fatal.length) {
+    console.error('fatal events:');
+    for (const f of fatal) console.error('  ' + f);
+  }
+  console.error('console tail (' + consoleTail.length + ' lines):');
+  for (const l of consoleTail) console.error('  | ' + l);
+  await page.screenshot({ path: outDir + '/vrmenu-timeout.png' });
+  console.error('wrote ' + outDir + '/vrmenu-timeout.png');
+  await browser.close();
+  process.exit(1);
+}
 // Let the engine settle into the main-menu draw loop.
 await page.waitForTimeout(1000);
 

@@ -93,3 +93,14 @@ jobs:
           node "${{ github.workspace }}/scripts/serve.mjs" 8923 "${{ github.workspace }}/dist" &
           sleep 2
           node scripts/smoke-vrmenu.mjs "http://localhost:8923/index.html" "."
+
+      # The vrmenu smoke screenshots (menu / VR / timeout-diagnostic) are the
+      # fastest way to see what the headless page actually showed when the
+      # smoke fails -- upload them only in that case.
+      - name: Upload VR menu smoke screenshots (on failure)
+        if: github.event_name == 'pull_request' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vrmenu-smoke-screenshots
+          path: vrmenu-*.png
+          if-no-files-found: ignore
