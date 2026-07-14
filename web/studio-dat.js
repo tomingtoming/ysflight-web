@@ -26,6 +26,22 @@ const s2b = (s) => {
   return out;
 };
 
+// --- splitUnit ------------------------------------------------------------------
+//
+// Stock .dat values carry unit suffixes the engine parses (FsGetForce/FsGetSpeed/
+// FsGetAngle...): '2.2MACH', '13.6t', '0.35rad', '100%', '-12.5deg'.  A bare
+// number falls back to the DEFAULT unit (N, m/s, rad...), so dropping the
+// suffix silently rescales the value — 13.6t would become 13.6 NEWTONS.
+// Split a value into { num, suffix } so form edits can preserve the suffix;
+// num === null means the value doesn't start with a number (fallback to raw text).
+// Invariant for parseable values: num + suffix === valueStr.trim().
+//
+export function splitUnit(valueStr) {
+  const m = /^(-?[0-9]*\.?[0-9]+)(.*)$/.exec(String(valueStr).trim());
+  if (!m) return { num: null, suffix: '' };
+  return { num: m[1], suffix: m[2] };
+}
+
 // --- parseDat -------------------------------------------------------------------
 //
 // Returns:
@@ -405,35 +421,69 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       inputEl = sel;
 
     } else if (schema.type === 'vec3' || schema.type === 'att3') {
+      // Each token keeps its OWN unit suffix ('0.0m 1.4m 4.50m' — engine
+      // defaults change if the suffix is dropped), split per token.
       const wrap3 = el('div');
-      wrap3.style.cssText = 'flex:1;display:flex;gap:4px;min-width:0';
+      wrap3.style.cssText = 'flex:1;display:flex;gap:4px;align-items:center;min-width:0';
       const tokens = currentVal.split(/\s+/).filter(Boolean);
+      const parts = [0, 1, 2].map((i) => splitUnit(tokens[i] || ''));
+      const suffixes = parts.map((p) => (p.num !== null ? p.suffix : ''));
       const inputs3 = [0, 1, 2].map((i) => {
         const inp = document.createElement('input');
         inp.type = 'number';
         inp.step = 'any';
-        inp.value = tokens[i] || '';
+        inp.value = parts[i].num !== null ? parts[i].num : '';
         inp.style.cssText = 'flex:1;min-width:0;padding:5px 6px;border:1px solid #2a3647;border-radius:6px;' +
           'background:#0b1017;color:#e6edf3;font-size:12px';
         inp.addEventListener('change', () => {
-          onChange(inputs3.map((x) => x.value || '0').join(' '));
+          onChange(inputs3.map((x, j) => (x.value || '0') + (suffixes[j] || '')).join(' '));
         });
         wrap3.appendChild(inp);
         return inp;
       });
+      // One compact label for the (typically uniform) suffix.
+      const sfx = suffixes.find((s) => s) || '';
+      if (sfx) {
+        const lab = el('span', null, sfx);
+        lab.style.cssText = 'flex:none;color:#8fa3bb;font-size:11px;font-family:monospace';
+        wrap3.appendChild(lab);
+      }
       inputEl = wrap3;
 
     } else if (schema.type === 'scalar' || schema.type === 'force' || schema.type === 'weight' ||
                schema.type === 'speed' || schema.type === 'angle' || schema.type === 'length' ||
                schema.type === 'area') {
-      const inp = document.createElement('input');
-      inp.type = 'number';
-      inp.step = 'any';
-      inp.value = currentVal;
-      inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
-        'background:#0b1017;color:#e6edf3;font-size:12px';
-      inp.addEventListener('change', () => { onChange(inp.value); });
-      inputEl = inp;
+      // Values carry unit suffixes ('13.6t', '2.2MACH', '100%') that MUST be
+      // preserved: a bare number is read in the engine's default unit and
+      // silently rescales the value.  Split off the suffix, edit the number,
+      // write back number+suffix.  Unparseable values fall back to raw text.
+      const { num, suffix } = splitUnit(currentVal);
+      if (currentVal !== '' && num === null) {
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.value = currentVal;
+        inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
+          'background:#0b1017;color:#e6edf3;font-size:12px';
+        inp.addEventListener('change', () => { onChange(inp.value); });
+        inputEl = inp;
+      } else {
+        const wrapN = el('div');
+        wrapN.style.cssText = 'flex:1;display:flex;gap:4px;align-items:center;min-width:0';
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        inp.step = 'any';
+        inp.value = num !== null ? num : '';
+        inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
+          'background:#0b1017;color:#e6edf3;font-size:12px';
+        inp.addEventListener('change', () => { onChange(inp.value + suffix); });
+        wrapN.appendChild(inp);
+        if (suffix) {
+          const lab = el('span', null, suffix);
+          lab.style.cssText = 'flex:none;color:#8fa3bb;font-size:11px;font-family:monospace';
+          wrapN.appendChild(lab);
+        }
+        inputEl = wrapN;
+      }
 
     } else if (schema.type === 'int') {
       const inp = document.createElement('input');

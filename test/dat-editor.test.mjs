@@ -9,7 +9,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseDat, serializeDat, editDatKey } from '../web/studio-dat.js';
+import { parseDat, serializeDat, editDatKey, splitUnit } from '../web/studio-dat.js';
 import { DAT_SCHEMA } from '../web/dat-schema.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -218,4 +218,54 @@ test('unknown keyword: multiple unknown keywords all survive a round-trip', () =
   assert.match(outText, /^NEWKEY1 value1$/m);
   assert.match(outText, /^NEWKEY2 value2$/m);
   assert.match(outText, /^NEWKEY3 value3 with spaces$/m);
+});
+
+// ---- splitUnit: unit-suffix preservation for numeric form fields ---------------------
+
+test('splitUnit: splits number and unit suffix, round-trips exactly', () => {
+  assert.deepEqual(splitUnit('2.2MACH'), { num: '2.2', suffix: 'MACH' });
+  assert.deepEqual(splitUnit('13.6t'), { num: '13.6', suffix: 't' });
+  assert.deepEqual(splitUnit('0.35rad'), { num: '0.35', suffix: 'rad' });
+  assert.deepEqual(splitUnit('100%'), { num: '100', suffix: '%' });
+  assert.deepEqual(splitUnit('-12.5deg'), { num: '-12.5', suffix: 'deg' });
+  assert.deepEqual(splitUnit('58m^2'), { num: '58', suffix: 'm^2' });
+  assert.deepEqual(splitUnit('40kt'), { num: '40', suffix: 'kt' });
+  assert.deepEqual(splitUnit('999m/s'), { num: '999', suffix: 'm/s' });
+  assert.deepEqual(splitUnit('8.0'), { num: '8.0', suffix: '' });
+  assert.deepEqual(splitUnit('.5t'), { num: '.5', suffix: 't' });
+
+  // Round-trip invariant: num + suffix reconstructs the original (trimmed) value.
+  for (const v of ['2.2MACH', '13.6t', '0.35rad', '100%', '-12.5deg', '58m^2', '6.5kg', '2000ft', '8.0', '.5t']) {
+    const { num, suffix } = splitUnit(v);
+    assert.equal(num + suffix, v, v + ': num+suffix must reconstruct the original');
+  }
+});
+
+test('splitUnit: unparseable values return num=null (raw-text fallback)', () => {
+  assert.equal(splitUnit('').num, null);
+  assert.equal(splitUnit('TRUE').num, null);
+  assert.equal(splitUnit('"F-15C_EAGLE"').num, null);
+  assert.equal(splitUnit('FIGHTER').num, null);
+});
+
+test('splitUnit: every numeric value in stock f15.dat splits and round-trips', () => {
+  // Regression net for the editor's numeric fields: each single-arg numeric
+  // keyword in a real stock file must be splittable so the form shows the
+  // number and preserves the suffix on write-back.
+  const bytes = readFileSync(join(AIRCRAFT_DIR, 'f15.dat'));
+  const { parsed } = parseDat(bytes);
+  const NUMERIC = new Set(['force', 'weight', 'speed', 'angle', 'length', 'area', 'scalar']);
+  let checked = 0;
+  for (const schema of DAT_SCHEMA) {
+    if (!NUMERIC.has(schema.type)) continue;
+    for (const entry of parsed.get(schema.kw) || []) {
+      const val = entry.value.split(/\s+|#/)[0]; // first token, comments off
+      if (!val) continue;
+      const { num, suffix } = splitUnit(val);
+      assert.notEqual(num, null, schema.kw + ' "' + val + '" must split');
+      assert.equal(num + suffix, val, schema.kw + ' "' + val + '" must round-trip');
+      checked++;
+    }
+  }
+  assert.ok(checked >= 20, 'expected many numeric values in f15.dat; checked ' + checked);
 });
