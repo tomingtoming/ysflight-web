@@ -497,6 +497,8 @@ export function mountPreview(container, bytes) {
     setMovable: (group, t) => setMovable(group, t),
     setPaint: (mapping) => applyPaint(built.meshesByLabel, mapping),
     setAutoSpin: (on) => { spin = on; spinBtn.style.opacity = on ? '.9' : '.4'; },
+    // Exposed for studio-paint.js face-picking (scene/camera/built/parsed).
+    scene, camera: cam, renderer, built, parsed,
     // Cockpit eye point in YS aircraft coords ({x,y,z} = the COCKPITP value),
     // or null to clear.  Marker shows whenever set (except while inside).
     // p may also carry an EXCAMERA view attitude {h,p,b} in RADIANS (YsAtt3

@@ -19,6 +19,7 @@ import {
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf, estimateCockpit } from './dnm-gltf.js';
+import { mountPartPaint } from './studio-paint.js';
 import { mountViewpointTools } from './viewpoint-tools.js';
 import { mountDatEditor } from './studio-dat.js';
 import { buildMovablesSection } from './studio-movables.js';
@@ -243,6 +244,7 @@ let byName = new Map();  // basename -> entry, rebuilt by rebuildSlots
 let preview = null;
 let previewedBytes = null; // the visual bytes currently mounted — paint updates
                            // live via setPaint, so only a different FILE remounts
+let partPaint = null;      // mountPartPaint handle; torn down on visual slot change
 let movablesEditor = null; // handle returned by buildMovablesSection
 
 // Cockpit eye point (YS aircraft coords = the .dat COCKPITP value) and where
@@ -263,6 +265,7 @@ let viewIx = -1;       // 👀 cycle position: -1 orbit, 0 main, 1.. = excams[i-
 let previewWrap, surfaceHint, animBar;
 let editBadge, slotsBox, acMsg, btnRow;
 let paintPanel, paintMsg;
+let partPaintPanel; // container for studio-paint.js UI
 let ckInputs = null, ckSrcNote = null;
 let exListBox = null, exInputRefs = [], vpMsg = null, cycleBtn = null, captureBtn = null, mainRadio = null;
 let datEditorWrap = null;    // container div for the .dat editor panel
@@ -291,9 +294,11 @@ const visualEntry = () => {
 };
 
 function disposePreview() {
+  if (partPaint) { partPaint.dispose(); partPaint = null; }
   if (vpTools) { vpTools.dispose(); vpTools = null; }
   if (preview) { preview.dispose(); preview = null; }
   previewedBytes = null;
+  if (partPaintPanel) partPaintPanel.innerHTML = '';
   viewIx = -1;
 }
 
@@ -319,6 +324,20 @@ function refreshPreview() {
     acMsg.textContent = S.errorPrefix + ((e && e.message) || e);
     return;
   }
+  // Mount the part-paint panel (requires scene/camera/built from the extended mountPreview).
+  if (partPaintPanel && preview.built) {
+    partPaint = mountPartPaint({
+      container: partPaintPanel,
+      previewHandle: preview,
+      getBytes: () => ent.bytes,
+      setBytes: (b) => {
+        ent.bytes = b;
+        previewedBytes = b;
+      },
+      lang: LANG,
+    });
+  }
+
   // Animation sliders for whatever movable parts this model has.
   const labels = { gear: S.animGear, flap: S.animFlap, vgw: S.animVgw, elevator: S.animElevator, aileron: S.animAileron, rudder: S.animRudder };
   let any = false;
@@ -667,6 +686,15 @@ function buildPaintSection(rail) {
   rail.appendChild(paintPanel);
   paintMsg = el('div', 'msg');
   rail.appendChild(paintMsg);
+}
+
+// --- part paint section (new) --------------------------------------------------------
+
+function buildPartPaintSection(rail) {
+  partPaintPanel = document.createElement('div');
+  partPaintPanel.style.cssText = 'padding:0';
+  rail.appendChild(partPaintPanel);
+  // Content is populated by mountPartPaint after preview is ready.
 }
 
 // --- viewpoints section -----------------------------------------------------------
@@ -1158,6 +1186,7 @@ async function main() {
   });
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
+  buildPartPaintSection(chrome.rail);
   buildViewpointsSection(chrome.rail);
 
   // Movable-part & light GUI editor.  Mounts into the rail; reads the visual
