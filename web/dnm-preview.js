@@ -266,11 +266,125 @@ export function mountPreview(container, bytes) {
   container.appendChild(renderer.domElement);
   renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;cursor:grab';
 
+  // Ensure container can host absolute-positioned overlays.
+  if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+  // ── Auto-spin toggle ──────────────────────────────────────────────────────
+  // Default OFF — auto-rotation is convenient for showcases but disruptive when
+  // editing.  A small 🔄 button in the bottom-right corner lets users opt in.
+  let spin = false;
+  const spinBtn = document.createElement('button');
+  spinBtn.textContent = '🔄';
+  spinBtn.title = '自動回転 ON/OFF — Auto-spin toggle';
+  spinBtn.style.cssText =
+    'position:absolute;bottom:8px;right:8px;z-index:10;width:28px;height:28px;' +
+    'padding:0;border:none;border-radius:6px;cursor:pointer;font-size:14px;line-height:1;' +
+    'background:rgba(255,255,255,.10);color:#fff;opacity:.4;transition:opacity .15s';
+  spinBtn.addEventListener('mouseenter', () => { spinBtn.style.opacity = spin ? '1' : '.65'; });
+  spinBtn.addEventListener('mouseleave', () => { spinBtn.style.opacity = spin ? '.9' : '.4'; });
+  spinBtn.addEventListener('click', () => { spin = !spin; spinBtn.style.opacity = spin ? '.9' : '.4'; });
+  container.appendChild(spinBtn);
+
+  // ── Navigation gizmo ─────────────────────────────────────────────────────
+  // Blender-style XYZ corner widget rendered via the main renderer's
+  // scissor+viewport API (no second WebGL context).  An OrthographicCamera
+  // mirrors the main camera's orientation; all gizmo materials have
+  // depthTest:false so the widget always draws on top.
+  // Click a sphere → snap to that axis view; click again → flip to opposite.
+  // Drag in the gizmo area → same orbit as the main canvas.
+  //
+  // Coordinate note: root.rotation.y=PI maps YS -Z (nose/south) to Three.js +Z,
+  // so Z+ = 機首 (nose front) and X+ ≈ 右舷 (starboard, considering mirror.scale.x=-1).
+  const GIZ = 80; // CSS pixels (square)
+  const gizScene = new THREE.Scene();
+  // OrthographicCamera: axes sit at unit distance, frustum ±1.6 gives
+  // comfortable padding around the sphere tips.
+  const gizCam = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
+
+  const GIZMO_AXES = [
+    { id: 'x+', dir: [1,0,0],  color: 0xd15a5a, snapYaw: Math.PI * 0.5,  snapPitch: 0,
+      label: 'X', tip: 'X+ / 右舷 (starboard)' },
+    { id: 'x-', dir: [-1,0,0], color: 0x6a2020, snapYaw: -Math.PI * 0.5, snapPitch: 0,
+      label: 'X', tip: 'X− / 左舷 (port)' },
+    { id: 'y+', dir: [0,1,0],  color: 0x50b950, snapYaw: 0,              snapPitch: 1.35,
+      label: 'Y', tip: 'Y+ / 上面 (top)' },
+    { id: 'y-', dir: [0,-1,0], color: 0x1f6a1f, snapYaw: 0,              snapPitch: -1.35,
+      label: 'Y', tip: 'Y− / 底面 (bottom)' },
+    { id: 'z+', dir: [0,0,1],  color: 0x4080e0, snapYaw: 0,              snapPitch: 0,
+      label: 'Z', tip: 'Z+ / 機首 (nose front)' },
+    { id: 'z-', dir: [0,0,-1], color: 0x1a3870, snapYaw: Math.PI,        snapPitch: 0,
+      label: 'Z', tip: 'Z− / 機尾 (rear)' },
+  ];
+
+  const _sphGeo = new THREE.SphereGeometry(0.18, 10, 7);
+  const gizMeshes = []; // collected for raycasting
+
+  for (const a of GIZMO_AXES) {
+    const [dx, dy, dz] = a.dir;
+    if (a.id.endsWith('+')) {
+      // Axis stick from origin stopping just before the sphere centre.
+      const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(dx*.82, dy*.82, dz*.82)];
+      const lg = new THREE.BufferGeometry().setFromPoints(pts);
+      gizScene.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: a.color, depthTest: false })));
+    }
+    const sph = new THREE.Mesh(_sphGeo, new THREE.MeshBasicMaterial({ color: a.color, depthTest: false }));
+    sph.position.set(dx, dy, dz);
+    sph.userData.gizAxis = a;
+    gizScene.add(sph);
+    gizMeshes.push(sph);
+  }
+
+  // 2D canvas overlay renders axis letter labels (avoids font complexity in WebGL).
+  const gizLabel = document.createElement('canvas');
+  gizLabel.width = GIZ; gizLabel.height = GIZ;
+  gizLabel.style.cssText =
+    'position:absolute;top:8px;right:8px;width:' + GIZ + 'px;height:' + GIZ + 'px;pointer-events:none';
+  container.appendChild(gizLabel);
+  const lctx = gizLabel.getContext('2d');
+
+  const gizRaycaster = new THREE.Raycaster();
+  const gizSz = new THREE.Vector2();
+
+  // Sync the gizmo camera to match the current main camera orientation.
+  const updateGizCam = () => {
+    gizCam.position.set(
+      4 * Math.cos(pitch) * Math.sin(yaw),
+      4 * Math.sin(pitch),
+      4 * Math.cos(pitch) * Math.cos(yaw),
+    );
+    gizCam.lookAt(0, 0, 0);
+    gizCam.updateMatrixWorld(); // needed for accurate project() and raycasting
+  };
+
+  const snapToAxis = (axisDef) => {
+    const opp = GIZMO_AXES.find((a) => a.id ===
+      (axisDef.id.endsWith('+') ? axisDef.id.replace('+', '-') : axisDef.id.replace('-', '+')));
+    const r = axisSnapAngles(yaw, pitch, axisDef.snapYaw, axisDef.snapPitch,
+      opp ? opp.snapYaw : axisDef.snapYaw + Math.PI,
+      opp ? opp.snapPitch : -axisDef.snapPitch);
+    yaw = r.yaw; pitch = r.pitch;
+  };
+
+  const drawGizLabels = () => {
+    lctx.clearRect(0, 0, GIZ, GIZ);
+    lctx.font = 'bold 11px system-ui,sans-serif';
+    lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
+    for (const a of GIZMO_AXES) {
+      if (!a.id.endsWith('+')) continue; // only positive axes labelled; negatives identified by colour
+      const v = new THREE.Vector3(...a.dir).project(gizCam);
+      if (v.z > 1) continue; // behind camera — skip
+      lctx.fillStyle = '#' + a.color.toString(16).padStart(6, '0');
+      lctx.fillText(a.label, (v.x + 1) / 2 * GIZ, (1 - v.y) / 2 * GIZ - 13);
+    }
+  };
+
+  // Orbit state.
+  let yaw = Math.PI * 0.15, pitch = 0.35, dist = radius * 2.4, dragging = false, lx = 0, ly = 0;
+  let downX = 0, downY = 0, gizPending = false;
   // Orbit state — plus the first-person cockpit-view state.  In cockpit mode
   // the camera sits AT the marker looking toward the nose, with a simple
   // yaw/pitch look-around on drag (no orbit); meshes are already DoubleSide,
   // so the hull stays visible from inside.
-  let yaw = Math.PI * 0.15, pitch = 0.35, dist = radius * 2.4, dragging = false, lx = 0, ly = 0;
   let ckPos = null;                          // {x,y,z} YS coords, or null
   let ckMode = false, ckYaw = 0, ckPitch = 0; // look-around angles (0 = nose)
   const eye = new THREE.Vector3(), look = new THREE.Vector3();
@@ -312,7 +426,12 @@ export function mountPreview(container, bytes) {
     cam.updateProjectionMatrix();
   };
   const el = renderer.domElement;
-  el.addEventListener('pointerdown', (e) => { dragging = true; lx = e.clientX; ly = e.clientY; el.setPointerCapture(e.pointerId); el.style.cursor = 'grabbing'; });
+  el.addEventListener('pointerdown', (e) => {
+    lx = e.clientX; ly = e.clientY; downX = e.clientX; downY = e.clientY;
+    dragging = true;
+    gizPending = gizmoPointerToNDC(e.clientX, e.clientY, el.getBoundingClientRect(), GIZ).inGizmo;
+    el.setPointerCapture(e.pointerId); el.style.cursor = 'grabbing';
+  });
   el.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     if (ckMode) {
@@ -323,14 +442,41 @@ export function mountPreview(container, bytes) {
     }
     lx = e.clientX; ly = e.clientY;
   });
-  el.addEventListener('pointerup', (e) => { dragging = false; el.style.cursor = 'grab'; try { el.releasePointerCapture(e.pointerId); } catch (_) {} });
+  el.addEventListener('pointerup', (e) => {
+    if (gizPending && Math.hypot(e.clientX - downX, e.clientY - downY) < 4) {
+      // Short tap in gizmo area — snap camera to the hit axis.
+      updateGizCam();
+      const nd = gizmoPointerToNDC(e.clientX, e.clientY, el.getBoundingClientRect(), GIZ);
+      gizRaycaster.setFromCamera(new THREE.Vector2(nd.x, nd.y), gizCam);
+      const hits = gizRaycaster.intersectObjects(gizMeshes);
+      if (hits.length) snapToAxis(hits[0].object.userData.gizAxis);
+    }
+    gizPending = false; dragging = false;
+    el.style.cursor = 'grab'; try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+  });
   el.addEventListener('wheel', (e) => { e.preventDefault(); if (!ckMode) dist = Math.max(radius * 0.6, Math.min(radius * 8, dist * (1 + Math.sign(e.deltaY) * 0.1))); }, { passive: false });
 
-  let raf = 0, spin = true;
+  let raf = 0;
   const tick = () => {
     if (spin && !dragging && !ckMode) yaw += 0.004;
     place();
+
+    // Sync gizmo camera and render it as a corner overlay via scissor+viewport.
+    updateGizCam();
     renderer.render(scene, cam);
+    renderer.getSize(gizSz);
+    const gx = gizSz.x - GIZ - 8; // CSS px from left edge
+    const gy = gizSz.y - GIZ - 8; // CSS px from bottom (WebGL y-up convention)
+    renderer.setScissor(gx, gy, GIZ, GIZ);
+    renderer.setViewport(gx, gy, GIZ, GIZ);
+    renderer.setScissorTest(true);
+    renderer.autoClear = false; // don't wipe the main scene beneath the gizmo
+    renderer.render(gizScene, gizCam);
+    renderer.setScissorTest(false);
+    renderer.autoClear = true;
+    renderer.setViewport(0, 0, gizSz.x, gizSz.y);
+    drawGizLabels();
+
     raf = requestAnimationFrame(tick);
   };
   tick();
@@ -343,7 +489,7 @@ export function mountPreview(container, bytes) {
     movable: built.movableGroups,
     setMovable: (group, t) => setMovable(group, t),
     setPaint: (mapping) => applyPaint(built.meshesByLabel, mapping),
-    setAutoSpin: (on) => { spin = on; },
+    setAutoSpin: (on) => { spin = on; spinBtn.style.opacity = on ? '.9' : '.4'; },
     // Cockpit eye point in YS aircraft coords ({x,y,z} = the COCKPITP value),
     // or null to clear.  Marker shows whenever set (except while inside).
     setCockpit: (p) => {
@@ -358,6 +504,34 @@ export function mountPreview(container, bytes) {
       cancelAnimationFrame(raf);
       renderer.dispose();
       if (el.parentNode) el.parentNode.removeChild(el);
+      if (spinBtn.parentNode) spinBtn.parentNode.removeChild(spinBtn);
+      if (gizLabel.parentNode) gizLabel.parentNode.removeChild(gizLabel);
     },
+  };
+}
+
+// --- pure helpers for gizmo logic (exported for unit tests) -------------------
+
+// Return new orbit angles for snapping to (snapYaw, snapPitch).  When the
+// current angles are already within eps radians of the snap target, the view
+// flips to (oppYaw, oppPitch) — "click again = view from the other side".
+export function axisSnapAngles(yaw, pitch, snapYaw, snapPitch, oppYaw, oppPitch, eps = 0.1) {
+  const dy = Math.abs(((yaw - snapYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+  const dp = Math.abs(pitch - snapPitch);
+  return (dy < eps && dp < eps)
+    ? { yaw: oppYaw, pitch: oppPitch }
+    : { yaw: snapYaw, pitch: snapPitch };
+}
+
+// Convert a pointer position to NDC [-1..1] for the top-right-corner gizmo
+// viewport.  containerRect = element.getBoundingClientRect().
+// Returns { x, y, inGizmo } — x/y are suitable for THREE.Raycaster.setFromCamera.
+export function gizmoPointerToNDC(clientX, clientY, containerRect, gizSize, margin = 8) {
+  const gx = containerRect.left + containerRect.width - margin - gizSize;
+  const gy = containerRect.top + margin;
+  return {
+    x: ((clientX - gx) / gizSize) * 2 - 1,
+    y: -((clientY - gy) / gizSize) * 2 + 1,
+    inGizmo: clientX >= gx && clientX <= gx + gizSize && clientY >= gy && clientY <= gy + gizSize,
   };
 }
