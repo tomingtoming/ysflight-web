@@ -4,6 +4,8 @@
 // the workbench also uses directly.  extras.ysflight (Blender custom
 // properties; check Include > Data > Custom Properties on export) restores
 // CLA/POS/STA/CNT verbatim; fresh Blender-made nodes become static parts.
+// Handedness is detected per file (rh marker / legacy / foreign) — see the
+// CHIRALITY note in web/dnm-gltf.js.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { glbToDnm } from '../web/dnm-gltf.js';

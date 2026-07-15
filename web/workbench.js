@@ -127,16 +127,32 @@ const emit = (p) => (/\s/.test(p) ? `"${p}"` : p);
 export const RECIPE_FILE = 'workbench.json';
 const recipeEntry = (recipe) => new TextEncoder().encode(JSON.stringify({ schema: 1, ...recipe }));
 
+// Community addon layout (YSFHQ convention, same shape as the real community
+// packs the importer was built against, e.g. test/fixtures/testpack.zip): the
+// engine-scanned .lst lives in aircraft/ (air_<name>.lst) while the payload
+// ships under user/<packName>/, referenced root-relative from the list.  The
+// engine resolves list entries against the user-dir root either way, and the
+// importer resolves them case-insensitively — this is manners, not mechanics.
 export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coarse, recipe }) {
   if (!dat) throw new Error(ERR.NO_DAT);
   if (!visual) throw new Error(ERR.NO_VISUAL);
   if (!collision) throw new Error(ERR.NO_COLLISION);
 
   const warnings = [];
+  const datBytes = dat.bytes instanceof Uint8Array ? dat.bytes : new Uint8Array(dat.bytes);
+  const identity = parseDatIdentity(datBytes);
+  if (!identity) warnings.push('no-ascii-identify');
+
+  // The pack name doubles as the user/<packName>/ payload directory, so it is
+  // sanitized to ASCII-safe characters (it already was, for the .lst name).
+  const packName = (name || (identity && identity.identify) || stem(dat.name) || 'workbench')
+    .replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'workbench';
+  const payloadDir = 'user/' + packName + '/';
+
   const entries = {};
   const used = new Set();
   const add = (slot) => {
-    const entry = 'aircraft/' + sanitizeEntry(slot.name);
+    const entry = payloadDir + sanitizeEntry(slot.name);
     if (used.has(entry.toLowerCase())) throw new Error('workbench: duplicate file name: ' + slot.name);
     used.add(entry.toLowerCase());
     entries[entry] = slot.bytes instanceof Uint8Array ? slot.bytes : new Uint8Array(slot.bytes);
@@ -150,11 +166,6 @@ export function assembleAircraftZip({ name, dat, visual, collision, cockpit, coa
     else warnings.push('coarse-needs-cockpit'); // positional slot 5 needs slot 4 occupied
   }
 
-  const identity = parseDatIdentity(entries[tokens[0]]);
-  if (!identity) warnings.push('no-ascii-identify');
-
-  const packName = (name || (identity && identity.identify) || stem(dat.name) || 'workbench')
-    .replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'workbench';
   const lstLine = tokens.map(emit).join(' ') + '\n';
   entries['aircraft/air_' + packName.toLowerCase() + '.lst'] = new TextEncoder().encode(lstLine);
   if (recipe) entries[RECIPE_FILE] = recipeEntry({ type: 'aircraft', ...recipe });
@@ -382,6 +393,133 @@ export function makeDatFromBase(baseBytes, { identify, knobs = {}, extras = {} }
   return { bytes: s2b(lines.join('\n')), identify: clean, applied };
 }
 
+// --- cockpit position (.dat COCKPITP) ---------------------------------------------
+
+// The engine's cockpit eye point is the .dat's `COCKPITP x y z` line
+// (fsairplaneproperty.cpp case 52 -> FsGetVec3), in YS airplane coordinates:
+// +x = starboard, +y = up, +z = nose.  Stock format (b747.dat):
+//   COCKPITP -0.5m  3.5m  29.05m  #COCKPIT POSITION
+
+// Read the COCKPITP line of a .dat.  Returns {x, y, z} in meters or null when
+// the .dat has no COCKPITP line.  Stock always writes "m"; a bare number is
+// meters too (FsGetLength's default unit).
+export function getDatCockpit(bytes) {
+  for (const line of b2s(bytes).split('\n')) {
+    const m = /^COCKPITP\s+(\S+)\s+(\S+)\s+(\S+)/.exec(line.trim());
+    if (!m) continue;
+    const num = (tok) => (/ft$/i.test(tok) ? parseFloat(tok) * 0.3048 : parseFloat(tok));
+    const [x, y, z] = [num(m[1]), num(m[2]), num(m[3])];
+    return [x, y, z].every(Number.isFinite) ? { x, y, z } : null;
+  }
+  return null;
+}
+
+// Replace (or insert) the COCKPITP line, stock-formatted.  Replacement is
+// in-place on the existing line; insertion goes right after IDENTIFY (order is
+// free — COCKPITP does not feed AUTOCALC — but stock keeps it in the header
+// block, so we do too).  Byte-preserving outside the touched line.
+export function setDatCockpit(bytes, { x, y, z }) {
+  const fmt = (v) => String(Math.round(v * 1000) / 1000) + 'm';
+  const cockLine = 'COCKPITP ' + fmt(x) + '  ' + fmt(y) + '  ' + fmt(z) + '  #COCKPIT POSITION';
+  const lines = b2s(bytes).split('\n');
+  const ix = lines.findIndex((l) => /^COCKPITP\b/.test(l));
+  if (ix >= 0) {
+    lines[ix] = cockLine + (lines[ix].endsWith('\r') ? '\r' : '');
+  } else {
+    const idIx = lines.findIndex((l) => /^IDENTIFY\b/.test(l));
+    const eol = idIx >= 0 && lines[idIx].endsWith('\r') ? '\r' : '';
+    lines.splice(idIx >= 0 ? idIx + 1 : 0, 0, cockLine + eol);
+  }
+  return s2b(lines.join('\n'));
+}
+
+// --- extra viewpoints (.dat EXCAMERA) ----------------------------------------------
+
+// Named additional viewpoints — the F1 view cycle's extra stops
+// (fsairplaneproperty.cpp case 144 -> FsAdditionalViewpoint):
+//   EXCAMERA "<name>" <x> <y> <z> <h> <p> <b> INSIDE|OUTSIDE|CABIN [NOHUD] [NOINSTPANEL]
+// Positions carry a length-unit suffix and angles an angle-unit suffix — the
+// engine's FsGetUnit REJECTS bare numbers (the whole line is dropped), and the
+// parser requires ac>=9, so the type flag is effectively mandatory too.  Stock
+// always writes "m"/"deg" and an explicit type; so do we.  h/p/b follow
+// YsAtt3: h yaw (left +), p pitch (up +), b bank.  Defaults when flags are
+// absent: INSIDE, HUD and instrument panel shown (NOHUD/NOINSTPANEL hide them
+// for that viewpoint only; the main cockpit's pair is CKPITHUD/CKPITIST).
+// The DAT ORDER of EXCAMERA lines is the F1 cycle order — preserved verbatim.
+
+// One EXCAMERA line -> a camera object, or null when it does not parse.
+// Angles come back in DEGREES (matching what the .dat displays), lengths in
+// meters.  Lenient on units the way getDatCockpit is: m/ft for lengths,
+// deg/rad for angles, bare = m/deg.
+function parseExCameraLine(line) {
+  const len = (tok) => (/ft$/i.test(tok) ? parseFloat(tok) * 0.3048 : parseFloat(tok));
+  const ang = (tok) => (/rad$/i.test(tok) ? (parseFloat(tok) * 180) / Math.PI : parseFloat(tok)) + 0; // +0: -0deg -> 0
+  const m = /^EXCAMERA\s+(?:"([^"]*)"|(\S+))\s+(\S.*)$/.exec(line.trim());
+  if (!m) return null;
+  const t = m[3].split(/\s+/);
+  if (t.length < 6) return null;
+  const cam = {
+    name: m[1] !== undefined ? m[1] : m[2],
+    x: len(t[0]), y: len(t[1]), z: len(t[2]),
+    h: ang(t[3]), p: ang(t[4]), b: ang(t[5]),
+    type: 'INSIDE', noHud: false, noInstPanel: false,
+  };
+  if (![cam.x, cam.y, cam.z, cam.h, cam.p, cam.b].every(Number.isFinite)) return null;
+  for (const f of t.slice(6)) {
+    if (f[0] === '#') break;
+    if (f === 'OUTSIDE' || f === 'CABIN' || f === 'INSIDE') cam.type = f;
+    else if (f === 'NOHUD') cam.noHud = true;
+    else if (f === 'NOINSTPANEL') cam.noInstPanel = true;
+  }
+  return cam;
+}
+
+// Read every EXCAMERA line, in file order (= the F1 cycle order).
+export function getDatExCameras(bytes) {
+  const cams = [];
+  for (const line of b2s(bytes).split('\n')) {
+    const cam = parseExCameraLine(line);
+    if (cam) cams.push(cam);
+  }
+  return cams;
+}
+
+// Rewrite the .dat's EXCAMERA set to exactly `cams` (same shape as
+// getDatExCameras; angles in degrees).  Byte-preserving outside the touched
+// lines: existing EXCAMERA lines are replaced pairwise in place (keeping each
+// line's CR), extra new cameras are inserted right after the last EXCAMERA
+// line (else after COCKPITP, else after IDENTIFY — stock keeps them in the
+// header block), and surplus old lines are removed.  Order in = F1 cycle out.
+export function setDatExCameras(bytes, cams) {
+  const fmtL = (v) => String(Math.round(v * 1000) / 1000) + 'm';
+  const fmtA = (v) => String(Math.round((v || 0) * 100) / 100 + 0) + 'deg';
+  const lineOf = (c) =>
+    'EXCAMERA "' + String(c.name || 'VIEW').replace(/"/g, "'") + '" ' +
+    fmtL(c.x) + ' ' + fmtL(c.y) + ' ' + fmtL(c.z) + ' ' +
+    fmtA(c.h) + ' ' + fmtA(c.p) + ' ' + fmtA(c.b) + ' ' +
+    (c.type === 'OUTSIDE' || c.type === 'CABIN' ? c.type : 'INSIDE') +
+    (c.noHud ? ' NOHUD' : '') + (c.noInstPanel ? ' NOINSTPANEL' : '');
+  const lines = b2s(bytes).split('\n');
+  const ixs = [];
+  lines.forEach((l, i) => { if (/^EXCAMERA\b/.test(l)) ixs.push(i); });
+  const n = Math.min(ixs.length, cams.length);
+  const key = (c) => c && JSON.stringify([c.name, c.x, c.y, c.z, c.h, c.p, c.b, c.type, !!c.noHud, !!c.noInstPanel]);
+  for (let i = 0; i < n; i++) {
+    // Value-identical lines keep their original bytes (stock spacing intact).
+    if (key(parseExCameraLine(lines[ixs[i]])) === key(cams[i])) continue;
+    lines[ixs[i]] = lineOf(cams[i]) + (lines[ixs[i]].endsWith('\r') ? '\r' : '');
+  }
+  if (cams.length > ixs.length) {
+    let anchor = ixs.length ? ixs[ixs.length - 1] : lines.findIndex((l) => /^COCKPITP\b/.test(l));
+    if (anchor < 0) anchor = lines.findIndex((l) => /^IDENTIFY\b/.test(l));
+    const eol = anchor >= 0 && lines[anchor].endsWith('\r') ? '\r' : '';
+    lines.splice(anchor + 1, 0, ...cams.slice(ixs.length).map((c) => lineOf(c) + eol));
+  } else {
+    for (let i = ixs.length - 1; i >= cams.length; i--) lines.splice(ixs[i], 1);
+  }
+  return s2b(lines.join('\n'));
+}
+
 // --- scenery wizard --------------------------------------------------------------
 
 export const SCENERY_START = 'START01';
@@ -392,8 +530,8 @@ const num = (v, d) => (Math.round(v * 100) / 100).toFixed(d);
 // Assemble a minimal flyable scenery pack as plain text — .fld and .stp are
 // line-based text formats (yssceneryio.cpp), and the smallest field the engine
 // accepts is just the header block (ENDF is optional; LoadFld ends at EOF).
-// Ships the same normal-form zip as everything else: sce_<name>.lst pointing at
-// scenery/<name>.fld + .stp (3 tokens, same shape as the flying scnpack fixture).
+// Ships the same normal-form zip as everything else: scenery/sce_<name>.lst
+// pointing at user/<name>/<name>.fld + .stp (3 tokens, community layout).
 //
 // islands: [{points: [[xEastM, zSouthM], ...], color?: [r,g,b]}] — each becomes
 //   (a) a PC2 PLG polygon (the VISIBLE land; concave is fine, the engine
@@ -405,6 +543,35 @@ const num = (v, d) => (Math.round(v * 100) / 100).toFixed(d);
 // GOB heading/pitch/bank ride the .fld as 32768 = pi radians (yssceneryio.cpp
 // reads att * YsPi/32768); degrees convert with this.
 const deg32768 = (deg) => String(Math.round(((deg || 0) % 360) * 32768 / 180));
+
+// Engine heading convention (verified against upstream, not guessed):
+// YsAtt3 heading h rotates by RotateXZ(h) in a YSLEFT_ZPLUS_YPLUS world
+// (ysgeometry.h / fsmain.cpp), so forward(h) = (-sin h, cos h) in (x, z),
+// i.e. world +x = east, +z = north and COMPASS = -h.  Oracle: stock .stp
+// runway spawns — atsugi RW01 (compass 010) is ATTITUDE -10deg, airstrike
+// RW10 is -100deg, crescent RW28 is +80deg.  All user-facing headings in
+// the workbench are compass degrees; this converts them for .fld/.stp,
+// normalized to (-180, 180] like the stock files.
+const compassToEngineDeg = (c) => {
+  let d = -((Number(c) || 0) % 360) || 0; // || 0 normalizes -0
+  if (d > 180) d -= 360;
+  if (d <= -180) d += 360;
+  return d;
+};
+
+// Recipe convention versions.  conv 1 (implicit, pre-lighting recipes) wrote
+// headingDeg RAW as the engine attitude, whose compass is -headingDeg; conv 2
+// stores headingDeg as COMPASS degrees.  Migrating negates every heading so a
+// legacy map compiles to the same in-game orientations as before (the .fld /
+// .stp attitude bytes are unchanged — only the buggy runway-spawn end and the
+// default upwind spawn move, deliberately).
+export const SCENERY_CONV = 2;
+export function migrateScenery(sc) {
+  if (!sc || (sc.conv | 0) >= SCENERY_CONV) return sc;
+  const flip = (a) => a === undefined ? undefined
+    : (a || []).map((o) => ({ ...o, headingDeg: ((360 - (Number(o.headingDeg) || 0)) % 360 + 360) % 360 }));
+  return { ...sc, conv: SCENERY_CONV, objects: flip(sc.objects), starts: flip(sc.starts), runways: flip(sc.runways) };
+}
 
 // One cosine-falloff mountain as a TER (TerrMesh) text block: NBL n n nodes,
 // green->brown elevation gradient (CBE), last-row/col nodes in the saver's
@@ -435,13 +602,25 @@ function mountainTer({ radiusM = 1500, heightM = 300, n = 16 }) {
 
 // One runway = flat pavement PLGs (grey base + white threshold bars +
 // centerline dashes, all in the shared .pc2), a PST AREA LAND rectangle so it
-// is landable even when it sticks out over water, and a ground spawn point
+// is landable even when it sticks out over water, an RGN id-1 rect region so
+// the ENGINE treats touchdown/rollout as ON-runway, and a ground spawn point
 // 60m in from the approach end (alt 0 / speed 0 = the engine starts you
 // parked, gear down, ready to roll).
+//
+// Why the RGN matters (fsexistence.cpp FsAirplane::HitGround): on ground
+// contact the engine looks up the rect regions under the aircraft
+// (FsField::GetFieldRegion) and only ids 1 (runway) and 2 (taxiway) count as
+// safe pavement (FsSimulation::IsSafeTerrainRegionId).  Without one, the PST
+// AREA LAND only saves you from "splashed into the water": the touchdown is
+// flagged out-of-runway, which either kills the flight (LANDEDOUTOFRUNWAY)
+// or, when landing anywhere is allowed, sets IsOutOfRunway and the rollout
+// gets the rough-field random pitch jolts above 8m/s.  Stock fields carry
+// exactly this RGN over every runway (e.g. crescent.fld: ARE +-23.2 x
+// +-1675.2, ID 1).
 function runwayShapes({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45 }) {
-  const h = (headingDeg * Math.PI) / 180;
-  const fx = Math.sin(h), fz = -Math.cos(h);       // forward (heading 0 = north = -Z)
-  const rx = Math.cos(h), rz = Math.sin(h);        // right
+  const h = (headingDeg * Math.PI) / 180;          // compass: 0 = north = +Z, 90 = east = +X
+  const fx = Math.sin(h), fz = Math.cos(h);        // forward (landing/takeoff direction)
+  const rx = Math.cos(h), rz = -Math.sin(h);       // pilot's right
   const rect = (cf, cr, halfL, halfW) => {         // center offsets along f/r (m)
     const cx = x + fx * cf + rx * cr, cz = z + fz * cf + rz * cr;
     return [
@@ -463,6 +642,15 @@ function runwayShapes({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45 }) {
   return {
     polys,
     landPad: rect(0, 0, lengthM / 2 + 10, widthM / 2 + 10),
+    // RGN geometry: ARE is the min/max rect in the region's LOCAL frame (the
+    // local +z axis runs along the runway), POS carries the rotation.  The
+    // rotation is the ENGINE attitude (the same value the runway spawn
+    // writes), so the region's long axis is exactly the pavement axis; 10m
+    // margin matches the landPad.
+    rgn: {
+      x, z, headingDeg,
+      halfW: widthM / 2 + 10, halfL: lengthM / 2 + 10,
+    },
     start: {
       x: x - fx * (lengthM / 2 - 60), z: z - fz * (lengthM / 2 - 60),
       altM: 0, speedMS: 0, headingDeg,
@@ -470,15 +658,58 @@ function runwayShapes({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45 }) {
   };
 }
 
-export function assembleSceneryZip({
-  name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80],
-  startAltM = 1000, startSpeedMS = 100, islands = [],
-  objects = [],    // [{nam, x, z, headingDeg?, tag?}] stock ground-object placements
-  mountains = [],  // [{x, z, radiusM?, heightM?}] cosine-falloff TER hills
-  starts = [],     // [{name?, x, z, altM?, speedMS?, headingDeg?}] extra spawn points
-  runways = [],    // [{x, z, headingDeg?, lengthM?, widthM?}] flat pavement runways
-  recipe,
-}) {
+// Approach aids for a runway, expressed as the stock ground objects the ENGINE
+// actually interprets (there are no dedicated light primitives in .fld):
+//   ILS        — fsgroundproperty.cpp reads ground/ils.acp: a 3deg / 33km
+//                instrument beam offset 50m to the object's local +x.  The
+//                object faces the APPROACHING aircraft (FsILS::GetDeviation
+//                needs the aircraft in front), so heading = landing + 180 and
+//                standing 50m right of the threshold puts the beam origin
+//                exactly on the centerline (stock oracle: atsugi 01/19 — the
+//                two beam origins line up at compass 010.0).
+//   PAPI_LEFT / PAPI_RIGHT / VASI — VISLDAID templates; the engine recolors
+//                their light faces by your live approach angle (SetPapiColor /
+//                SetVasiColor).  Placement mirrors the stock fields: PAPI pair
+//                ~300m past the threshold either side of the pavement,
+//                VASI as near/far bar pairs (two-bar slope reference).
+// Returns [{nam, x, z, headingDeg(compass), tag?}] for one runway.
+export function runwayLightFixtures({ x, z, headingDeg = 0, lengthM = 2000, widthM = 45, ils, vaid, tag }) {
+  const h = ((headingDeg || 0) * Math.PI) / 180;
+  const fx = Math.sin(h), fz = Math.cos(h);   // landing direction
+  const rx = Math.cos(h), rz = -Math.sin(h);  // pilot's right
+  const at = (cf, cr) => ({ x: x + fx * cf + rx * cr, z: z + fz * cf + rz * cr });
+  const back = ((headingDeg || 0) + 180) % 360; // faces the approach
+  const halfL = lengthM / 2;
+  const out = [];
+  if (ils) out.push({ nam: 'ILS', ...at(-halfL, 50), headingDeg: back, tag });
+  if (vaid === 'papi') {
+    const side = widthM / 2 + 30;
+    out.push({ nam: 'PAPI_LEFT',  ...at(-halfL + 300, -side), headingDeg: back });
+    out.push({ nam: 'PAPI_RIGHT', ...at(-halfL + 300,  side), headingDeg: back });
+  } else if (vaid === 'vasi') {
+    const side = widthM / 2 + 25;
+    for (const cf of [200, 375]) {   // downwind + upwind bars, 175m apart
+      out.push({ nam: 'VASI', ...at(-halfL + cf, -side), headingDeg: back });
+      out.push({ nam: 'VASI', ...at(-halfL + cf,  side), headingDeg: back });
+    }
+  }
+  return out;
+}
+
+// "RW09"-style designator from a compass heading (0/360 -> 36, aviation style).
+export const runwayDesignator = (headingDeg) =>
+  'RW' + String(((Math.round(((headingDeg || 0) % 360 + 360) % 360 / 10) + 35) % 36) + 1).padStart(2, '0');
+
+export function assembleSceneryZip(opts) {
+  const {
+    name, ground = [40, 90, 60], sky = [23, 106, 189], land = [60, 140, 80],
+    startAltM = 1000, startSpeedMS = 100, islands = [],
+    objects = [],    // [{nam, x, z, headingDeg?, tag?}] stock ground-object placements
+    mountains = [],  // [{x, z, radiusM?, heightM?}] cosine-falloff TER hills
+    starts = [],     // [{name?, x, z, altM?, speedMS?, headingDeg?}] extra spawn points
+    runways = [],    // [{x, z, headingDeg?, lengthM?, widthM?, ils?, vaid?}] pavement runways
+    recipe,
+  } = migrateScenery(opts); // headingDeg is compass everywhere below
   const ident = sanitizeIdentify(name);
   if (!ident) throw new Error('workbench: map name is required');
   const packName = ident.toLowerCase().replace(/[^a-z0-9_-]+/g, '_');
@@ -520,6 +751,17 @@ export function assembleSceneryZip({
       for (const [x, z] of points) fldLines.push('PNT ' + num(x, 2) + ' 0.00 ' + num(z, 2));
       fldLines.push('FIL ""', 'POS 0.00 0.00 0.00 0.00 0.00 0.00', 'ID 0', 'END');
     }
+    // ID-1 "safe pavement" region per runway (see runwayShapes) — this is
+    // what makes touchdown and rollout count as ON the runway.
+    for (const r of rws) {
+      fldLines.push(
+        'RGN',
+        'ARE ' + num(-r.rgn.halfW, 2) + ' ' + num(-r.rgn.halfL, 2) + ' ' + num(r.rgn.halfW, 2) + ' ' + num(r.rgn.halfL, 2),
+        'POS ' + num(r.rgn.x, 2) + ' 0.00 ' + num(r.rgn.z, 2) + ' ' + deg32768(compassToEngineDeg(r.rgn.headingDeg)) + ' 0 0',
+        'ID 1',
+        'END',
+      );
+    }
   }
   // Mountains: one PCK'd TER each; the PCK line count must equal the embedded
   // text EXACTLY, and the grid origin is the -X/-Z corner, so POS shifts the
@@ -545,7 +787,7 @@ export function assembleSceneryZip({
   (objects || []).forEach((o, i) => {
     fldLines.push(
       'GOB',
-      'POS ' + num(o.x, 2) + ' ' + num(o.y || 0, 2) + ' ' + num(o.z, 2) + ' ' + deg32768(o.headingDeg) + ' 0 0',
+      'POS ' + num(o.x, 2) + ' ' + num(o.y || 0, 2) + ' ' + num(o.z, 2) + ' ' + deg32768(compassToEngineDeg(o.headingDeg)) + ' 0 0',
       'ID 0',
       'TAG "WB_OBJ_' + i + '"',
       'NAM ' + o.nam,
@@ -554,14 +796,32 @@ export function assembleSceneryZip({
       'END',
     );
   });
+  // Runway approach aids ride as GOBs too; the ILS TAG is the name shown in
+  // the in-flight ILS picker, stock style ("09-MYMAP" like "01-ATSUGI").
+  (runways || []).forEach((rw) => {
+    const tag = runwayDesignator(rw.headingDeg).slice(2) + '-' + ident;
+    for (const g of runwayLightFixtures({ ...rw, tag })) {
+      fldLines.push(
+        'GOB',
+        'POS ' + num(g.x, 2) + ' 0.00 ' + num(g.z, 2) + ' ' + deg32768(compassToEngineDeg(g.headingDeg)) + ' 0 0',
+        'ID 0',
+        ...(g.tag ? ['TAG "' + g.tag + '"'] : []),
+        'NAM ' + g.nam,
+        'IFF 0',
+        'FLG 0',
+        'END',
+      );
+    }
+  });
   fldLines.push('');
   const fld = fldLines.join('\n');
 
   // Default spawn upwind of the origin so a drawn island around (0,0) is in
-  // front of the nose (heading 0 = north = -Z); user-placed starts follow.
+  // front of the nose: attitude 0 = compass north = +Z, so spawn SOUTH of the
+  // origin (-Z); user-placed starts follow.
   const stpBlocks = [[
     'N ' + SCENERY_START,
-    'C POSITION 0.00m ' + num(startAltM, 2) + 'm ' + num(polys.length || objects.length || mountains.length || rws.length ? 6000 : 0, 2) + 'm',
+    'C POSITION 0.00m ' + num(startAltM, 2) + 'm ' + num(polys.length || objects.length || mountains.length || rws.length ? -6000 : 0, 2) + 'm',
     'C ATTITUDE 0.00deg 0.00deg 0.00deg',
     'C INITSPED ' + num(startSpeedMS, 2) + 'm/s',
     'C CTLTHROT 0.80',
@@ -576,7 +836,7 @@ export function assembleSceneryZip({
     stpBlocks.push([
       'N ' + sanitizeIdentify(s.name || 'START' + String(i + 2).padStart(2, '0')),
       'C POSITION ' + num(s.x, 2) + 'm ' + num(s.altM === undefined ? 1000 : s.altM, 2) + 'm ' + num(s.z, 2) + 'm',
-      'C ATTITUDE ' + num(s.headingDeg || 0, 2) + 'deg 0.00deg 0.00deg',
+      'C ATTITUDE ' + num(compassToEngineDeg(s.headingDeg), 2) + 'deg 0.00deg 0.00deg',
       'C INITSPED ' + num(speed, 2) + 'm/s',
       'C CTLTHROT ' + (speed > 0 ? '0.80' : '0.00'),
       'C CTLLDGEA ' + (speed < 40 ? 'TRUE' : 'FALSE'),
@@ -584,12 +844,15 @@ export function assembleSceneryZip({
   });
   const stp = stpBlocks.map((b) => b.join('\n')).join('\n\n') + '\n';
 
+  // Community addon layout (see assembleAircraftZip): the scanned .lst stays
+  // in scenery/, the payload ships under user/<packName>/.
   const enc = new TextEncoder();
+  const payloadDir = 'user/' + packName + '/';
   const entries = {
-    ['scenery/sce_' + packName + '.lst']: enc.encode(ident + ' scenery/' + fileStem + '.fld scenery/' + fileStem + '.stp\n'),
-    ['scenery/' + fileStem + '.fld']: enc.encode(fld),
-    ['scenery/' + fileStem + '.stp']: enc.encode(stp),
+    ['scenery/sce_' + packName + '.lst']: enc.encode(ident + ' ' + payloadDir + fileStem + '.fld ' + payloadDir + fileStem + '.stp\n'),
+    [payloadDir + fileStem + '.fld']: enc.encode(fld),
+    [payloadDir + fileStem + '.stp']: enc.encode(stp),
   };
-  if (recipe) entries[RECIPE_FILE] = recipeEntry({ type: 'scenery', ...recipe });
+  if (recipe) entries[RECIPE_FILE] = recipeEntry({ type: 'scenery', ...recipe, scenery: migrateScenery(recipe.scenery) });
   return { zipBytes: zipSync(entries), ident, packName };
 }

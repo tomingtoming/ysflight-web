@@ -5,166 +5,19 @@
 // without launching the full editor (Polygon Crest) or flying.  The real look is
 // always the engine (the 🛫 button); this is the approachable glance.
 //
-// A compact self-contained parser (we already understand the DNM/SRF/CLA text
-// format from the paint shop in workbench.js) feeds Three.js.  Prior art for the
-// full-fidelity loader is tomingtoming/webflight (YSFlightDNMParser /
-// DNMToThreeJSConverter); this covers the preview subset: geometry + colors +
-// single-axis movable-part animation.
-//
-// DNM text layout (see fsdnm / ysshelldnmtemplate):
-//   DYNAMODEL / DNMVER n
-//   PCK "<srf>" <N>            embeds an SRF as the next N lines:
-//     SURF / V x y z [R] / F..E blocks { V idx.. ; N cx cy cz nx ny nz ; C r g b [a] ; [B] }
-//   SRF "<label>" / FIL <srf> / CLA <class> / NST <n> / STA x y z h p b vis /
-//     POS x y z h p b [vis] / CNT cx cy cz / CLD "<child>"..    (node tree)
-// Angles (h,p,b in STA/POS) are 32768 = pi radians.  Axes: X east, Y up, Z south.
+// The DNM/SRF parser itself lives in dnm-parse.js (pure, no Three.js) so the
+// Blender bridge, the linter and the CLIs can share it without dragging in a
+// renderer; this module re-exports it for existing importers and feeds it to
+// Three.js.  Prior art for the full-fidelity loader is tomingtoming/webflight
+// (YSFlightDNMParser / DNMToThreeJSConverter); this covers the preview subset:
+// geometry + colors + single-axis movable-part animation.
 
 import * as THREE from './vendor/three.module.js';
+import { parseDnm, faceNormal, smoothVertexNormals } from './dnm-parse.js';
 
-const b2s = (bytes) => {
-  let s = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return s;
-};
+export { parseDnm, parseSrf, decodeSrfColor, faceNormal, smoothVertexNormals } from './dnm-parse.js';
+
 const A2R = Math.PI / 32768; // STA/POS angle unit -> radians
-
-// --- parse ----------------------------------------------------------------------
-
-// Decode an SRF `C` color line's tokens (everything after "C").  Two forms:
-//   C r g b [a]   direct 0..255 RGB(A)
-//   C <n>         packed 15-bit GGGGG RRRRR BBBBB (YsColor::Set15BitRGB) — the
-//                 old format still used by legacy models (e.g. amp.dnm).
-// Returns [r,g,b] in 0..255.
-export function decodeSrfColor(tok) {
-  if (tok.length >= 3) return [+tok[0], +tok[1], +tok[2]];
-  const c = (parseInt(tok[0], 10) || 0) & 32767;
-  // Rounded so face-color keys match the paint shop's (workbench.js cLineRgb).
-  return [((c >> 5) & 31) * 255 / 31, ((c >> 10) & 31) * 255 / 31, (c & 31) * 255 / 31]
-    .map((v) => Math.round(v));
-}
-
-// Parse the embedded SRF text (the N lines after a PCK header) into geometry:
-// { vertices: [[x,y,z],...], faces: [{idx:[...], color:[r,g,b], unlit}] }.
-function parseSrf(lines) {
-  const vertices = [];
-  const smooth = [];   // per-vertex 'R' flag: engine shades these with the
-                       // averaged normal of adjacent polygons (round vertex)
-  const faces = [];
-  let rawFace = 0;
-  const byRaw = new Map(); // raw polygon index (what ZA refers to) -> faces[] index
-  let i = 0;
-  for (; i < lines.length; i++) {
-    const t = lines[i].trim().split(/\s+/);
-    if (t[0] === 'V') {
-      vertices.push([parseFloat(t[1]), parseFloat(t[2]), parseFloat(t[3])]);
-      smooth.push(t.length >= 5 && (t[4] === 'R' || t[4] === 'r'));
-    }
-    else if (t[0] === 'F') {
-      const face = { idx: [], color: [200, 200, 200], unlit: false, alpha: 1 };
-      for (i++; i < lines.length; i++) {
-        const f = lines[i].trim().split(/\s+/);
-        if (f[0] === 'E') break;
-        if (f[0] === 'V') face.idx = f.slice(1).map(Number);
-        else if (f[0] === 'C') face.color = decodeSrfColor(f.slice(1));
-        else if (f[0] === 'B') face.unlit = true;
-        else if (f[0] === 'N') {
-          // 'N cx cy cz nx ny nz' (or bare 'N nx ny nz'): the ASSIGNED normal.
-          // The engine lights by this and flips winding to match it, so keep
-          // it — converters orient their triangles by it.
-          const n = f.length >= 7 ? f.slice(4, 7).map(Number) : f.slice(1, 4).map(Number);
-          if (n[0] || n[1] || n[2]) face.nom = n;
-        }
-      }
-      if (face.idx.length >= 3) { byRaw.set(rawFace, faces.length); faces.push(face); }
-      rawFace++;
-    } else if (t[0] === 'ZA') {
-      // Per-polygon transparency: '<polygon index> <value>' pairs, and the
-      // engine maps alpha = (255-value)/255 (ysshellextio.cpp).  This is what
-      // makes stock afterburner flames translucent — losing it renders them
-      // as opaque cones.
-      for (let k = 1; k + 1 < t.length; k += 2) {
-        const fi = byRaw.get(Number(t[k]));
-        if (fi !== undefined) faces[fi].alpha = (255 - (Number(t[k + 1]) || 0)) / 255;
-      }
-    }
-  }
-  return { vertices, smooth, faces };
-}
-
-// Oriented face normal: Newell over the polygon, flipped to agree with the
-// assigned 'N' normal when one is present (the engine's authoritative side).
-export function faceNormal(srf, face) {
-  let nx = 0, ny = 0, nz = 0;
-  const idx = face.idx;
-  for (let i = 0; i < idx.length; i++) {
-    const a = srf.vertices[idx[i]], b = srf.vertices[idx[(i + 1) % idx.length]];
-    if (!a || !b) continue;
-    nx += (a[1] - b[1]) * (a[2] + b[2]);
-    ny += (a[2] - b[2]) * (a[0] + b[0]);
-    nz += (a[0] - b[0]) * (a[1] + b[1]);
-  }
-  if (face.nom && nx * face.nom[0] + ny * face.nom[1] + nz * face.nom[2] < 0) {
-    nx = -nx; ny = -ny; nz = -nz;
-  }
-  const l = Math.hypot(nx, ny, nz) || 1;
-  return [nx / l, ny / l, nz / l];
-}
-
-// Per-vertex averaged normals for the 'R' (round) vertices: the engine shades
-// an R vertex with the mean of its adjacent polygon normals (Gouraud), so both
-// the preview and the glTF conversion bake the same thing.
-export function smoothVertexNormals(srf) {
-  const acc = new Map(); // vertex index -> [nx, ny, nz] accumulator
-  if (!(srf.smooth || []).some(Boolean)) return acc;
-  for (const f of srf.faces) {
-    const n = faceNormal(srf, f);
-    for (const vi of f.idx) {
-      if (!srf.smooth[vi]) continue;
-      const a = acc.get(vi) || [0, 0, 0];
-      a[0] += n[0]; a[1] += n[1]; a[2] += n[2];
-      acc.set(vi, a);
-    }
-  }
-  for (const a of acc.values()) {
-    const l = Math.hypot(a[0], a[1], a[2]) || 1;
-    a[0] /= l; a[1] /= l; a[2] /= l;
-  }
-  return acc;
-}
-
-// Parse a whole DNM: PCK-embedded SRFs + the node tree.  Returns
-// { nodes: [{label, srf, cla, cnt, pos, sta, children}], roots: [label] }.
-export function parseDnm(bytes) {
-  const lines = b2s(bytes).split('\n');
-  const srfByName = new Map();
-  const nodes = new Map();
-  let cur = null;
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    const t = raw.trim().split(/\s+/);
-    if (t[0] === 'PCK') {
-      const name = t[1].replace(/^"|"$/g, '');
-      const n = parseInt(t[2], 10);
-      srfByName.set(name, parseSrf(lines.slice(i + 1, i + 1 + n)));
-      i += n;
-    } else if (t[0] === 'SRF' && t.length >= 2) {
-      cur = { label: t[1].replace(/^"|"$/g, ''), srf: null, cla: 0, cnt: [0, 0, 0], pos: [0, 0, 0, 0, 0, 0], sta: [], children: [] };
-      nodes.set(cur.label, cur);
-    } else if (!cur) {
-      continue;
-    } else if (t[0] === 'FIL') cur.srf = t[1].replace(/^"|"$/g, '');
-    else if (t[0] === 'CLA') cur.cla = parseInt(t[1], 10);
-    else if (t[0] === 'CNT') cur.cnt = [parseFloat(t[1]), parseFloat(t[2]), parseFloat(t[3])];
-    else if (t[0] === 'POS') cur.pos = t.slice(1, 7).map(Number);
-    else if (t[0] === 'STA') cur.sta.push(t.slice(1, 8).map(Number)); // x y z h p b vis
-    else if (t[0] === 'CLD') cur.children.push(t[1].replace(/^"|"$/g, ''));
-  }
-  // Roots = nodes that are nobody's child.
-  const child = new Set();
-  for (const n of nodes.values()) for (const c of n.children) child.add(c);
-  const roots = [...nodes.keys()].filter((k) => !child.has(k));
-  return { nodes, srfByName, roots };
-}
 
 // --- build Three.js -------------------------------------------------------------
 
@@ -384,6 +237,25 @@ export function mountPreview(container, bytes) {
   mirror.add(built.object3d);
   scene.add(mirror);
 
+  // Cockpit eye-point marker: a small cross with a longer arm toward the nose
+  // (+Z in YS coords).  Parented INTO the model so the recenter / mirror /
+  // face-the-camera rotation all apply — marker coordinates are plain YS
+  // aircraft coordinates, the same numbers as the .dat COCKPITP line.
+  const ckMarker = new THREE.Group();
+  ckMarker.visible = false;
+  {
+    const s = Math.max(radius * 0.045, 0.25);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([
+      -s, 0, 0, s, 0, 0, 0, -s, 0, 0, s, 0, 0, 0, -s, 0, 0, s * 2.4,
+    ], 3));
+    const cross = new THREE.LineSegments(geo,
+      new THREE.LineBasicMaterial({ color: 0xffd24d, depthTest: false }));
+    cross.renderOrder = 999; // visible through the hull
+    ckMarker.add(cross);
+  }
+  built.object3d.add(ckMarker);
+
   scene.add(new THREE.AmbientLight(0xffffff, 0.55));
   const key = new THREE.DirectionalLight(0xffffff, 0.9); key.position.set(1, 2, 1.5); scene.add(key);
   const fill = new THREE.DirectionalLight(0x99bbff, 0.35); fill.position.set(-1, -0.5, -1); scene.add(fill);
@@ -394,9 +266,148 @@ export function mountPreview(container, bytes) {
   container.appendChild(renderer.domElement);
   renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;cursor:grab';
 
+  // Ensure container can host absolute-positioned overlays.
+  if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+  // ── Auto-spin toggle ──────────────────────────────────────────────────────
+  // Default OFF — auto-rotation is convenient for showcases but disruptive when
+  // editing.  A small 🔄 button in the bottom-right corner lets users opt in.
+  let spin = false;
+  const spinBtn = document.createElement('button');
+  spinBtn.textContent = '🔄';
+  spinBtn.title = '自動回転 ON/OFF — Auto-spin toggle';
+  spinBtn.style.cssText =
+    'position:absolute;bottom:8px;right:8px;z-index:10;width:28px;height:28px;' +
+    'padding:0;border:none;border-radius:6px;cursor:pointer;font-size:14px;line-height:1;' +
+    'background:rgba(255,255,255,.10);color:#fff;opacity:.4;transition:opacity .15s';
+  spinBtn.addEventListener('mouseenter', () => { spinBtn.style.opacity = spin ? '1' : '.65'; });
+  spinBtn.addEventListener('mouseleave', () => { spinBtn.style.opacity = spin ? '.9' : '.4'; });
+  spinBtn.addEventListener('click', () => { spin = !spin; spinBtn.style.opacity = spin ? '.9' : '.4'; });
+  container.appendChild(spinBtn);
+
+  // ── Navigation gizmo ─────────────────────────────────────────────────────
+  // Blender-style XYZ corner widget rendered via the main renderer's
+  // scissor+viewport API (no second WebGL context).  An OrthographicCamera
+  // mirrors the main camera's orientation; all gizmo materials have
+  // depthTest:false so the widget always draws on top.
+  // Click a sphere → snap to that axis view; click again → flip to opposite.
+  // Drag in the gizmo area → same orbit as the main canvas.
+  //
+  // Coordinate note: root.rotation.y=PI maps YS -Z (nose/south) to Three.js +Z,
+  // so Z+ = 機首 (nose front) and X+ ≈ 右舷 (starboard, considering mirror.scale.x=-1).
+  const GIZ = 80; // CSS pixels (square)
+  const gizScene = new THREE.Scene();
+  // OrthographicCamera: axes sit at unit distance, frustum ±1.6 gives
+  // comfortable padding around the sphere tips.
+  const gizCam = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
+
+  const GIZMO_AXES = [
+    { id: 'x+', dir: [1,0,0],  color: 0xd15a5a, snapYaw: Math.PI * 0.5,  snapPitch: 0,
+      label: 'X', tip: 'X+ / 右舷 (starboard)' },
+    { id: 'x-', dir: [-1,0,0], color: 0x6a2020, snapYaw: -Math.PI * 0.5, snapPitch: 0,
+      label: 'X', tip: 'X− / 左舷 (port)' },
+    { id: 'y+', dir: [0,1,0],  color: 0x50b950, snapYaw: 0,              snapPitch: 1.35,
+      label: 'Y', tip: 'Y+ / 上面 (top)' },
+    { id: 'y-', dir: [0,-1,0], color: 0x1f6a1f, snapYaw: 0,              snapPitch: -1.35,
+      label: 'Y', tip: 'Y− / 底面 (bottom)' },
+    { id: 'z+', dir: [0,0,1],  color: 0x4080e0, snapYaw: 0,              snapPitch: 0,
+      label: 'Z', tip: 'Z+ / 機首 (nose front)' },
+    { id: 'z-', dir: [0,0,-1], color: 0x1a3870, snapYaw: Math.PI,        snapPitch: 0,
+      label: 'Z', tip: 'Z− / 機尾 (rear)' },
+  ];
+
+  const _sphGeo = new THREE.SphereGeometry(0.18, 10, 7);
+  const gizMeshes = []; // collected for raycasting
+
+  for (const a of GIZMO_AXES) {
+    const [dx, dy, dz] = a.dir;
+    if (a.id.endsWith('+')) {
+      // Axis stick from origin stopping just before the sphere centre.
+      const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(dx*.82, dy*.82, dz*.82)];
+      const lg = new THREE.BufferGeometry().setFromPoints(pts);
+      gizScene.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: a.color, depthTest: false })));
+    }
+    const sph = new THREE.Mesh(_sphGeo, new THREE.MeshBasicMaterial({ color: a.color, depthTest: false }));
+    sph.position.set(dx, dy, dz);
+    sph.userData.gizAxis = a;
+    gizScene.add(sph);
+    gizMeshes.push(sph);
+  }
+
+  // 2D canvas overlay renders axis letter labels (avoids font complexity in WebGL).
+  const gizLabel = document.createElement('canvas');
+  gizLabel.width = GIZ; gizLabel.height = GIZ;
+  gizLabel.style.cssText =
+    'position:absolute;top:8px;right:8px;width:' + GIZ + 'px;height:' + GIZ + 'px;pointer-events:none';
+  container.appendChild(gizLabel);
+  const lctx = gizLabel.getContext('2d');
+
+  const gizRaycaster = new THREE.Raycaster();
+  const gizSz = new THREE.Vector2();
+
+  // Sync the gizmo camera to match the current main camera orientation.
+  const updateGizCam = () => {
+    gizCam.position.set(
+      4 * Math.cos(pitch) * Math.sin(yaw),
+      4 * Math.sin(pitch),
+      4 * Math.cos(pitch) * Math.cos(yaw),
+    );
+    gizCam.lookAt(0, 0, 0);
+    gizCam.updateMatrixWorld(); // needed for accurate project() and raycasting
+  };
+
+  const snapToAxis = (axisDef) => {
+    const opp = GIZMO_AXES.find((a) => a.id ===
+      (axisDef.id.endsWith('+') ? axisDef.id.replace('+', '-') : axisDef.id.replace('-', '+')));
+    const r = axisSnapAngles(yaw, pitch, axisDef.snapYaw, axisDef.snapPitch,
+      opp ? opp.snapYaw : axisDef.snapYaw + Math.PI,
+      opp ? opp.snapPitch : -axisDef.snapPitch);
+    yaw = r.yaw; pitch = r.pitch;
+  };
+
+  const drawGizLabels = () => {
+    lctx.clearRect(0, 0, GIZ, GIZ);
+    lctx.font = 'bold 11px system-ui,sans-serif';
+    lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
+    for (const a of GIZMO_AXES) {
+      if (!a.id.endsWith('+')) continue; // only positive axes labelled; negatives identified by colour
+      const v = new THREE.Vector3(...a.dir).project(gizCam);
+      if (v.z > 1) continue; // behind camera — skip
+      lctx.fillStyle = '#' + a.color.toString(16).padStart(6, '0');
+      lctx.fillText(a.label, (v.x + 1) / 2 * GIZ, (1 - v.y) / 2 * GIZ - 13);
+    }
+  };
+
   // Orbit state.
   let yaw = Math.PI * 0.15, pitch = 0.35, dist = radius * 2.4, dragging = false, lx = 0, ly = 0;
+  let downX = 0, downY = 0, gizPending = false;
+  // Orbit state — plus the first-person cockpit-view state.  In cockpit mode
+  // the camera sits AT the marker looking toward the nose, with a simple
+  // yaw/pitch look-around on drag (no orbit); meshes are already DoubleSide,
+  // so the hull stays visible from inside.
+  let ckPos = null;                          // {x,y,z} YS coords, or null
+  let ckAtt = null;                          // optional {h,p,b} YS view attitude, RADIANS
+  let ckMode = false, ckYaw = 0, ckPitch = 0; // look-around angles (0 = the eye's own attitude)
+  let downHook = null;                       // sibling tools may claim a pointerdown
+  const eye = new THREE.Vector3(), look = new THREE.Vector3();
   const place = () => {
+    if (ckMode && ckPos) {
+      // World position of the eye point through the model transform chain.
+      eye.set(ckPos.x, ckPos.y, ckPos.z);
+      built.object3d.updateWorldMatrix(true, false);
+      built.object3d.localToWorld(eye);
+      cam.position.copy(eye);
+      // YS +Z (nose) lands at world -Z, YS +X (starboard) at world +X after
+      // the display rotation+mirror, so this dir looks at the nose at 0/0
+      // and ckYaw > 0 looks to starboard.
+      look.set(
+        Math.sin(ckYaw) * Math.cos(ckPitch),
+        Math.sin(ckPitch),
+        -Math.cos(ckYaw) * Math.cos(ckPitch),
+      ).add(eye);
+      cam.lookAt(look);
+      return;
+    }
     cam.position.set(
       dist * Math.cos(pitch) * Math.sin(yaw),
       dist * Math.sin(pitch),
@@ -404,34 +415,140 @@ export function mountPreview(container, bytes) {
     );
     cam.lookAt(0, 0, 0);
   };
+  const setCockpitView = (on) => {
+    ckMode = !!(on && ckPos);
+    if (ckMode) {
+      // Start the look-around at the eye's own attitude (EXCAMERA h/p): YS h
+      // yaws LEFT for + while ckYaw looks starboard for +, so ckYaw = -h.
+      // Bank is not represented in the preview (the truth is the 🛫 flight).
+      ckYaw = ckAtt ? -(ckAtt.h || 0) : 0;
+      ckPitch = ckAtt ? (ckAtt.p || 0) : 0;
+      cam.fov = 60; cam.near = 0.05;
+      ckMarker.visible = false; // it would sit right in the lens
+    } else {
+      cam.fov = 45; cam.near = 0.1;
+      ckMarker.visible = !!ckPos;
+    }
+    cam.updateProjectionMatrix();
+  };
   const el = renderer.domElement;
-  el.addEventListener('pointerdown', (e) => { dragging = true; lx = e.clientX; ly = e.clientY; el.setPointerCapture(e.pointerId); el.style.cursor = 'grabbing'; });
+  el.addEventListener('pointerdown', (e) => {
+    if (downHook && downHook(e)) return;
+    lx = e.clientX; ly = e.clientY; downX = e.clientX; downY = e.clientY;
+    dragging = true;
+    gizPending = gizmoPointerToNDC(e.clientX, e.clientY, el.getBoundingClientRect(), GIZ).inGizmo;
+    el.setPointerCapture(e.pointerId); el.style.cursor = 'grabbing';
+  });
   el.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    yaw -= (e.clientX - lx) * 0.01; pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - ly) * 0.01));
+    if (ckMode) {
+      ckYaw += (e.clientX - lx) * 0.005;
+      ckPitch = Math.max(-1.4, Math.min(1.4, ckPitch - (e.clientY - ly) * 0.005));
+    } else {
+      yaw -= (e.clientX - lx) * 0.01; pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - ly) * 0.01));
+    }
     lx = e.clientX; ly = e.clientY;
   });
-  el.addEventListener('pointerup', (e) => { dragging = false; el.style.cursor = 'grab'; try { el.releasePointerCapture(e.pointerId); } catch (_) {} });
-  el.addEventListener('wheel', (e) => { e.preventDefault(); dist = Math.max(radius * 0.6, Math.min(radius * 8, dist * (1 + Math.sign(e.deltaY) * 0.1))); }, { passive: false });
+  el.addEventListener('pointerup', (e) => {
+    if (gizPending && Math.hypot(e.clientX - downX, e.clientY - downY) < 4) {
+      // Short tap in gizmo area — snap camera to the hit axis.
+      updateGizCam();
+      const nd = gizmoPointerToNDC(e.clientX, e.clientY, el.getBoundingClientRect(), GIZ);
+      gizRaycaster.setFromCamera(new THREE.Vector2(nd.x, nd.y), gizCam);
+      const hits = gizRaycaster.intersectObjects(gizMeshes);
+      if (hits.length) snapToAxis(hits[0].object.userData.gizAxis);
+    }
+    gizPending = false; dragging = false;
+    el.style.cursor = 'grab'; try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+  });
+  el.addEventListener('wheel', (e) => { e.preventDefault(); if (!ckMode) dist = Math.max(radius * 0.6, Math.min(radius * 8, dist * (1 + Math.sign(e.deltaY) * 0.1))); }, { passive: false });
 
-  let raf = 0, spin = true;
+  let raf = 0;
   const tick = () => {
-    if (spin && !dragging) yaw += 0.004;
+    if (spin && !dragging && !ckMode) yaw += 0.004;
     place();
+
+    // Sync gizmo camera and render it as a corner overlay via scissor+viewport.
+    updateGizCam();
     renderer.render(scene, cam);
+    renderer.getSize(gizSz);
+    const gx = gizSz.x - GIZ - 8; // CSS px from left edge
+    const gy = gizSz.y - GIZ - 8; // CSS px from bottom (WebGL y-up convention)
+    renderer.setScissor(gx, gy, GIZ, GIZ);
+    renderer.setViewport(gx, gy, GIZ, GIZ);
+    renderer.setScissorTest(true);
+    renderer.autoClear = false; // don't wipe the main scene beneath the gizmo
+    renderer.render(gizScene, gizCam);
+    renderer.setScissorTest(false);
+    renderer.autoClear = true;
+    renderer.setViewport(0, 0, gizSz.x, gizSz.y);
+    drawGizLabels();
+
     raf = requestAnimationFrame(tick);
   };
   tick();
 
   return {
+    scene,          // Three.js Scene — lets overlays (e.g. gizmos) add objects
+    renderer,       // Three.js WebGLRenderer — for future overlay compositing
+    parsedDnm: parsed,        // raw parsed structure for node inspection
+    builtObject: built,       // { object3d, movableGroups, meshesByLabel }
     movable: built.movableGroups,
     setMovable: (group, t) => setMovable(group, t),
     setPaint: (mapping) => applyPaint(built.meshesByLabel, mapping),
-    setAutoSpin: (on) => { spin = on; },
+    setAutoSpin: (on) => { spin = on; spinBtn.style.opacity = on ? '.9' : '.4'; },
+    // Exposed for studio-paint.js face-picking (scene/camera/built/parsed).
+    scene, camera: cam, renderer, built, parsed,
+    // Cockpit eye point in YS aircraft coords ({x,y,z} = the COCKPITP value),
+    // or null to clear.  Marker shows whenever set (except while inside).
+    // p may also carry an EXCAMERA view attitude {h,p,b} in RADIANS (YsAtt3
+    // conventions) — the next setCockpitView(true) starts looking that way.
+    setCockpit: (p) => {
+      ckPos = p && [p.x, p.y, p.z].every(Number.isFinite) ? { x: p.x, y: p.y, z: p.z } : null;
+      ckAtt = p && Number.isFinite(p.h) ? { h: p.h, p: p.p || 0, b: p.b || 0 } : null;
+      if (ckPos) ckMarker.position.set(ckPos.x, ckPos.y, ckPos.z);
+      if (!ckPos && ckMode) setCockpitView(false);
+      ckMarker.visible = !!ckPos && !ckMode;
+    },
+    setCockpitView,
+    getCockpitView: () => ckMode,
+    // Escape hatches for sibling tools (studio viewpoint gizmos): the live
+    // three.js objects, and a pointerdown interceptor — return true from the
+    // hook to claim the gesture (the orbit drag then ignores it).
+    three: { scene, camera: cam, renderer, modelRoot: built.object3d, radius },
+    setPointerDownHook: (fn) => { downHook = fn; },
     dispose: () => {
       cancelAnimationFrame(raf);
       renderer.dispose();
       if (el.parentNode) el.parentNode.removeChild(el);
+      if (spinBtn.parentNode) spinBtn.parentNode.removeChild(spinBtn);
+      if (gizLabel.parentNode) gizLabel.parentNode.removeChild(gizLabel);
     },
+  };
+}
+
+// --- pure helpers for gizmo logic (exported for unit tests) -------------------
+
+// Return new orbit angles for snapping to (snapYaw, snapPitch).  When the
+// current angles are already within eps radians of the snap target, the view
+// flips to (oppYaw, oppPitch) — "click again = view from the other side".
+export function axisSnapAngles(yaw, pitch, snapYaw, snapPitch, oppYaw, oppPitch, eps = 0.1) {
+  const dy = Math.abs(((yaw - snapYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+  const dp = Math.abs(pitch - snapPitch);
+  return (dy < eps && dp < eps)
+    ? { yaw: oppYaw, pitch: oppPitch }
+    : { yaw: snapYaw, pitch: snapPitch };
+}
+
+// Convert a pointer position to NDC [-1..1] for the top-right-corner gizmo
+// viewport.  containerRect = element.getBoundingClientRect().
+// Returns { x, y, inGizmo } — x/y are suitable for THREE.Raycaster.setFromCamera.
+export function gizmoPointerToNDC(clientX, clientY, containerRect, gizSize, margin = 8) {
+  const gx = containerRect.left + containerRect.width - margin - gizSize;
+  const gy = containerRect.top + margin;
+  return {
+    x: ((clientX - gx) / gizSize) * 2 - 1,
+    y: -((clientY - gy) / gizSize) * 2 + 1,
+    inGizmo: clientX >= gx && clientX <= gx + gizSize && clientY >= gy && clientY <= gy + gizSize,
   };
 }

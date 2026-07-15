@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, SCENERY_START, extractDnmColors, repaintDnm } from '../web/workbench.js';
+import { classifyLoose, assembleAircraftZip, makeDatFromBase, sanitizeIdentify, assembleSceneryZip, migrateScenery, runwayLightFixtures, SCENERY_START, extractDnmColors, repaintDnm } from '../web/workbench.js';
 import { analyzePack } from '../web/packs.js';
 import { unzipSync } from '../web/vendor/fflate.js';
 
@@ -73,6 +73,20 @@ test('assemble -> analyzePack round-trip: aircraft registers with IDENTIFY sidec
   assert.equal(asm.identify, 'YSFW_TEST1');
   assert.equal(asm.packName, 'my_Test_Pack');
   assert.equal(asm.lstLine.trim().split(/\s+/).length, 4); // + cockpit
+
+  // Community addon layout: list in aircraft/, payload under user/<packName>/,
+  // list entries referencing the payload root-relative (YSFHQ convention).
+  const entries = Object.keys(unzipSync(asm.zipBytes)).sort();
+  assert.deepEqual(entries, [
+    'aircraft/air_my_test_pack.lst',
+    'user/my_Test_Pack/test1.dat',
+    'user/my_Test_Pack/test1.dnm',
+    'user/my_Test_Pack/test1coll.srf',
+    'user/my_Test_Pack/test2cockpit.srf',
+  ]);
+  assert.equal(asm.lstLine,
+    'user/my_Test_Pack/test1.dat user/my_Test_Pack/test1.dnm ' +
+    'user/my_Test_Pack/test1coll.srf user/my_Test_Pack/test2cockpit.srf\n');
 
   const a = await analyzePack(asm.zipBytes, { sha256 });
   assert.deepEqual(a.categories, ['aircraft']);
@@ -137,13 +151,15 @@ test('assembleSceneryZip: minimal ocean field round-trips through analyzePack as
   assert.equal(a.diagnostics.missing, 0);
   const lst = a.generated.find((g) => !g.idx);
   assert.equal(lst.entries, 1);
-  assert.match(lst.text, /^MY_ISLAND "packs\/[0-9a-f]{16}\/scenery\/my_island\.fld" "packs\/[0-9a-f]{16}\/scenery\/my_island\.stp"$/m);
+  // Community layout: payload under user/<packName>/, list references rewritten
+  // by the analyzer to the isolated packs/<id>/ root.
+  assert.match(lst.text, /^MY_ISLAND "packs\/[0-9a-f]{16}\/user\/my_island\/my_island\.fld" "packs\/[0-9a-f]{16}\/user\/my_island\/my_island\.stp"$/m);
   // The generated field/start files carry the wizard's values.
-  const fld = new TextDecoder().decode(asm.zipBytes && (await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['scenery/my_island.fld']);
+  const fld = new TextDecoder().decode(asm.zipBytes && (await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['user/my_island/my_island.fld']);
   assert.match(fld, /^FIELD$/m);
   assert.match(fld, /^GND 40 90 60$/m);
   assert.match(fld, /^SKY 23 106 189$/m);
-  const stp = new TextDecoder().decode((await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['scenery/my_island.stp']);
+  const stp = new TextDecoder().decode((await import('../web/vendor/fflate.js')).unzipSync(asm.zipBytes)['user/my_island/my_island.stp']);
   assert.match(stp, new RegExp('^N ' + SCENERY_START + '$', 'm'));
   assert.match(stp, /^C POSITION 0\.00m 800\.00m 0\.00m$/m);
 });
@@ -155,7 +171,7 @@ test('assembleSceneryZip with islands: PC2 visual + PST AREA LAND, exact PCK lin
     name: 'DRAWN', islands: [{ points: tri }, { points: blob, color: [200, 180, 120] }],
   });
   const { unzipSync } = await import('../web/vendor/fflate.js');
-  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/drawn.fld']);
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/drawn/drawn.fld']);
 
   // PCK count must equal the embedded pc2 line count EXACTLY (loader counts
   // lines back to OUTSIDE state; a mismatch corrupts everything after it).
@@ -182,15 +198,16 @@ test('assembleSceneryZip with islands: PC2 visual + PST AREA LAND, exact PCK lin
   assert.deepEqual(a.categories, ['scenery']);
   assert.equal(a.diagnostics.missing, 0);
 
-  // The start position moves upwind so the drawn islands sit ahead of the nose.
-  const stp = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/drawn.stp']);
-  assert.match(stp, /^C POSITION 0\.00m 1000\.00m 6000\.00m$/m);
+  // The start position moves upwind (south, -Z: attitude 0 = compass north)
+  // so the drawn islands sit ahead of the nose.
+  const stp = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/drawn/drawn.stp']);
+  assert.match(stp, /^C POSITION 0\.00m 1000\.00m -6000\.00m$/m);
 });
 
 test('assembleSceneryZip without islands stays the proven 8-line header', async () => {
   const asm = assembleSceneryZip({ name: 'PLAIN' });
   const { unzipSync } = await import('../web/vendor/fflate.js');
-  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/plain.fld']);
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/plain/plain.fld']);
   assert.doesNotMatch(fld, /PCK|PC2|PST/);
   assert.equal(fld.trim().split('\n').length, 8);
 });
@@ -208,8 +225,8 @@ test('assembleSceneryZip rich: GOB objects, TER mountains, extra starts', async 
   });
   const { unzipSync } = await import('../web/vendor/fflate.js');
   const z = unzipSync(asm.zipBytes);
-  const fld = new TextDecoder().decode(z['scenery/rich.fld']);
-  const stp = new TextDecoder().decode(z['scenery/rich.stp']);
+  const fld = new TextDecoder().decode(z['user/rich/rich.fld']);
+  const stp = new TextDecoder().decode(z['user/rich/rich.stp']);
 
   // GOB: static placement (no MPN/MPS), heading in 32768=pi units (90deg -> 16384).
   assert.match(fld, /^GOB\nPOS 3000\.00 0\.00 -1000\.00 16384 0 0\nID 0\nTAG "WB_OBJ_0"\nNAM AIRCRAFTCARRIER\nIFF 0\nFLG 0\nEND$/m);
@@ -249,8 +266,8 @@ test('assembleSceneryZip runways: pavement PLGs + landable pad + threshold spawn
   });
   const { unzipSync } = await import('../web/vendor/fflate.js');
   const z = unzipSync(asm.zipBytes);
-  const fld = new TextDecoder().decode(z['scenery/rwy.fld']);
-  const stp = new TextDecoder().decode(z['scenery/rwy.stp']);
+  const fld = new TextDecoder().decode(z['user/rwy/rwy.fld']);
+  const stp = new TextDecoder().decode(z['user/rwy/rwy.stp']);
 
   // Pavement rides the shared .pc2 even with zero islands, PCK count exact.
   const m = fld.match(/^PCK "00000000\.pc2" (\d+)$/m);
@@ -268,17 +285,153 @@ test('assembleSceneryZip runways: pavement PLGs + landable pad + threshold spawn
   assert.ok(pc2.includes('VER 0.00 -1977.50'), 'west end corner');
 
   // Landable pad: a PST AREA LAND loop with a 10m margin.
-  assert.match(fld, /^PST\nISLOOP TRUE\nAREA LAND\nPNT 2010\.00 0\.00 -1967\.50$/m);
+  assert.match(fld, /^PST\nISLOOP TRUE\nAREA LAND\nPNT -10\.00 0\.00 -1967\.50$/m);
 
-  // Threshold spawn: on the ground at the approach end, rolling heading 90.
+  // Threshold spawn: legacy headingDeg 90 = engine attitude 90 = compass 270
+  // (west).  Attitude bytes are unchanged by the conv-2 migration; the spawn
+  // sits at the approach end with the full length AHEAD of the nose (the old
+  // convention parked it 60m from the fence).
   assert.match(stp, /^N RUNWAY01$/m);
-  assert.match(stp, /^C POSITION 60\.00m 0\.00m -2000\.00m$/m);
+  assert.match(stp, /^C POSITION 1940\.00m 0\.00m -2000\.00m$/m);
   assert.match(stp, /^C ATTITUDE 90\.00deg 0\.00deg 0\.00deg$/m);
   assert.match(stp, /^C CTLLDGEA TRUE$/m);
+
+  // Safe-pavement region: an RGN rect with ID 1, rotated with the runway.
+  // fsexistence.cpp FsAirplane::HitGround only treats touchdown/rollout as
+  // on-runway when GetFieldRegion finds a region whose id passes
+  // FsSimulation::IsSafeTerrainRegionId (1 = runway, 2 = taxiway); without it
+  // the rollout is out-of-runway (rough-field pitch jolts / crash).  ARE is
+  // the local-frame min/max (long side along local +z), POS holds the
+  // rotation in 32768 = pi units — the same layout stock fields use.
+  assert.match(fld, /^RGN\nARE -32\.50 -1010\.00 32\.50 1010\.00\nPOS 1000\.00 0\.00 -2000\.00 16384 0 0\nID 1\nEND$/m);
 
   const a = await analyzePack(asm.zipBytes, { sha256 });
   assert.deepEqual(a.categories, ['scenery']);
   assert.equal(a.diagnostics.missing, 0);
+});
+
+test('scenery conv 2: headingDeg is compass — engine attitude is its negation', async () => {
+  const asm = assembleSceneryZip({
+    name: 'CONV2', conv: 2,
+    objects: [{ nam: 'AIRCRAFTCARRIER', x: 0, z: 0, headingDeg: 90 }],  // facing east
+    starts: [{ name: 'E', x: 0, z: 0, altM: 500, speedMS: 100, headingDeg: 90 }],
+    runways: [{ x: 0, z: 0, headingDeg: 0, lengthM: 2000, widthM: 45 }], // landing north
+  });
+  const z = unzipSync(asm.zipBytes);
+  const fld = new TextDecoder().decode(z['user/conv2/conv2.fld']);
+  const stp = new TextDecoder().decode(z['user/conv2/conv2.stp']);
+  // compass 90 (east) = engine attitude -90 (stock oracle: atsugi RW01/compass
+  // 010 spawns at ATTITUDE -10deg).  -90deg = -16384 in 32768=pi units.
+  assert.match(fld, /^POS 0\.00 0\.00 0\.00 -16384 0 0$/m);
+  assert.match(stp, /^C ATTITUDE -90\.00deg 0\.00deg 0\.00deg$/m);
+  // Compass-0 runway runs south->north; the takeoff spawn sits at the south
+  // (approach) end facing north with 1940m of pavement ahead.
+  assert.match(stp, /^N RUNWAY01$/m);
+  assert.match(stp, /^C POSITION 0\.00m 0\.00m -940\.00m$/m);
+  assert.match(stp, /^C ATTITUDE (-0\.00|0\.00)deg 0\.00deg 0\.00deg$/m);
+  // Its RGN safe-pavement region uses the same engine attitude (0 here).
+  assert.match(fld, /^RGN\nARE -32\.50 -1010\.00 32\.50 1010\.00\nPOS 0\.00 0\.00 0\.00 0 0 0\nID 1\nEND$/m);
+});
+
+test('runwayLightFixtures: stock-style ILS / PAPI / VASI geometry', () => {
+  // Compass-0 runway, 2000x45 at the origin: threshold (approach end) at
+  // (0, -1000), landing toward +z (north).  All aids FACE the approach
+  // (compass 180), matching stock fields (crescent / n-kyusyu / atsugi).
+  const rw = { x: 0, z: 0, headingDeg: 0, lengthM: 2000, widthM: 45 };
+  const ils = runwayLightFixtures({ ...rw, ils: true, tag: '36-T' });
+  // The antenna stands 50m right of the threshold; ground/ils.acp shifts the
+  // beam 50m to its local +x, which puts the beam origin ON the centerline.
+  assert.deepEqual(ils, [{ nam: 'ILS', x: 50, z: -1000, headingDeg: 180, tag: '36-T' }]);
+  const papi = runwayLightFixtures({ ...rw, vaid: 'papi' });
+  assert.deepEqual(papi.map((g) => [g.nam, g.x, g.z, g.headingDeg]), [
+    ['PAPI_LEFT', -52.5, -700, 180],   // pilot's left, 300m past the threshold
+    ['PAPI_RIGHT', 52.5, -700, 180],
+  ]);
+  const vasi = runwayLightFixtures({ ...rw, vaid: 'vasi' });
+  assert.deepEqual(vasi.map((g) => [g.nam, g.x, g.z]), [
+    ['VASI', -47.5, -800], ['VASI', 47.5, -800],   // downwind bar
+    ['VASI', -47.5, -625], ['VASI', 47.5, -625],   // upwind bar, 175m apart
+  ]);
+  assert.equal(runwayLightFixtures(rw).length, 0); // no aids requested
+});
+
+test('assembleSceneryZip: runway aids become GOBs the engine interprets', async () => {
+  const asm = assembleSceneryZip({
+    name: 'LIT', conv: 2,
+    runways: [{ x: 0, z: 0, headingDeg: 90, lengthM: 2000, widthM: 45, ils: true, vaid: 'papi' }],
+  });
+  const z = unzipSync(asm.zipBytes);
+  const fld = new TextDecoder().decode(z['user/lit/lit.fld']);
+  // ILS: at the west threshold (compass 90 lands eastward), 50m on the
+  // pilot's right (south, z=-50), facing the approach (compass 270 = engine
+  // attitude 90deg = 16384).  TAG is the in-flight ILS picker label.
+  assert.match(fld, /^GOB\nPOS -1000\.00 0\.00 -50\.00 16384 0 0\nID 0\nTAG "09-LIT"\nNAM ILS\nIFF 0\nFLG 0\nEND$/m);
+  assert.match(fld, /^POS -700\.00 0\.00 52\.50 16384 0 0\nID 0\nNAM PAPI_LEFT$/m);
+  assert.match(fld, /^POS -700\.00 0\.00 -52\.50 16384 0 0\nID 0\nNAM PAPI_RIGHT$/m);
+  // The recipe round-trips the aid switches for the ✏️ re-edit path.
+  const asm2 = assembleSceneryZip({
+    name: 'LIT2', conv: 2,
+    runways: [{ x: 0, z: 0, headingDeg: 0, vaid: 'vasi' }],
+    recipe: { scenery: { conv: 2, runways: [{ x: 0, z: 0, headingDeg: 0, vaid: 'vasi' }] } },
+  });
+  const rec = JSON.parse(new TextDecoder().decode(unzipSync(asm2.zipBytes)['workbench.json']));
+  assert.equal(rec.scenery.runways[0].vaid, 'vasi');
+  assert.equal((new TextDecoder().decode(unzipSync(asm2.zipBytes)['user/lit2/lit2.fld']).match(/^NAM VASI$/gm) || []).length, 4);
+  // Legacy recipes (no conv) still compile with no aids and no GOBs at all.
+  const legacy = assembleSceneryZip({ name: 'OLDRW', runways: [{ x: 0, z: 0, headingDeg: 90 }] });
+  assert.doesNotMatch(new TextDecoder().decode(unzipSync(legacy.zipBytes)['user/oldrw/oldrw.fld']), /^GOB$/m);
+});
+
+test('migrateScenery: legacy headings negate once, conv 2 is idempotent', () => {
+  const legacy = {
+    name: 'OLD',
+    islands: [{ points: [[1, 2], [3, 4], [5, 6]] }],
+    objects: [{ nam: 'CASTLE', x: 1, z: 2, headingDeg: 90 }],
+    starts: [{ x: 0, z: 0, headingDeg: 45 }],
+    runways: [{ x: 0, z: 0, headingDeg: 180 }],
+  };
+  const m = migrateScenery(legacy);
+  assert.equal(m.conv, 2);
+  assert.equal(m.objects[0].headingDeg, 270);  // engine orientation preserved
+  assert.equal(m.starts[0].headingDeg, 315);
+  assert.equal(m.runways[0].headingDeg, 180);
+  assert.deepEqual(m.islands, legacy.islands);  // islands are never touched
+  assert.deepEqual(migrateScenery(m), m);       // migrating twice is a no-op
+  // The recipe embedded by assembleSceneryZip carries the migrated form.
+  const asm = assembleSceneryZip({ ...legacy, recipe: { scenery: legacy } });
+  const rec = JSON.parse(new TextDecoder().decode(unzipSync(asm.zipBytes)['workbench.json']));
+  assert.equal(rec.scenery.conv, 2);
+  assert.equal(rec.scenery.objects[0].headingDeg, 270);
+});
+
+test('runway RGN matches the stock landing-surface structure (crescent oracle)', () => {
+  // The measuring stick: stock fields mark every runway with an RGN id-1
+  // rect region — that is the ONLY thing IsSafeTerrainRegionId accepts as
+  // pavement.  Parse crescent.fld and prove the structure we emit is the
+  // same shape as the stock one.
+  const crescent = readFileSync(join(here, '..', 'upstream', 'YSFLIGHT', 'runtime', 'scenery', 'crescent.fld'), 'utf8').replace(/\r/g, '');
+  const stockRgns = crescent.match(/^RGN\nARE [^\n]+\nPOS [^\n]+\nID (\d+)\nEND$/gm) || [];
+  assert.ok(stockRgns.length > 0, 'stock field carries RGN blocks');
+  assert.ok(stockRgns.some((r) => /\nID 1\nEND$/.test(r)), 'stock field has an id-1 (runway) region');
+
+  // Ours: same 5-line block shape, one per runway, id 1, local-frame ARE
+  // symmetric around the center (rotation lives in POS, so rotated runways
+  // stay landable — GetRectRegionFromPoint untransforms by POS/att first).
+  const asm = assembleSceneryZip({
+    name: 'RGNX',
+    runways: [
+      { x: 0, z: 0, headingDeg: 0, lengthM: 1000, widthM: 30 },
+      { x: 4000, z: 4000, headingDeg: 37, lengthM: 2500, widthM: 60 },
+    ],
+  });
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/rgnx/rgnx.fld']);
+  const ours = fld.match(/^RGN\nARE [^\n]+\nPOS [^\n]+\nID 1\nEND$/gm) || [];
+  assert.equal(ours.length, 2, 'one id-1 region per runway');
+  assert.match(fld, /^RGN\nARE -25\.00 -510\.00 25\.00 510\.00\nPOS 0\.00 0\.00 0\.00 0 0 0\nID 1\nEND$/m);
+  // 37deg: rotation is carried by POS (37 * 32768 / 180 ~ 6736), ARE stays
+  // local.  (These legacy inputs migrate to conv 2 — compass 323 — whose
+  // engine attitude is +37deg again, so the emitted region is unchanged.)
+  assert.match(fld, /^RGN\nARE -40\.00 -1260\.00 40\.00 1260\.00\nPOS 4000\.00 0\.00 4000\.00 6736 0 0\nID 1\nEND$/m);
 });
 
 test('makeDatFromBase extras: SET knobs replace-or-append, smoke gets a generator', () => {

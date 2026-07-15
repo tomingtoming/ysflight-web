@@ -41,6 +41,8 @@ export const OBJECT_PALETTE = [
   { nam: 'M1A1ABRAMS', ja: '戦車', en: 'Tank', glyph: '🛡' },
   { nam: 'SAM', ja: '対空ミサイル（撃ってくる）', en: 'SAM (it shoots!)', glyph: '🚀' },
   { nam: 'VOR', ja: 'VORビーコン', en: 'VOR beacon', glyph: '📡' },
+  { nam: 'VORDME', ja: 'VOR/DMEビーコン（距離つき）', en: 'VOR/DME beacon (with distance)', glyph: '📶' },
+  { nam: 'NDB', ja: 'NDBビーコン', en: 'NDB beacon', glyph: '📻' },
 ];
 
 export const LANG = (function () {
@@ -58,8 +60,13 @@ export function pageUrl(page, params) {
   return './' + page + (q ? '?' + q : '');
 }
 
-export const flyUrl = (air, field, start) =>
-  pageUrl('index.html', { freeflight: [air, field, start].filter(Boolean).join(',') });
+export const flyUrl = (air, field, start) => {
+  // Include the current page so index.html can navigate back here when the flight ends.
+  const returnPage = (location.pathname.split('/').pop() || '');
+  const params = { freeflight: [air, field, start].filter(Boolean).join(',') };
+  if (returnPage) params.return = returnPage;
+  return pageUrl('index.html', params);
+};
 
 // --- OPFS-only install ----------------------------------------------------------
 
@@ -151,12 +158,16 @@ export async function loadCreation(id) {
 }
 
 // Read a pack's payload files back out of the content-addressed store —
-// the aircraft edit flow restores its loose entries from these.
+// the aircraft edit flow restores its loose entries from these.  Creations
+// made before the community-layout change keep payload under the category
+// dir (`prefix`, e.g. 'aircraft/'); newer ones ship it under user/<name>/ —
+// accept both so old creations stay editable.
 export async function packPayload(id, prefix) {
   const rec = await opfs.getRecord(id);
   const out = [];
   for (const f of (rec && rec.files) || []) {
-    if (f.path === RECIPE_FILE || !f.path.startsWith(prefix)) continue;
+    if (f.path === RECIPE_FILE) continue;
+    if (!f.path.startsWith(prefix) && !f.path.startsWith('user/')) continue;
     if (/\.lst(\.idx)?$/i.test(f.path)) continue; // regenerated on assemble
     out.push({ name: f.path.split('/').pop(), bytes: await opfs.getBlob(f.sha256) });
   }

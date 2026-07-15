@@ -100,6 +100,104 @@ test('R (round vertex) flags survive dnm -> glb -> dnm', { skip: !dnmToGlb }, ()
   assert.equal(rOn((v) => v[2] < -1), 0, 'flat quad vertices stay non-R');
 });
 
+// --- chirality (right-handed glTF; see the module-header CHIRALITY note) ---------
+
+// A deliberately asymmetric one-node model: a triangle out on the STARBOARD
+// (+X in YS coords) side, plus a node POS that translates starboard.
+const asymDnm = () => {
+  const srfLines = ['SURF', 'V 2 0 0', 'V 3 1 5', 'V 3 -1 5',
+    'F', 'C 200 100 50', 'N 2.67 0 3.33 -1 0 0', 'V 0 1 2', 'E', 'E'];
+  return new TextEncoder().encode(['DYNAMODEL', 'DNMVER 2',
+    'PCK asym.srf ' + srfLines.length, ...srfLines,
+    'SRF "Wing"', 'FIL asym.srf', 'CLA 0', 'NST 1', 'STA 0 0 0 0 0 0 1',
+    'POS 4 0 0 0 0 0 1', 'CNT 0 0 0', 'REL DEP', 'NCH 0', 'END', 'END', ''].join('\n'));
+};
+
+// Pull the JSON chunk and BIN chunk out of a GLB.
+const glbChunks = (glb) => {
+  const dv = new DataView(glb.buffer, glb.byteOffset, glb.byteLength);
+  const jsonLen = dv.getUint32(12, true);
+  const json = JSON.parse(new TextDecoder().decode(glb.subarray(20, 20 + jsonLen)));
+  const bin = glb.subarray(20 + jsonLen + 8);
+  return { json, bin };
+};
+const positionsOf = (json, bin, meshIx) => {
+  const acc = json.accessors[json.meshes[meshIx].primitives[0].attributes.POSITION];
+  const bv = json.bufferViews[acc.bufferView];
+  const f = new Float32Array(acc.count * 3);
+  const src = new DataView(bin.buffer, bin.byteOffset + (bv.byteOffset || 0), acc.count * 12);
+  for (let i = 0; i < f.length; i++) f[i] = src.getFloat32(i * 4, true);
+  return f;
+};
+
+test('export is right-handed: starboard flips to -X, winding stays outward, rh marked', { skip: !dnmToGlb }, () => {
+  const { json, bin } = glbChunks(dnmToGlb(asymDnm()).glb);
+  const node = json.nodes.find((n) => n.name === 'Wing');
+  assert.equal(node.extras.ysflight.rh, 1, 'rh marker on the node');
+  assert.deepEqual(node.extras.ysflight.pos, [4, 0, 0, 0, 0, 0], 'extras POS stays verbatim YS');
+  assert.equal(node.translation[0], -4, 'node translation mirrored');
+  const p = positionsOf(json, bin, node.mesh);
+  assert.ok([p[0], p[3], p[6]].every((x) => x < 0), 'starboard geometry lands at -X: ' + [p[0], p[3], p[6]]);
+  // Winding-derived normal must agree with the face's outward direction,
+  // which after mirroring is +X (YS -X face normal on a starboard-facing...
+  // no: the face pointed -X (inboard-left) in YS, so mirrored it points +X).
+  const e1 = [p[3] - p[0], p[4] - p[1], p[5] - p[2]];
+  const e2 = [p[6] - p[0], p[7] - p[1], p[8] - p[2]];
+  const nx = e1[1] * e2[2] - e1[2] * e2[1];
+  assert.ok(nx > 0, 'winding-derived normal points +X after the mirror: ' + nx);
+});
+
+test('rh glb round-trips to the exact original YS coordinates', { skip: !dnmToGlb }, () => {
+  const back = glbToDnm(dnmToGlb(asymDnm()).glb);
+  const p = parseDnm(back.dnm);
+  const srf = [...p.srfByName.values()][0];
+  const got = srf.vertices.map((v) => v.join(',')).sort();
+  assert.deepEqual(got, ['2,0,0', '3,-1,5', '3,1,5'], 'vertices restored verbatim');
+  const n = p.nodes.get('Wing');
+  assert.deepEqual(n.pos.slice(0, 3), [4, 0, 0], 'POS restored verbatim');
+  // The restored face must still name an inboard (-X) normal on its N line.
+  assert.ok(srf.faces[0].nom[0] < 0, 'N normal restored inboard: ' + srf.faces[0].nom);
+});
+
+test('legacy glb (extras, no rh marker) imports unflipped — same DNM as the new template', { skip: !glbToDnm }, () => {
+  // The fixture is the pre-flip export of templates/aircraft-starter.dnm; the
+  // shipped template is the SAME dnm through the new right-handed exporter.
+  // Both must import to the identical DNM — that is the whole compatibility
+  // contract for previously downloaded / Blender-edited files.
+  const legacy = glbToDnm(readFileSync(join(here, 'fixtures', 'legacy-aircraft-starter.glb')));
+  const fresh = glbToDnm(readFileSync(join(here, '..', 'templates', 'aircraft-starter.glb')));
+  assert.equal(new TextDecoder().decode(legacy.dnm), new TextDecoder().decode(fresh.dnm));
+});
+
+test('foreign glb (no extras anywhere) is treated as right-handed and mirrored in', { skip: !dnmToGlb }, () => {
+  // Simulate a from-scratch Blender/Flightradar24 file: take an rh export and
+  // strip every extras block.  The geometry inside is genuinely right-handed,
+  // so the importer must mirror it — landing back on the YS original.
+  const glb = dnmToGlb(asymDnm()).glb;
+  const { json, bin } = glbChunks(glb);
+  delete json.asset.extras;
+  for (const n of json.nodes) delete n.extras;
+  const enc = new TextEncoder();
+  const j0 = enc.encode(JSON.stringify(json));
+  const jPad = (4 - (j0.length % 4)) % 4;
+  const bPad = (4 - (bin.length % 4)) % 4;
+  const total = 12 + 8 + j0.length + jPad + 8 + bin.length + bPad;
+  const out = new Uint8Array(total);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, 0x46546c67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+  dv.setUint32(12, j0.length + jPad, true); dv.setUint32(16, 0x4e4f534a, true);
+  out.set(j0, 20); out.fill(0x20, 20 + j0.length, 20 + j0.length + jPad);
+  const bh = 20 + j0.length + jPad;
+  dv.setUint32(bh, bin.length + bPad, true); dv.setUint32(bh + 4, 0x004e4942, true);
+  out.set(bin, bh + 8);
+
+  const p = parseDnm(glbToDnm(out).dnm);
+  const srf = [...p.srfByName.values()][0];
+  // Baked node transform (translation -4 in glTF space) + mirror = YS +4 offset.
+  const got = srf.vertices.map((v) => v.join(',')).sort();
+  assert.deepEqual(got, ['6,0,0', '7,-1,5', '7,1,5'], 'foreign geometry mirrored into YS: ' + got);
+});
+
 test('collision shell bakes visible rest geometry, skips retracted gear', { skip: !dnmToCollisionSrf }, () => {
   const dnm = readFileSync(join(here, '..', 'templates', 'aircraft-starter.dnm'));
   const total = (new TextDecoder().decode(dnm).match(/^F$/gm) || []).length;
