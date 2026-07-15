@@ -106,7 +106,7 @@ H_DATA=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.data")
 # / sw.js etc. bust the service-worker precache -- these are NOT part of the wasm
 # hash, so without this a JS-only change keeps the same id and the SW serves stale.
 H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" \
-  "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" \
+  "$ROOT/web/pack-net.js" "$ROOT/web/pack-update.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" \
   "$ROOT/web/workbench.js" "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" \
   "$ROOT/web/staging.js" \
   "$ROOT/web/dnm-preview.js" "$ROOT/web/studio-shared.js" "$ROOT/web/dnm-gltf.js" \
@@ -130,7 +130,7 @@ cp "$ROOT/web/icons/"*.png "$DIST_DIR/icons/"
 
 # Add-on pack layer: engine-agnostic core (packs.js) + pre-boot UI (packs-ui.js)
 # + vendored unzip (vendor/fflate.js).  Plain ES modules, no bundler.
-cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" "$ROOT/web/workbench.js" "$ROOT/web/staging.js" "$DIST_DIR/"
+cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/pack-update.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" "$ROOT/web/workbench.js" "$ROOT/web/staging.js" "$DIST_DIR/"
 mkdir -p "$DIST_DIR/vendor"
 cp "$ROOT/web/vendor/fflate.js" "$DIST_DIR/vendor/"
 
@@ -156,7 +156,7 @@ sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',dat
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
 
 # Service worker: build id + precache list.
-PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"dnm-parse.js\",\"dnm-lint.js\",\"dnm-lint-ui.js\",\"aircraft-starter.glb\",\"b747-8i.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-movables.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"scenery-edit.js\",\"studio-pack.html\",\"studio-pack.js\",\"studio-pack-core.js\",\"studio-dat.js\",\"dat-schema.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"pack-update.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"dnm-parse.js\",\"dnm-lint.js\",\"dnm-lint-ui.js\",\"aircraft-starter.glb\",\"b747-8i.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-movables.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"scenery-edit.js\",\"studio-pack.html\",\"studio-pack.js\",\"studio-pack-core.js\",\"studio-dat.js\",\"dat-schema.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 
@@ -177,6 +177,8 @@ cat > "$DIST_DIR/_headers" <<EOF
 /packs-ui.js
   Cache-Control: no-cache
 /pack-net.js
+  Cache-Control: no-cache
+/pack-update.js
   Cache-Control: no-cache
 /opfs-store.js
   Cache-Control: no-cache

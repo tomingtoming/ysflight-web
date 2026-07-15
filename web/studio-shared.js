@@ -158,12 +158,16 @@ export async function loadCreation(id) {
 }
 
 // Read a pack's payload files back out of the content-addressed store —
-// the aircraft edit flow restores its loose entries from these.
+// the aircraft edit flow restores its loose entries from these.  Creations
+// made before the community-layout change keep payload under the category
+// dir (`prefix`, e.g. 'aircraft/'); newer ones ship it under user/<name>/ —
+// accept both so old creations stay editable.
 export async function packPayload(id, prefix) {
   const rec = await opfs.getRecord(id);
   const out = [];
   for (const f of (rec && rec.files) || []) {
-    if (f.path === RECIPE_FILE || !f.path.startsWith(prefix)) continue;
+    if (f.path === RECIPE_FILE) continue;
+    if (!f.path.startsWith(prefix) && !f.path.startsWith('user/')) continue;
     if (/\.lst(\.idx)?$/i.test(f.path)) continue; // regenerated on assemble
     out.push({ name: f.path.split('/').pop(), bytes: await opfs.getBlob(f.sha256) });
   }
