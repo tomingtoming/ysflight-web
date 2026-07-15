@@ -7,7 +7,11 @@ import {
   saveOrReplace, loadCreation, OBJECT_PALETTE, WORLD_M,
   DEFAULT_FLY_AIRCRAFT, stockIndex,
 } from './studio-shared.js';
-import { assembleSceneryZip, SCENERY_START } from './workbench.js';
+import { assembleSceneryZip, migrateScenery, runwayLightFixtures, SCENERY_START } from './workbench.js';
+import {
+  hitTest, itemAt, moveSelected, setHeading, duplicateSelected, deleteSelected,
+  runwayCorners,
+} from './scenery-edit.js';
 
 // Bilingual strings (island keys verbatim from workbench-page.js S.ja / S.en).
 const S = ({
@@ -27,7 +31,9 @@ const S = ({
     modeMountain: '⛰ 山',
     modeStart: '🛫 スタート',
     modeRunway: '🛬 滑走路',
+    modeSelect: '🖱 選択',
     modeHint: {
+      select: 'クリックで選択・ドラッグで移動（島は頂点もつかめます）。数値で位置・向きを編集、複製・削除も',
       draw: 'ドラッグで海岸線を描くと島になります',
       object: '置きたい物を選んでクリックで配置（空母は本当に着艦・発艦できます）',
       mountain: 'クリックで山を置きます（なだらかな本物の地形＝緩い斜面には着陸もできます）',
@@ -42,6 +48,14 @@ const S = ({
     rwWidth: '幅 (m)',
     stAlt: '開始高度 (m)',
     stSpeed: '開始速度 (m/s)',
+    selNone: '（何も選択されていません — 地図上の要素をクリック）',
+    selKind: { island: '🏝 島', object: '🚢 置き物', mountain: '⛰ 山', start: '🛫 スタート', runway: '🛬 滑走路' },
+    selX: '東西 (m)', selZ: '南北 (m)',
+    selVerts: (n) => '頂点 ' + n + ' 個',
+    selDup: '⧉ 複製', selDel: '🗑 削除',
+    rwIls: '📡 ILS（計器進入）',
+    rwVaid: '進入角指示灯',
+    vaidNone: 'なし', vaidPapi: 'PAPI', vaidVasi: 'VASI',
     isDone: (n, k) => '✓ マップ「' + n + '」（島 ' + k + ' 個）を保存しました',
     flyWhat: 'テスト飛行の機体',
     fly: (n) => '🛫 ' + n + ' で飛ぶ',
@@ -66,7 +80,9 @@ const S = ({
     modeMountain: '⛰ Mountains',
     modeStart: '🛫 Starts',
     modeRunway: '🛬 Runways',
+    modeSelect: '🖱 Select',
     modeHint: {
+      select: 'Click to select, drag to move (islands: grab a vertex too). Edit numbers, duplicate or delete',
       draw: 'Drag to draw coastlines — each stroke becomes an island',
       object: 'Pick something and click to place it (the carrier really works for landing/launching)',
       mountain: 'Click to place a mountain (real terrain — gentle slopes are landable)',
@@ -81,6 +97,14 @@ const S = ({
     rwWidth: 'Width (m)',
     stAlt: 'Start altitude (m)',
     stSpeed: 'Start speed (m/s)',
+    selNone: '(nothing selected — click an element on the map)',
+    selKind: { island: '🏝 Island', object: '🚢 Object', mountain: '⛰ Mountain', start: '🛫 Start', runway: '🛬 Runway' },
+    selX: 'East (m)', selZ: 'North (m)',
+    selVerts: (n) => n + ' vertices',
+    selDup: '⧉ Duplicate', selDel: '🗑 Delete',
+    rwIls: '📡 ILS (instrument approach)',
+    rwVaid: 'Approach slope lights',
+    vaidNone: 'None', vaidPapi: 'PAPI', vaidVasi: 'VASI',
     isDone: (n, k) => '✓ Saved map "' + n + '" (' + k + ' island' + (k === 1 ? '' : 's') + ')',
     flyWhat: 'Test-fly aircraft',
     fly: (n) => '🛫 Fly ' + n,
@@ -124,7 +148,7 @@ async function main() {
   rail.appendChild(el('h2', null, S.usageTitle));
   rail.appendChild(el('p', 'intro', S.isIntro));
   const modeLabels = {
-    draw: S.modeDraw, object: S.modeObject, mountain: S.modeMountain, start: S.modeStart, runway: S.modeRunway,
+    select: S.modeSelect, draw: S.modeDraw, object: S.modeObject, mountain: S.modeMountain, start: S.modeStart, runway: S.modeRunway,
   };
   const legend = el('div');
   legend.style.cssText = 'color:#7d93b0;font-size:11.5px';
@@ -203,28 +227,60 @@ async function main() {
   stCtl.appendChild(clab(S.stSpeed));  stCtl.appendChild(stSpd);
   stCtl.appendChild(clab(S.headingDeg)); stCtl.appendChild(stHead);
 
+  // Small helpers for the approach-aid controls (used in runway mode and in
+  // the select panel for an existing runway).
+  const ilsCheck = (get, set) => {
+    const lb = el('label');
+    lb.style.cssText = 'display:inline-flex;align-items:center;gap:4px;color:#8fa3bb;font-size:12px;white-space:nowrap;cursor:pointer';
+    const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!get() });
+    cb.addEventListener('change', () => set(cb.checked));
+    lb.appendChild(cb);
+    lb.appendChild(document.createTextNode(S.rwIls));
+    return lb;
+  };
+  const vaidSel = (get, set) => {
+    const sl = document.createElement('select');
+    sl.style.cssText = 'padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+    for (const [v, label] of [['', S.vaidNone], ['papi', S.vaidPapi], ['vasi', S.vaidVasi]]) {
+      sl.appendChild(Object.assign(el('option'), { value: v, textContent: label }));
+    }
+    sl.value = get() || '';
+    sl.addEventListener('change', () => set(sl.value || undefined));
+    return sl;
+  };
+
   // Runway mode controls
   const rwLen  = numIn(2000, 400, 6000, 90);
   const rwWid  = numIn(45,   20,  120,  80);
   const rwHead = numIn(0,    0,   359,  70);
+  let rwIls = false, rwVaid;
   const rwCtl  = el('div');
   rwCtl.style.cssText = 'display:none;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px';
   rwCtl.appendChild(clab(S.rwLength));   rwCtl.appendChild(rwLen);
   rwCtl.appendChild(clab(S.rwWidth));    rwCtl.appendChild(rwWid);
   rwCtl.appendChild(clab(S.headingDeg)); rwCtl.appendChild(rwHead);
+  rwCtl.appendChild(ilsCheck(() => rwIls, (v) => { rwIls = v; }));
+  rwCtl.appendChild(clab(S.rwVaid));     rwCtl.appendChild(vaidSel(() => rwVaid, (v) => { rwVaid = v; }));
 
-  const perModeCtls = { draw: null, object: objCtl, mountain: mtCtl, start: stCtl, runway: rwCtl };
+  // Select mode: property mini-panel (rebuilt per selection by renderSelPanel).
+  const selCtl = el('div');
+  selCtl.style.cssText = 'display:none;align-items:center;gap:6px;flex-wrap:wrap;margin-top:4px';
+
+  const perModeCtls = { select: selCtl, draw: null, object: objCtl, mountain: mtCtl, start: stCtl, runway: rwCtl };
+
+  let deselect = () => {}; // bound after the selection state exists below
 
   const setMode = (m) => {
     mode = m;
     modeHintEl.textContent = S.modeHint[m];
     for (const [k, b] of Object.entries(modeBtns)) b.className = k === m ? 'accent' : '';
-    for (const ctl of [objCtl, mtCtl, stCtl, rwCtl]) ctl.style.display = 'none';
+    for (const ctl of [selCtl, objCtl, mtCtl, stCtl, rwCtl]) ctl.style.display = 'none';
     const c = perModeCtls[m];
     if (c) c.style.display = 'flex';
+    if (m !== 'select') deselect();
   };
 
-  for (const [m, label] of [['draw', S.modeDraw], ['object', S.modeObject], ['mountain', S.modeMountain], ['runway', S.modeRunway], ['start', S.modeStart]]) {
+  for (const [m, label] of [['draw', S.modeDraw], ['select', S.modeSelect], ['object', S.modeObject], ['mountain', S.modeMountain], ['runway', S.modeRunway], ['start', S.modeStart]]) {
     const b = el('button', m === 'draw' ? 'accent' : null, label);
     b.addEventListener('click', () => setMode(m));
     modeBtns[m] = b;
@@ -236,6 +292,7 @@ async function main() {
   toolRow.appendChild(undoBtn);
   toolRow.appendChild(clearBtn);
   toolbar.appendChild(toolRow);
+  toolbar.appendChild(selCtl);
   toolbar.appendChild(objCtl);
   toolbar.appendChild(mtCtl);
   toolbar.appendChild(stCtl);
@@ -266,17 +323,38 @@ async function main() {
   const ctx = canvas.getContext('2d');
 
   // ── drawing state ─────────────────────────────────────────────────────────────
+  // Everything lives in WORLD METERS (recipe shape); only the in-progress
+  // stroke is canvas px.  `state` is the shared handle for scenery-edit.js.
 
-  const polygons  = [];   // islands in canvas px: [[x,y],...]
-  const objects   = [];   // {nam, x, z, headingDeg} in world meters
-  const mountains = [];   // {x, z, radiusM, heightM} in world meters
-  const starts    = [];   // {x, z, altM, speedMS, headingDeg} in world meters
-  const runways   = [];   // {x, z, headingDeg, lengthM, widthM} in world meters
-  const placed    = [];   // undo order: 'poly' | 'object' | 'mountain' | 'start'
+  const islands   = [];   // {points: [[x, z], ...]}
+  const objects   = [];   // {nam, x, z, headingDeg}
+  const mountains = [];   // {x, z, radiusM, heightM}
+  const starts    = [];   // {x, z, altM, speedMS, headingDeg}
+  const runways   = [];   // {x, z, headingDeg, lengthM, widthM}
+  const state     = { islands, objects, mountains, starts, runways };
   let stroke = null;
 
-  const toWorld   = ([x, y]) => [(x / canvas.width  - 0.5) * WORLD_M, (y / canvas.height - 0.5) * WORLD_M];
-  const fromWorld = ([x, z]) => [(x / WORLD_M + 0.5) * canvas.width,  (z / WORLD_M + 0.5) * canvas.height];
+  // Snapshot undo: push a deep copy before every mutation (place, drag, edit,
+  // delete, duplicate, clear); undo restores in place (array identity kept).
+  const undoStack = [];
+  const pushUndo = () => {
+    undoStack.push(JSON.stringify(state));
+    if (undoStack.length > 60) undoStack.shift();
+  };
+  const popUndo = () => {
+    const snap = undoStack.pop();
+    if (!snap) return;
+    const s = JSON.parse(snap);
+    for (const k of Object.keys(state)) state[k].splice(0, state[k].length, ...s[k]);
+  };
+
+  let sel = null;      // {kind, index, vertex?} — select mode only
+  let drag = null;     // {x, z, moved} — world coords of the last drag point
+
+  // World axes (engine truth, see compassToEngineDeg in workbench.js):
+  // +x = east, +z = north.  The canvas is a north-up map, so canvas -y = +z.
+  const toWorld   = ([x, y]) => [(x / canvas.width  - 0.5) * WORLD_M, (0.5 - y / canvas.height) * WORLD_M];
+  const fromWorld = ([x, z]) => [(x / WORLD_M + 0.5) * canvas.width,  (0.5 - z / WORLD_M) * canvas.height];
   const pxPerM    = canvas.width / WORLD_M;
 
   // ── redraw ────────────────────────────────────────────────────────────────────
@@ -287,7 +365,9 @@ async function main() {
     ctx.strokeStyle = 'rgba(255,255,255,.25)';
     ctx.strokeRect(0.5, 0.5, canvas.width - 1, canvas.height - 1);
 
-    for (const poly of polygons.concat(stroke && stroke.length >= 3 ? [stroke] : [])) {
+    const polys = islands.map((i) => (i.points || []).map(fromWorld))
+      .concat(stroke && stroke.length >= 3 ? [stroke] : []);
+    for (const poly of polys) {
       ctx.beginPath();
       ctx.moveTo(poly[0][0], poly[0][1]);
       for (const [x, y] of poly.slice(1)) ctx.lineTo(x, y);
@@ -330,6 +410,12 @@ async function main() {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
+      // Approach aids, where they will stand in the compiled field.
+      for (const g of runwayLightFixtures(rw)) {
+        const [gx, gy] = fromWorld([g.x, g.z]);
+        ctx.fillStyle = g.nam === 'ILS' ? '#39d5ff' : g.nam === 'VASI' ? '#ffb84d' : '#ff5964';
+        ctx.fillRect(gx - 2, gy - 2, 4, 4);
+      }
     }
 
     ctx.textAlign    = 'center';
@@ -343,7 +429,7 @@ async function main() {
 
     for (const sp of starts) {
       const [x, y] = fromWorld([sp.x, sp.z]);
-      // Heading 0 = north = canvas -y
+      // Compass 0 = north = canvas -y
       const hx = Math.sin((sp.headingDeg || 0) * Math.PI / 180);
       const hy = -Math.cos((sp.headingDeg || 0) * Math.PI / 180);
       ctx.strokeStyle = '#ffd34d';
@@ -356,6 +442,43 @@ async function main() {
       ctx.fillText('🛫', x, y);
     }
     ctx.lineWidth = 1;
+
+    // Selection highlight (select mode).
+    const it = itemAt(state, sel);
+    if (it) {
+      ctx.strokeStyle = '#4da3ff';
+      ctx.lineWidth = 2;
+      if (sel.kind === 'island') {
+        const pts = (it.points || []).map(fromWorld);
+        if (pts.length >= 2) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+          ctx.closePath();
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#4da3ff';
+        for (const [x, y] of pts) ctx.fillRect(x - 2.5, y - 2.5, 5, 5);
+      } else if (sel.kind === 'runway') {
+        const pts = runwayCorners(it, 60).map(fromWorld);
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+        ctx.closePath();
+        ctx.stroke();
+      } else if (sel.kind === 'mountain') {
+        const [x, y] = fromWorld([it.x, it.z]);
+        ctx.beginPath();
+        ctx.arc(x, y, (it.radiusM || 1500) * pxPerM, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        const [x, y] = fromWorld([it.x, it.z]);
+        ctx.beginPath();
+        ctx.arc(x, y, 14, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
   };
 
   seaIn.addEventListener('input', redraw);
@@ -376,23 +499,42 @@ async function main() {
       return;
     }
     const [wx, wz] = toWorld(p);
+    if (mode === 'select') {
+      sel = hitTest(state, [wx, wz], 10 / pxPerM); // 10px click slop, in meters
+      drag = sel ? { x: wx, z: wz, moved: false } : null;
+      if (sel) canvas.setPointerCapture(e.pointerId);
+      renderSelPanel();
+      redraw();
+      return;
+    }
+    pushUndo();
     if (mode === 'object') {
       objects.push({ nam: objSel.value, x: wx, z: wz, headingDeg: Number(objHead.value) || 0 });
-      placed.push('object');
     } else if (mode === 'mountain') {
       mountains.push({ x: wx, z: wz, radiusM: Number(mtRad.value) || 1500, heightM: Number(mtHt.value) || 300 });
-      placed.push('mountain');
     } else if (mode === 'runway') {
-      runways.push({ x: wx, z: wz, headingDeg: Number(rwHead.value) || 0, lengthM: Number(rwLen.value) || 2000, widthM: Number(rwWid.value) || 45 });
-      placed.push('runway');
+      runways.push({
+        x: wx, z: wz, headingDeg: Number(rwHead.value) || 0,
+        lengthM: Number(rwLen.value) || 2000, widthM: Number(rwWid.value) || 45,
+        ils: rwIls || undefined, vaid: rwVaid,
+      });
     } else if (mode === 'start') {
       starts.push({ x: wx, z: wz, altM: Number(stAlt.value) || 0, speedMS: Number(stSpd.value) || 0, headingDeg: Number(stHead.value) || 0 });
-      placed.push('start');
     }
     redraw();
   });
 
   canvas.addEventListener('pointermove', (e) => {
+    if (mode === 'select') {
+      if (!drag || !sel) return;
+      const [wx, wz] = toWorld(pt(e));
+      if (!drag.moved) { pushUndo(); drag.moved = true; } // one undo step per drag
+      moveSelected(state, sel, wx - drag.x, wz - drag.z);
+      drag.x = wx; drag.z = wz;
+      refreshSelValues();
+      redraw();
+      return;
+    }
     if (!stroke) return;
     const p = pt(e);
     const last = stroke[stroke.length - 1];
@@ -401,28 +543,136 @@ async function main() {
   });
 
   const endStroke = () => {
-    if (stroke && stroke.length >= 3) { polygons.push(stroke); placed.push('poly'); }
+    drag = null;
+    if (stroke && stroke.length >= 3) { pushUndo(); islands.push({ points: stroke.map(toWorld) }); }
     stroke = null;
     redraw();
   };
   canvas.addEventListener('pointerup',     endStroke);
-  canvas.addEventListener('pointercancel', () => { stroke = null; redraw(); });
+  canvas.addEventListener('pointercancel', () => { stroke = null; drag = null; redraw(); });
 
   // ── undo / clear ──────────────────────────────────────────────────────────────
 
   undoBtn.addEventListener('click', () => {
-    const kind = placed.pop();
-    if (kind === 'poly')     polygons.pop();
-    else if (kind === 'object')   objects.pop();
-    else if (kind === 'mountain') mountains.pop();
-    else if (kind === 'runway')   runways.pop();
-    else if (kind === 'start')    starts.pop();
-    redraw();
+    popUndo();
+    deselect(); // indices may have shifted; also redraws + panel
   });
 
   clearBtn.addEventListener('click', () => {
-    polygons.length = 0; objects.length = 0; mountains.length = 0; starts.length = 0; runways.length = 0; placed.length = 0;
-    redraw();
+    pushUndo();
+    for (const k of Object.keys(state)) state[k].length = 0;
+    deselect();
+  });
+
+  // ── select mode: property panel + keyboard ───────────────────────────────────
+
+  deselect = () => { sel = null; drag = null; renderSelPanel(); redraw(); };
+
+  // Live-value inputs, refreshed during drags (skipped while being typed in).
+  let selValueIns = []; // [{input, get}]
+  const refreshSelValues = () => {
+    for (const { input, get } of selValueIns) {
+      if (document.activeElement !== input) input.value = String(get());
+    }
+  };
+
+  // A numeric property field: pushes ONE undo snapshot per focus session, then
+  // writes through live.
+  const propIn = (get, set, { min, max, step = 1, w = 90 } = {}) => {
+    const i = numIn(get(), min === undefined ? -WORLD_M : min, max === undefined ? WORLD_M : max, w);
+    i.step = String(step);
+    let armed = false;
+    i.addEventListener('focus', () => { armed = true; });
+    i.addEventListener('input', () => {
+      if (i.value === '' || !Number.isFinite(Number(i.value))) return;
+      if (armed) { pushUndo(); armed = false; }
+      set(Number(i.value));
+      redraw();
+    });
+    selValueIns.push({ input: i, get });
+    return i;
+  };
+
+  function renderSelPanel() {
+    selCtl.innerHTML = '';
+    selValueIns = [];
+    const it = itemAt(state, sel);
+    if (!it) {
+      selCtl.appendChild(clab(S.selNone));
+      return;
+    }
+    selCtl.appendChild(clab(S.selKind[sel.kind]));
+    if (sel.kind === 'island') {
+      selCtl.appendChild(clab(S.selVerts((it.points || []).length)));
+    } else {
+      selCtl.appendChild(clab(S.selX));
+      selCtl.appendChild(propIn(() => Math.round(it.x), (v) => { it.x = v; }));
+      selCtl.appendChild(clab(S.selZ));
+      selCtl.appendChild(propIn(() => Math.round(it.z), (v) => { it.z = v; }));
+    }
+    if (sel.kind === 'object') {
+      const os = objSel.cloneNode(true);
+      os.value = it.nam;
+      os.addEventListener('change', () => { pushUndo(); it.nam = os.value; redraw(); });
+      selCtl.appendChild(clab(S.objPick));
+      selCtl.appendChild(os);
+    }
+    if (sel.kind === 'object' || sel.kind === 'start' || sel.kind === 'runway') {
+      selCtl.appendChild(clab(S.headingDeg));
+      selCtl.appendChild(propIn(() => Math.round(it.headingDeg || 0),
+        (v) => setHeading(state, sel, v), { min: 0, max: 359, w: 70 }));
+    }
+    if (sel.kind === 'mountain') {
+      selCtl.appendChild(clab(S.mtRadius));
+      selCtl.appendChild(propIn(() => Math.round(it.radiusM || 1500), (v) => { it.radiusM = v; }, { min: 300, max: 6000 }));
+      selCtl.appendChild(clab(S.mtHeight));
+      selCtl.appendChild(propIn(() => Math.round(it.heightM || 300), (v) => { it.heightM = v; }, { min: 30, max: 2000 }));
+    }
+    if (sel.kind === 'start') {
+      selCtl.appendChild(clab(S.stAlt));
+      selCtl.appendChild(propIn(() => Math.round(it.altM || 0), (v) => { it.altM = v; }, { min: 0, max: 10000 }));
+      selCtl.appendChild(clab(S.stSpeed));
+      selCtl.appendChild(propIn(() => Math.round(it.speedMS || 0), (v) => { it.speedMS = v; }, { min: 0, max: 400, w: 80 }));
+    }
+    if (sel.kind === 'runway') {
+      selCtl.appendChild(clab(S.rwLength));
+      selCtl.appendChild(propIn(() => Math.round(it.lengthM || 2000), (v) => { it.lengthM = v; }, { min: 400, max: 6000 }));
+      selCtl.appendChild(clab(S.rwWidth));
+      selCtl.appendChild(propIn(() => Math.round(it.widthM || 45), (v) => { it.widthM = v; }, { min: 20, max: 120, w: 80 }));
+      selCtl.appendChild(ilsCheck(() => it.ils, (v) => { pushUndo(); it.ils = v || undefined; redraw(); }));
+      selCtl.appendChild(clab(S.rwVaid));
+      selCtl.appendChild(vaidSel(() => it.vaid, (v) => { pushUndo(); it.vaid = v; redraw(); }));
+    }
+    const dupBtn = el('button', null, S.selDup);
+    dupBtn.addEventListener('click', () => {
+      pushUndo();
+      sel = duplicateSelected(state, sel, 500, -500); // nudge SE so the copy is visible
+      renderSelPanel();
+      redraw();
+    });
+    const delBtn = el('button', null, S.selDel);
+    delBtn.addEventListener('click', () => {
+      pushUndo();
+      deleteSelected(state, sel);
+      deselect();
+    });
+    selCtl.appendChild(dupBtn);
+    selCtl.appendChild(delBtn);
+  }
+  renderSelPanel();
+
+  document.addEventListener('keydown', (e) => {
+    if (mode !== 'select' || !sel) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      pushUndo();
+      deleteSelected(state, sel);
+      deselect();
+    } else if (e.key === 'Escape') {
+      deselect();
+    }
   });
 
   // ── save ──────────────────────────────────────────────────────────────────────
@@ -435,22 +685,23 @@ async function main() {
     saveMsg.textContent = S.working;
     try {
       const scenery = {
+        conv: 2, // headingDeg fields are compass degrees (see migrateScenery)
         name: nameIn.value.trim(),
         ground: hex2rgb(seaIn.value),
         sky:    hex2rgb(skyIn.value),
         land:   hex2rgb(landIn.value),
         startAltM: Math.max(100, Number(altIn.value) || 1000),
-        islands:   polygons.map((poly) => ({ points: poly.map(toWorld) })),
-        objects:   objects.slice(),
-        mountains: mountains.slice(),
-        starts:    starts.slice(),
-        runways:   runways.slice(),
+        islands:   islands.map((i) => ({ ...i, points: (i.points || []).map(([x, z]) => [x, z]) })),
+        objects:   objects.map((o) => ({ ...o })),
+        mountains: mountains.map((m) => ({ ...m })),
+        starts:    starts.map((s) => ({ ...s })),
+        runways:   runways.map((r) => ({ ...r })),
       };
       const asm = assembleSceneryZip({ ...scenery, recipe: { scenery } });
       const res = await saveOrReplace(asm.zipBytes, asm.packName, editingId);
       editingId = res.id; // further saves replace this creation
 
-      saveMsg.textContent = S.isDone(asm.ident, polygons.length);
+      saveMsg.textContent = S.isDone(asm.ident, islands.length);
 
       // Build / rebuild the test-fly row with up to 20 stock identities.
       flyRow.innerHTML = '';
@@ -489,14 +740,16 @@ async function main() {
         return;
       }
       if (c.recipe.type === 'scenery') {
-        const sc = c.recipe.scenery || {};
+        // Legacy (pre-conv-2) recipes stored headings in engine attitude sign;
+        // migrate so the editor state is compass and recompiles identically.
+        const sc = migrateScenery(c.recipe.scenery || {});
         nameIn.value = sc.name || c.name || '';
         if (sc.ground) seaIn.value = rgb2hex(sc.ground);
         if (sc.sky)    skyIn.value  = rgb2hex(sc.sky);
         if (sc.land)   landIn.value = rgb2hex(sc.land);
         if (sc.startAltM) altIn.value = String(sc.startAltM);
-        polygons.length  = 0;
-        for (const isl of sc.islands   || []) polygons.push((isl.points || []).map(fromWorld));
+        islands.length   = 0;
+        for (const isl of sc.islands   || []) islands.push({ ...isl, points: (isl.points || []).map(([x, z]) => [x, z]) });
         objects.length   = 0;
         for (const o of sc.objects     || []) objects.push({ ...o });
         mountains.length = 0;
@@ -505,7 +758,7 @@ async function main() {
         for (const sp of sc.starts     || []) starts.push({ ...sp });
         runways.length   = 0;
         for (const rw of sc.runways    || []) runways.push({ ...rw });
-        placed.length = 0; // undo history does not survive a re-open
+        undoStack.length = 0; // undo history does not survive a re-open
         editingId = editId;
         editBadge.textContent = S.libEditingBadge(c.name || editId);
       }
@@ -518,7 +771,9 @@ async function main() {
   window.ysfwStudio = {
     ready: true,
     page: 'scenery',
-    counts: () => ({ islands: polygons.length, objects: objects.length, mountains: mountains.length, starts: starts.length, runways: runways.length }),
+    counts: () => ({ islands: islands.length, objects: objects.length, mountains: mountains.length, starts: starts.length, runways: runways.length }),
+    selection: () => (sel ? { ...sel } : null),
+    state: () => JSON.parse(JSON.stringify(state)),
   };
 }
 
