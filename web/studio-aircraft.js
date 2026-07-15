@@ -18,6 +18,7 @@ import {
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf, estimateCockpit } from './dnm-gltf.js';
+import { mountDatEditor } from './studio-dat.js';
 
 const S = ({
   ja: {
@@ -212,6 +213,8 @@ let previewWrap, surfaceHint, animBar;
 let editBadge, slotsBox, acMsg, btnRow;
 let paintPanel, paintMsg;
 let ckInputs = null, ckSrcNote = null, ckViewBtn = null;
+let datEditorWrap = null;    // container div for the .dat editor panel
+let datEditorHandle = null;  // { load } returned by mountDatEditor
 
 // --- the big preview surface (main) ------------------------------------------------
 
@@ -307,7 +310,7 @@ function rebuildSlots(preset) {
   };
   if (!preset && generatedDat) sels.dat.value = '@generated';
   sels.visual.addEventListener('change', () => { refreshPreview(); renderPaint(); deriveCockpit(); });
-  sels.dat.addEventListener('change', deriveCockpit);
+  sels.dat.addEventListener('change', () => { deriveCockpit(); refreshDatEditor(); });
 
   const nameIn = Object.assign(document.createElement('input'), {
     type: 'text',
@@ -373,6 +376,32 @@ function rebuildSlots(preset) {
   refreshPreview();
   renderPaint();
   deriveCockpit();
+  refreshDatEditor();
+}
+
+// --- dat editor refresh -------------------------------------------------------------
+
+function refreshDatEditor() {
+  if (!datEditorWrap) return;
+  datEditorWrap.innerHTML = '';
+  datEditorHandle = null;
+  const pick = (sel) => (sel && sel.value === '@generated' ? generatedDat
+    : sel && sel.value ? byName.get(sel.value) : null);
+  const datEntry = sels ? pick(sels.dat) : null;
+  if (!datEntry) return;
+  const h2 = el('h2', null, LANG === 'ja' ? '✏️ .dat エディタ' : '✏️ .dat Editor');
+  datEditorWrap.appendChild(h2);
+  const intro = el('p', 'intro', LANG === 'ja'
+    ? '飛行特性の全パラメータをフォームまたは生テキストで編集できます。保存すると組み立てに反映されます。'
+    : 'Edit all flight-model parameters as a form or raw text. Save writes back into the assembly.');
+  datEditorWrap.appendChild(intro);
+  datEditorHandle = mountDatEditor(datEditorWrap, {
+    getBytes: () => datEntry.bytes,
+    setBytes: (bytes) => { datEntry.bytes = bytes; },
+    LANG,
+    el,
+    row,
+  });
 }
 
 function buildAssembleSection(rail) {
@@ -399,6 +428,9 @@ function buildAssembleSection(rail) {
   btnRow = el('div', 'btnrow');
   rail.appendChild(acMsg);
   rail.appendChild(btnRow);
+
+  datEditorWrap = el('div');
+  rail.appendChild(datEditorWrap);
 
   const addFiles = async (fileList) => {
     let glbBase = null;
