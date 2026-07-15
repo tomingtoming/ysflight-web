@@ -433,6 +433,93 @@ export function setDatCockpit(bytes, { x, y, z }) {
   return s2b(lines.join('\n'));
 }
 
+// --- extra viewpoints (.dat EXCAMERA) ----------------------------------------------
+
+// Named additional viewpoints — the F1 view cycle's extra stops
+// (fsairplaneproperty.cpp case 144 -> FsAdditionalViewpoint):
+//   EXCAMERA "<name>" <x> <y> <z> <h> <p> <b> INSIDE|OUTSIDE|CABIN [NOHUD] [NOINSTPANEL]
+// Positions carry a length-unit suffix and angles an angle-unit suffix — the
+// engine's FsGetUnit REJECTS bare numbers (the whole line is dropped), and the
+// parser requires ac>=9, so the type flag is effectively mandatory too.  Stock
+// always writes "m"/"deg" and an explicit type; so do we.  h/p/b follow
+// YsAtt3: h yaw (left +), p pitch (up +), b bank.  Defaults when flags are
+// absent: INSIDE, HUD and instrument panel shown (NOHUD/NOINSTPANEL hide them
+// for that viewpoint only; the main cockpit's pair is CKPITHUD/CKPITIST).
+// The DAT ORDER of EXCAMERA lines is the F1 cycle order — preserved verbatim.
+
+// One EXCAMERA line -> a camera object, or null when it does not parse.
+// Angles come back in DEGREES (matching what the .dat displays), lengths in
+// meters.  Lenient on units the way getDatCockpit is: m/ft for lengths,
+// deg/rad for angles, bare = m/deg.
+function parseExCameraLine(line) {
+  const len = (tok) => (/ft$/i.test(tok) ? parseFloat(tok) * 0.3048 : parseFloat(tok));
+  const ang = (tok) => (/rad$/i.test(tok) ? (parseFloat(tok) * 180) / Math.PI : parseFloat(tok)) + 0; // +0: -0deg -> 0
+  const m = /^EXCAMERA\s+(?:"([^"]*)"|(\S+))\s+(\S.*)$/.exec(line.trim());
+  if (!m) return null;
+  const t = m[3].split(/\s+/);
+  if (t.length < 6) return null;
+  const cam = {
+    name: m[1] !== undefined ? m[1] : m[2],
+    x: len(t[0]), y: len(t[1]), z: len(t[2]),
+    h: ang(t[3]), p: ang(t[4]), b: ang(t[5]),
+    type: 'INSIDE', noHud: false, noInstPanel: false,
+  };
+  if (![cam.x, cam.y, cam.z, cam.h, cam.p, cam.b].every(Number.isFinite)) return null;
+  for (const f of t.slice(6)) {
+    if (f[0] === '#') break;
+    if (f === 'OUTSIDE' || f === 'CABIN' || f === 'INSIDE') cam.type = f;
+    else if (f === 'NOHUD') cam.noHud = true;
+    else if (f === 'NOINSTPANEL') cam.noInstPanel = true;
+  }
+  return cam;
+}
+
+// Read every EXCAMERA line, in file order (= the F1 cycle order).
+export function getDatExCameras(bytes) {
+  const cams = [];
+  for (const line of b2s(bytes).split('\n')) {
+    const cam = parseExCameraLine(line);
+    if (cam) cams.push(cam);
+  }
+  return cams;
+}
+
+// Rewrite the .dat's EXCAMERA set to exactly `cams` (same shape as
+// getDatExCameras; angles in degrees).  Byte-preserving outside the touched
+// lines: existing EXCAMERA lines are replaced pairwise in place (keeping each
+// line's CR), extra new cameras are inserted right after the last EXCAMERA
+// line (else after COCKPITP, else after IDENTIFY — stock keeps them in the
+// header block), and surplus old lines are removed.  Order in = F1 cycle out.
+export function setDatExCameras(bytes, cams) {
+  const fmtL = (v) => String(Math.round(v * 1000) / 1000) + 'm';
+  const fmtA = (v) => String(Math.round((v || 0) * 100) / 100 + 0) + 'deg';
+  const lineOf = (c) =>
+    'EXCAMERA "' + String(c.name || 'VIEW').replace(/"/g, "'") + '" ' +
+    fmtL(c.x) + ' ' + fmtL(c.y) + ' ' + fmtL(c.z) + ' ' +
+    fmtA(c.h) + ' ' + fmtA(c.p) + ' ' + fmtA(c.b) + ' ' +
+    (c.type === 'OUTSIDE' || c.type === 'CABIN' ? c.type : 'INSIDE') +
+    (c.noHud ? ' NOHUD' : '') + (c.noInstPanel ? ' NOINSTPANEL' : '');
+  const lines = b2s(bytes).split('\n');
+  const ixs = [];
+  lines.forEach((l, i) => { if (/^EXCAMERA\b/.test(l)) ixs.push(i); });
+  const n = Math.min(ixs.length, cams.length);
+  const key = (c) => c && JSON.stringify([c.name, c.x, c.y, c.z, c.h, c.p, c.b, c.type, !!c.noHud, !!c.noInstPanel]);
+  for (let i = 0; i < n; i++) {
+    // Value-identical lines keep their original bytes (stock spacing intact).
+    if (key(parseExCameraLine(lines[ixs[i]])) === key(cams[i])) continue;
+    lines[ixs[i]] = lineOf(cams[i]) + (lines[ixs[i]].endsWith('\r') ? '\r' : '');
+  }
+  if (cams.length > ixs.length) {
+    let anchor = ixs.length ? ixs[ixs.length - 1] : lines.findIndex((l) => /^COCKPITP\b/.test(l));
+    if (anchor < 0) anchor = lines.findIndex((l) => /^IDENTIFY\b/.test(l));
+    const eol = anchor >= 0 && lines[anchor].endsWith('\r') ? '\r' : '';
+    lines.splice(anchor + 1, 0, ...cams.slice(ixs.length).map((c) => lineOf(c) + eol));
+  } else {
+    for (let i = ixs.length - 1; i >= cams.length; i--) lines.splice(ixs[i], 1);
+  }
+  return s2b(lines.join('\n'));
+}
+
 // --- scenery wizard --------------------------------------------------------------
 
 export const SCENERY_START = 'START01';

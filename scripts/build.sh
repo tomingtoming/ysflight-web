@@ -113,6 +113,7 @@ H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js
   "$ROOT/web/dnm-parse.js" "$ROOT/web/dnm-lint.js" "$ROOT/web/dnm-lint-ui.js" \
   "$ROOT/web/studio-aircraft.js" "$ROOT/web/studio-paint.js" \
   "$ROOT/web/studio-scenery.js" "$ROOT/web/scenery-edit.js" "$ROOT/web/studio-pack.js" \
+  "$ROOT/web/viewpoint-tools.js" \
   "$ROOT/web/studio-dat.js" "$ROOT/web/dat-schema.js" \
   "$ROOT/web/studio-movables.js" \
   "$ROOT/web/studio-pack-core.js" \
@@ -145,7 +146,8 @@ cp "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" "$ROOT/web/dnm-previ
    "$ROOT/web/studio-movables.js" \
    "$ROOT/web/studio-scenery.html" "$ROOT/web/studio-scenery.js" "$ROOT/web/scenery-edit.js" \
    "$ROOT/web/studio-pack.html" "$ROOT/web/studio-pack.js" "$ROOT/web/studio-pack-core.js" \
-   "$ROOT/web/studio-dat.js" "$ROOT/web/dat-schema.js" "$DIST_DIR/"
+   "$ROOT/web/studio-dat.js" "$ROOT/web/dat-schema.js" \
+   "$ROOT/web/viewpoint-tools.js" "$DIST_DIR/"
 # Blender bridge: the from-scratch aircraft template plus the compiled
 # B747-8I sample (download links in the aircraft studio's Blender section).
 cp "$ROOT/templates/aircraft-starter.glb" "$ROOT/templates/b747-8i.glb" "$DIST_DIR/"
@@ -157,7 +159,7 @@ sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',dat
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
 
 # Service worker: build id + precache list.
-PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"pack-update.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"dnm-parse.js\",\"dnm-lint.js\",\"dnm-lint-ui.js\",\"aircraft-starter.glb\",\"b747-8i.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-paint.js\",\"studio-movables.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"scenery-edit.js\",\"studio-pack.html\",\"studio-pack.js\",\"studio-pack-core.js\",\"studio-dat.js\",\"dat-schema.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"pack-update.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"dnm-parse.js\",\"dnm-lint.js\",\"dnm-lint-ui.js\",\"aircraft-starter.glb\",\"b747-8i.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-paint.js\",\"studio-movables.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"scenery-edit.js\",\"studio-pack.html\",\"studio-pack.js\",\"studio-pack-core.js\",\"studio-dat.js\",\"dat-schema.js\",\"viewpoint-tools.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 

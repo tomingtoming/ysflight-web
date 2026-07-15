@@ -15,10 +15,12 @@ import {
 import {
   classifyLoose, assembleAircraftZip, makeDatFromBase,
   extractDnmColors, repaintDnm, getDatCockpit, setDatCockpit,
+  getDatExCameras, setDatExCameras,
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf, estimateCockpit } from './dnm-gltf.js';
 import { mountPartPaint } from './studio-paint.js';
+import { mountViewpointTools } from './viewpoint-tools.js';
 import { mountDatEditor } from './studio-dat.js';
 import { buildMovablesSection } from './studio-movables.js';
 import { buildLintSection } from './dnm-lint-ui.js';
@@ -95,16 +97,35 @@ const S = ({
     datSet: (n) => '✓ ' + n + ' を機体組み立ての .dat スロットに入れました',
     datNeedName: '新しい機体名を入れてください',
     datDup: '⚠ その名前は既存の機体と重複しています（別名を推奨）',
-    ckTitle: '🧑‍✈️ コックピット',
-    ckIntro: '一人称視点の目の位置（YS機体座標・m）。保存時に .dat の COCKPITP へ書き込まれ、レシピにも残ります。',
+    ckTitle: '🧑‍✈️ メインコックピット',
+    ckIntro: 'F1視点の目の位置と追加視点。保存時に .dat の COCKPITP / EXCAMERA へ書き込まれ、レシピにも残ります。追加視点の並び順＝ゲーム内F1サイクルの巡回順。',
     ckX: '左右 x（右+）', ckY: '上下 y（上+）', ckZ: '前後 z（機首+）',
     ckView: '👀 コックピットビュー', ckViewOff: '🔭 外部視点に戻る（ドラッグで見回し）',
     ckSrc: {
-      recipe: 'レシピの保存値', dat: '.dat の COCKPITP から', glb: '.glb のカメラから', user: '手動指定',
+      recipe: 'レシピの保存値', dat: '.dat から', glb: '.glb のカメラから', user: '手動指定',
       estimate: 'ジオメトリから推定（機首から全長の約7%後方）— 要調整',
     },
     ckNone: '（外観 .dnm か .dat を入れると初期値を提案します）',
     glbCockpit: '＋ コックピット位置を .glb のカメラから取り込みました',
+    vpTitle: '👁 視点',
+    vpExTitle: '📷 追加視点 (EXCAMERA)',
+    vpExIntro: '機長・副操縦士・客席・尾翼カメラなど、F1で巡回する名前付き視点。マーカーをドラッグで移動、📷で今の視点を写し取り。',
+    vpAdd: '＋ 追加視点',
+    vpDel: '削除',
+    vpName: '名前',
+    vpTypeOpts: { INSIDE: '機内 (INSIDE)', OUTSIDE: '機外 (OUTSIDE)', CABIN: '客室 (CABIN)' },
+    vpNoHud: 'HUD非表示',
+    vpNoInst: '計器盤非表示',
+    vpH: '向き h（左+°）', vpP: '向き p（上+°）', vpB: '傾き b（°）',
+    vpNone: '（追加視点なし — stockのB747は副操縦士席などを持っています）',
+    vpCapture: '📷 今の視点を写し取る',
+    vpCaptureTitle: 'プレビューの今のカメラ（位置＋向き）を選択中の視点へ書き込む。オービット/👀で構図を決めて1クリック',
+    vpCapturedMain: '✓ メインコックピットへ位置を写し取りました（COCKPITP は向きを持ちません）',
+    vpCapturedEx: (n) => '✓ 「' + n + '」へ位置と向きを写し取りました',
+    vpCycle: '👀 視点サイクル',
+    vpViewing: (n) => '👀 ' + n + '（クリックで次へ）',
+    vpMain: 'メインコックピット',
+    glbExcams: (n) => '＋ 追加視点 ' + n + ' 件を .glb のカメラから取り込みました',
     libEditingBadge: (n) => '✏️ 編集中: ' + n,
   },
   en: {
@@ -178,16 +199,35 @@ const S = ({
     datSet: (n) => '✓ Placed ' + n + ' into the assembly’s .dat slot',
     datNeedName: 'Enter a new aircraft name',
     datDup: '⚠ That name clashes with an existing aircraft (pick another)',
-    ckTitle: '🧑‍✈️ Cockpit',
-    ckIntro: 'First-person eye position (YS aircraft coords, meters). Written into the .dat COCKPITP on save, and kept in the recipe.',
+    ckTitle: '🧑‍✈️ Main cockpit',
+    ckIntro: 'F1 eye positions: the main cockpit and named extra viewpoints. Written into the .dat COCKPITP / EXCAMERA on save, and kept in the recipe. Extra-view order = the in-game F1 cycle order.',
     ckX: 'x (starboard +)', ckY: 'y (up +)', ckZ: 'z (nose +)',
     ckView: '👀 Cockpit view', ckViewOff: '🔭 Back to orbit (drag to look around)',
     ckSrc: {
-      recipe: 'from the saved recipe', dat: 'from the .dat COCKPITP', glb: 'from the .glb camera', user: 'set by hand',
+      recipe: 'from the saved recipe', dat: 'from the .dat', glb: 'from the .glb camera', user: 'set by hand',
       estimate: 'estimated from geometry (~7% of the length behind the nose) — adjust to taste',
     },
     ckNone: '(assign a visual .dnm or a .dat and a starting value appears)',
     glbCockpit: '+ Cockpit position imported from the .glb camera',
+    vpTitle: '👁 Viewpoints',
+    vpExTitle: '📷 Extra viewpoints (EXCAMERA)',
+    vpExIntro: 'Named F1-cycle viewpoints — captain, co-pilot, cabin, tail cam. Drag a marker to move it; 📷 captures the current preview view.',
+    vpAdd: '+ Add viewpoint',
+    vpDel: 'Delete',
+    vpName: 'Name',
+    vpTypeOpts: { INSIDE: 'Inside (INSIDE)', OUTSIDE: 'Outside (OUTSIDE)', CABIN: 'Cabin (CABIN)' },
+    vpNoHud: 'Hide HUD',
+    vpNoInst: 'Hide inst panel',
+    vpH: 'h (yaw, left +°)', vpP: 'p (pitch, up +°)', vpB: 'b (bank °)',
+    vpNone: '(no extra viewpoints — stock B747 carries a co-pilot seat and more)',
+    vpCapture: '📷 Capture current view',
+    vpCaptureTitle: 'Write the preview camera (position + direction) into the selected viewpoint. Frame the shot by orbit/👀, then one click',
+    vpCapturedMain: '✓ Captured the position into the main cockpit (COCKPITP has no direction)',
+    vpCapturedEx: (n) => '✓ Captured position + direction into “' + n + '”',
+    vpCycle: '👀 View cycle',
+    vpViewing: (n) => '👀 ' + n + ' (click for next)',
+    vpMain: 'Main cockpit',
+    glbExcams: (n) => '+ Imported ' + n + ' extra viewpoint(s) from the .glb cameras',
     libEditingBadge: (n) => '✏️ Editing: ' + n,
   },
 })[LANG];
@@ -213,12 +253,21 @@ let movablesEditor = null; // handle returned by buildMovablesSection
 let cockpit = null;
 let cockpitSource = null;
 
+// EXCAMERA extra viewpoints (the getDatExCameras shape — angles in DEGREES,
+// order = the F1 cycle order) with the same source-stickiness ladder.
+let excams = [];
+let excamsSource = null;
+let selCam = 'main';   // which viewpoint 📷/drag act on: 'main' | index
+let vpTools = null;    // viewpoint-tools handle, remounted with the preview
+let viewIx = -1;       // 👀 cycle position: -1 orbit, 0 main, 1.. = excams[i-1]
+
 // DOM handles filled during boot.
 let previewWrap, surfaceHint, animBar;
 let editBadge, slotsBox, acMsg, btnRow;
 let paintPanel, paintMsg;
 let partPaintPanel; // container for studio-paint.js UI
-let ckInputs = null, ckSrcNote = null, ckViewBtn = null;
+let ckInputs = null, ckSrcNote = null;
+let exListBox = null, exInputRefs = [], vpMsg = null, cycleBtn = null, captureBtn = null, mainRadio = null;
 let datEditorWrap = null;    // container div for the .dat editor panel
 let datEditorHandle = null;  // { load } returned by mountDatEditor
 
@@ -246,9 +295,11 @@ const visualEntry = () => {
 
 function disposePreview() {
   if (partPaint) { partPaint.dispose(); partPaint = null; }
+  if (vpTools) { vpTools.dispose(); vpTools = null; }
   if (preview) { preview.dispose(); preview = null; }
   previewedBytes = null;
   if (partPaintPanel) partPaintPanel.innerHTML = '';
+  viewIx = -1;
 }
 
 function refreshPreview() {
@@ -266,6 +317,8 @@ function refreshPreview() {
     preview = mountPreview(previewWrap, ent.bytes);
     previewedBytes = ent.bytes;
     surfaceHint.style.display = 'none';
+    vpTools = mountViewpointTools(preview, { onMove: onMarkerMove });
+    syncMarkers();
   } catch (e) {
     surfaceHint.style.display = 'flex';
     acMsg.textContent = S.errorPrefix + ((e && e.message) || e);
@@ -365,6 +418,14 @@ function rebuildSlots(preset) {
           slots.dat = { ...slots.dat, bytes: setDatCockpit(slots.dat.bytes, cockpit) };
         }
       }
+      // EXCAMERA -> .dat: same non-destructive line surgery.  Order in the
+      // list = the F1 cycle order in game.  Byte-identical when unchanged.
+      if (slots.dat) {
+        const norm = (a) => JSON.stringify(a.map((c) => [c.name, c.x, c.y, c.z, c.h, c.p, c.b, c.type, !!c.noHud, !!c.noInstPanel]));
+        if (norm(getDatExCameras(slots.dat.bytes)) !== norm(excams)) {
+          slots.dat = { ...slots.dat, bytes: setDatExCameras(slots.dat.bytes, excams) };
+        }
+      }
       const asm = assembleAircraftZip({
         name: nameIn.value.trim() || undefined,
         ...slots,
@@ -373,6 +434,7 @@ function rebuildSlots(preset) {
           slots: Object.fromEntries(Object.entries(slots).map(([k, v]) => [k, v ? v.name : null])),
           datRecipe: sels.dat.value === '@generated' ? datRecipe : null,
           cockpit: cockpit ? { x: cockpit.x, y: cockpit.y, z: cockpit.z } : null,
+          excameras: excams.map((c) => ({ ...c })),
         },
       });
       const res = await saveOrReplace(asm.zipBytes, asm.packName, editingId);
@@ -480,6 +542,12 @@ function buildAssembleSection(rail) {
             cockpit = res.cockpit;
             cockpitSource = 'glb';
             auto.push(S.glbCockpit);
+          }
+          // Extra viewpoint cameras (our export, or ones added in Blender).
+          if (res.excameras && res.excameras.length) {
+            excams = res.excameras;
+            excamsSource = 'glb';
+            auto.push(S.glbExcams(excams.length));
           }
           if (!entries.some((e) => /\.srf$/i.test(e.name))) {
             const coll = dnmToCollisionSrf(res.dnm);
@@ -629,12 +697,87 @@ function buildPartPaintSection(rail) {
   // Content is populated by mountPartPaint after preview is ready.
 }
 
-// --- cockpit section ------------------------------------------------------------------
-// The eye position for the first-person (F1) view.  The value lives in three
-// places, all wired here: the recipe (workbench.json, for re-editing), the
-// outgoing .dat's COCKPITP line (what the engine reads), and the preview
-// (marker + cockpit-view toggle, an approachable approximation — the truth is
-// always the 🛫 flight).
+// --- viewpoints section -----------------------------------------------------------
+// The F1 eye positions: the main cockpit (COCKPITP) plus named EXCAMERA extra
+// viewpoints.  Each value lives in three places, all wired here: the recipe
+// (workbench.json, for re-editing), the outgoing .dat lines (what the engine
+// reads), and the preview (markers + view cycle + drag + 📷 capture, an
+// approachable approximation — the truth is always the 🛫 flight).
+
+const D2R = Math.PI / 180;
+
+// Preview markers follow the state: the main cockpit rides the preview's own
+// yellow marker (via setCockpit); this adds the EXCAMERA markers, name labels,
+// forward rays and the drag handle for whichever viewpoint is selected.
+function syncMarkers() {
+  if (!vpTools) return;
+  const items = [];
+  if (cockpit) items.push({ key: 'main', x: cockpit.x, y: cockpit.y, z: cockpit.z, h: 0, p: 0, b: 0, kind: 'main', selected: selCam === 'main' });
+  excams.forEach((c, i) => items.push({
+    key: i, name: c.name || 'EXCAMERA', x: c.x, y: c.y, z: c.z,
+    h: (c.h || 0) * D2R, p: (c.p || 0) * D2R, b: (c.b || 0) * D2R,
+    kind: 'ex', selected: selCam === i,
+  }));
+  vpTools.setMarkers(items);
+}
+
+// The 👀 cycle stops, in engine order: main cockpit, then each EXCAMERA in
+// list order (= .dat order = the F1 cycle in game), then back to orbit.
+function vpStops() {
+  const st = [];
+  if (cockpit) st.push({ name: S.vpMain, pose: { ...cockpit } });
+  for (const c of excams) {
+    st.push({
+      name: c.name || 'EXCAMERA',
+      pose: { x: c.x, y: c.y, z: c.z, h: (c.h || 0) * D2R, p: (c.p || 0) * D2R, b: (c.b || 0) * D2R },
+    });
+  }
+  return st;
+}
+
+function exitView() {
+  viewIx = -1;
+  if (preview) {
+    preview.setCockpitView(false);
+    preview.setCockpit(cockpit);
+  }
+  if (vpTools) vpTools.setVisible(true);
+  if (cycleBtn) {
+    cycleBtn.textContent = S.vpCycle;
+    cycleBtn.classList.remove('accent');
+  }
+}
+
+function stepView() {
+  if (!preview) return;
+  const stops = vpStops();
+  viewIx++;
+  if (viewIx >= stops.length) { exitView(); return; }
+  preview.setCockpit(stops[viewIx].pose);
+  preview.setCockpitView(true);
+  if (vpTools) vpTools.setVisible(false); // markers would sit in the lens
+  cycleBtn.textContent = S.vpViewing(stops[viewIx].name);
+  cycleBtn.classList.add('accent');
+}
+
+// Live drag from the 3D handle: position only (direction stays put; 📷 or the
+// h/p/b inputs own that), value updates without a list rebuild so focus and
+// the drag itself survive.
+function onMarkerMove(key, p) {
+  const r = (v) => Math.round(v * 100) / 100;
+  if (key === 'main') {
+    cockpit = { x: r(p.x), y: r(p.y), z: r(p.z) };
+    cockpitSource = 'user';
+    for (const k of ['x', 'y', 'z']) if (ckInputs && document.activeElement !== ckInputs[k]) ckInputs[k].value = String(cockpit[k]);
+    if (ckSrcNote) ckSrcNote.textContent = S.ckSrc.user;
+    if (preview && viewIx < 0) preview.setCockpit(cockpit); // the yellow marker follows
+  } else if (excams[key]) {
+    Object.assign(excams[key], { x: r(p.x), y: r(p.y), z: r(p.z) });
+    excamsSource = 'user';
+    const refs = exInputRefs[key];
+    if (refs) for (const k of ['x', 'y', 'z']) if (document.activeElement !== refs[k]) refs[k].value = String(excams[key][k]);
+  }
+}
 
 function updateCockpitUi() {
   if (!ckInputs) return;
@@ -642,20 +785,125 @@ function updateCockpitUi() {
     if (document.activeElement !== ckInputs[k]) ckInputs[k].value = cockpit ? String(cockpit[k]) : '';
   }
   ckSrcNote.textContent = cockpit ? (S.ckSrc[cockpitSource] || '') : S.ckNone;
-  if (preview) preview.setCockpit(cockpit);
-  const canView = !!(preview && cockpit);
-  ckViewBtn.disabled = !canView;
-  if (!canView || !preview.getCockpitView()) {
-    ckViewBtn.textContent = S.ckView;
-    ckViewBtn.classList.remove('accent');
+  // While 👀 is parked on an EXCAMERA, setCockpit carries that eye pose — do
+  // not yank it back to the main seat until the cycle leaves.
+  if (preview && viewIx <= 0) preview.setCockpit(cockpit);
+  const stops = preview ? vpStops().length : 0;
+  if (cycleBtn) cycleBtn.disabled = !stops;
+  if (captureBtn) captureBtn.disabled = !vpTools;
+  if (viewIx >= (preview ? vpStops().length : 0)) exitView();
+  syncMarkers();
+}
+
+// Rebuild the EXCAMERA list DOM (structural changes only — value edits go
+// through the input handlers / onMarkerMove to keep focus).
+function renderExcamList() {
+  if (!exListBox) return;
+  exListBox.innerHTML = '';
+  exInputRefs = [];
+  if (selCam !== 'main' && !excams[selCam]) selCam = 'main';
+  if (mainRadio) mainRadio.checked = selCam === 'main';
+  if (!excams.length) {
+    exListBox.appendChild(el('div', 'msg', S.vpNone));
+    return;
   }
+  // Selection restyles in place (no DOM rebuild — that would eat the very
+  // click that landed on a button/input inside the item).
+  const parts = []; // [{item, radio}]
+  const refreshSel = () => {
+    if (mainRadio) mainRadio.checked = selCam === 'main';
+    parts.forEach((p, i) => {
+      p.item.style.borderColor = selCam === i ? '#ff8c3a' : '#2a3647';
+      p.radio.checked = selCam === i;
+    });
+  };
+  excams.forEach((cam, i) => {
+    const item = el('div');
+    item.style.cssText = 'border:1px solid ' + (selCam === i ? '#ff8c3a' : '#2a3647') + ';border-radius:6px;padding:6px;margin:6px 0';
+    const pick = () => { if (selCam !== i) { selCam = i; refreshSel(); syncMarkers(); } };
+    item.addEventListener('pointerdown', pick);
+
+    const r1 = el('div', 'row');
+    const radio = Object.assign(document.createElement('input'), { type: 'radio', name: 'vpsel', checked: selCam === i });
+    radio.addEventListener('change', pick);
+    parts.push({ item, radio });
+    const nameIn = Object.assign(document.createElement('input'), { type: 'text', value: cam.name || '', placeholder: S.vpName });
+    nameIn.style.cssText = 'flex:1;min-width:0';
+    nameIn.addEventListener('input', () => { cam.name = nameIn.value; excamsSource = 'user'; syncMarkers(); });
+    const delBtn = el('button', null, S.vpDel);
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      excams.splice(i, 1);
+      excamsSource = 'user';
+      if (selCam === i) selCam = 'main';
+      else if (selCam !== 'main' && selCam > i) selCam--;
+      exitView();
+      renderExcamList();
+      updateCockpitUi();
+    });
+    r1.appendChild(radio);
+    r1.appendChild(nameIn);
+    r1.appendChild(delBtn);
+    item.appendChild(r1);
+
+    const r2 = el('div', 'row');
+    const typeSel = document.createElement('select');
+    for (const t of ['INSIDE', 'OUTSIDE', 'CABIN']) {
+      typeSel.appendChild(Object.assign(el('option'), { value: t, textContent: S.vpTypeOpts[t], selected: cam.type === t }));
+    }
+    typeSel.addEventListener('change', () => { cam.type = typeSel.value; excamsSource = 'user'; });
+    r2.appendChild(typeSel);
+    const cb = (labelText, key) => {
+      const lab = el('span', null, labelText);
+      lab.style.cssText = 'color:#8fa3bb;font-size:11px';
+      const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!cam[key] });
+      c.addEventListener('change', () => { cam[key] = c.checked; excamsSource = 'user'; });
+      r2.appendChild(c);
+      r2.appendChild(lab);
+    };
+    cb(S.vpNoHud, 'noHud');
+    cb(S.vpNoInst, 'noInstPanel');
+    item.appendChild(r2);
+
+    const grid = el('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:4px';
+    const refs = {};
+    const numIn = (key, labelText, step) => {
+      const wrap = el('div');
+      const lab = el('div', null, labelText);
+      lab.style.cssText = 'color:#7d93b0;font-size:10px';
+      const inp = Object.assign(document.createElement('input'), { type: 'number', step, value: String(cam[key]) });
+      inp.style.cssText = 'width:100%;box-sizing:border-box';
+      inp.addEventListener('input', () => {
+        const v = parseFloat(inp.value);
+        if (!Number.isFinite(v)) return;
+        cam[key] = v;
+        excamsSource = 'user';
+        syncMarkers();
+      });
+      wrap.appendChild(lab);
+      wrap.appendChild(inp);
+      grid.appendChild(wrap);
+      refs[key] = inp;
+    };
+    numIn('x', S.ckX, '0.05');
+    numIn('y', S.ckY, '0.05');
+    numIn('z', S.ckZ, '0.05');
+    numIn('h', S.vpH, '1');
+    numIn('p', S.vpP, '1');
+    numIn('b', S.vpB, '1');
+    item.appendChild(grid);
+    exInputRefs[i] = refs;
+    exListBox.appendChild(item);
+  });
 }
 
 // Initial-value ladder: ① a sticky value (hand-set / recipe / glb camera)
 // stays put; ② the assigned .dat's existing COCKPITP; ③ a geometry estimate
-// (labeled as such in the UI).
+// (labeled as such in the UI).  EXCAMERAs share the ladder minus the estimate.
 function deriveCockpit() {
   if (!ckInputs) return;
+  deriveExcams();
   if (cockpit && cockpitSource !== 'dat' && cockpitSource !== 'estimate') { updateCockpitUi(); return; }
   const datEnt = sels && sels.dat
     ? (sels.dat.value === '@generated' ? generatedDat : sels.dat.value ? byName.get(sels.dat.value) : null)
@@ -674,11 +922,32 @@ function deriveCockpit() {
   updateCockpitUi();
 }
 
-function buildCockpitSection(rail) {
-  rail.appendChild(el('h2', null, S.ckTitle));
+function deriveExcams() {
+  if (excams.length && excamsSource !== 'dat') { renderExcamList(); return; } // sticky
+  const datEnt = sels && sels.dat
+    ? (sels.dat.value === '@generated' ? generatedDat : sels.dat.value ? byName.get(sels.dat.value) : null)
+    : null;
+  const fromDat = datEnt && /\.dat$/i.test(datEnt.name) ? getDatExCameras(datEnt.bytes) : [];
+  excams = fromDat;
+  excamsSource = fromDat.length ? 'dat' : null;
+  if (selCam !== 'main' && !excams[selCam]) selCam = 'main';
+  renderExcamList();
+}
+
+function buildViewpointsSection(rail) {
+  rail.appendChild(el('h2', null, S.vpTitle));
   rail.appendChild(el('p', 'intro', S.ckIntro));
   const box = el('div');
   rail.appendChild(box);
+
+  // Main cockpit: selectable like the extra viewpoints, so 📷 and the drag
+  // handle can target it.
+  const mainRow = el('div', 'row');
+  mainRadio = Object.assign(document.createElement('input'), { type: 'radio', name: 'vpsel', checked: true });
+  mainRadio.addEventListener('change', () => { selCam = 'main'; renderExcamList(); syncMarkers(); });
+  mainRow.appendChild(mainRadio);
+  mainRow.appendChild(el('span', 'lab', S.ckTitle));
+  box.appendChild(mainRow);
   ckInputs = {};
   for (const k of ['x', 'y', 'z']) {
     const inp = Object.assign(document.createElement('input'), { type: 'number', step: '0.05' });
@@ -698,17 +967,57 @@ function buildCockpitSection(rail) {
   }
   ckSrcNote = el('div', 'msg');
   box.appendChild(ckSrcNote);
+
+  // Extra viewpoints (EXCAMERA).
+  const exHead = el('div', 'row');
+  exHead.appendChild(el('span', 'lab', S.vpExTitle));
+  const addBtn = el('button', null, S.vpAdd);
+  addBtn.addEventListener('click', () => {
+    // Seed from the main seat mirrored to the other side (the co-pilot idiom)
+    // when we have one; refine by drag / 📷 afterwards.
+    const seed = cockpit
+      ? { x: Math.round(-cockpit.x * 100) / 100, y: cockpit.y, z: cockpit.z }
+      : { x: 0, y: 0, z: 0 };
+    excams.push({ name: 'VIEW' + (excams.length + 1), ...seed, h: 0, p: 0, b: 0, type: 'INSIDE', noHud: false, noInstPanel: false });
+    excamsSource = 'user';
+    selCam = excams.length - 1;
+    renderExcamList();
+    updateCockpitUi();
+  });
+  exHead.appendChild(addBtn);
+  box.appendChild(exHead);
+  box.appendChild(el('p', 'intro', S.vpExIntro));
+  exListBox = el('div');
+  box.appendChild(exListBox);
+  vpMsg = el('div', 'msg');
+  box.appendChild(vpMsg);
+
   const btnR = el('div', 'btnrow');
   btnR.style.justifyContent = 'flex-start';
-  ckViewBtn = el('button', null, S.ckView);
-  ckViewBtn.addEventListener('click', () => {
-    if (!preview || !cockpit) return;
-    const on = !preview.getCockpitView();
-    preview.setCockpitView(on);
-    ckViewBtn.textContent = on ? S.ckViewOff : S.ckView;
-    ckViewBtn.classList.toggle('accent', on);
+  captureBtn = el('button', null, S.vpCapture);
+  captureBtn.title = S.vpCaptureTitle;
+  captureBtn.addEventListener('click', () => {
+    if (!vpTools) return;
+    const pose = vpTools.capturePose(); // YS coords, radians
+    const r = (v) => Math.round(v * 100) / 100;
+    const ra = (v) => Math.round((v / D2R) * 10) / 10;
+    if (selCam === 'main') {
+      cockpit = { x: r(pose.x), y: r(pose.y), z: r(pose.z) };
+      cockpitSource = 'user';
+      vpMsg.textContent = S.vpCapturedMain;
+      updateCockpitUi();
+    } else if (excams[selCam]) {
+      Object.assign(excams[selCam], { x: r(pose.x), y: r(pose.y), z: r(pose.z), h: ra(pose.h), p: ra(pose.p), b: ra(pose.b) });
+      excamsSource = 'user';
+      vpMsg.textContent = S.vpCapturedEx(excams[selCam].name || 'EXCAMERA');
+      renderExcamList();
+      updateCockpitUi();
+    }
   });
-  btnR.appendChild(ckViewBtn);
+  btnR.appendChild(captureBtn);
+  cycleBtn = el('button', null, S.vpCycle);
+  cycleBtn.addEventListener('click', stepView);
+  btnR.appendChild(cycleBtn);
   box.appendChild(btnR);
 }
 
@@ -838,9 +1147,11 @@ function buildBlenderSection(rail) {
     const ent = visualEntry();
     if (!ent) { msg.textContent = S.blExportNone; return; }
     try {
-      // The cockpit rides along as a glTF camera so Blender shows the
-      // pilot's view and a re-import restores the value.
-      const res = dnmToGlb(ent.bytes, cockpit ? { cockpit } : undefined);
+      // The cockpit and every extra viewpoint ride along as glTF cameras so
+      // Blender shows each seat's view and a re-import restores the values.
+      const res = dnmToGlb(ent.bytes, cockpit || excams.length
+        ? { cockpit: cockpit || undefined, excameras: excams }
+        : undefined);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([res.glb], { type: 'model/gltf-binary' }));
       a.download = ent.name.replace(/\.dnm$/i, '') + '.glb';
@@ -876,7 +1187,7 @@ async function main() {
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
   buildPartPaintSection(chrome.rail);
-  buildCockpitSection(chrome.rail);
+  buildViewpointsSection(chrome.rail);
 
   // Movable-part & light GUI editor.  Mounts into the rail; reads the visual
   // entry and the live preview handle via closures over module state.
@@ -916,6 +1227,10 @@ async function main() {
           cockpit = { x: rc.x, y: rc.y, z: rc.z };
           cockpitSource = 'recipe';
         }
+        if (Array.isArray(c.recipe.excameras)) {
+          excams = c.recipe.excameras.filter((e) => e && [e.x, e.y, e.z].every(Number.isFinite));
+          excamsSource = excams.length ? 'recipe' : null;
+        }
         editingId = editId;
         editBadge.textContent = S.libEditingBadge(c.name || editId);
         preset = { slots: c.recipe.slots || {}, packName: c.recipe.packName || c.name };
@@ -934,6 +1249,9 @@ async function main() {
     hasPreview: () => !!preview,
     cockpit: () => (cockpit ? { ...cockpit, source: cockpitSource } : null),
     setCockpitView: (on) => { if (preview) preview.setCockpitView(on); return !!(preview && preview.getCockpitView()); },
+    excams: () => excams.map((c) => ({ ...c })),
+    capturePose: () => (vpTools ? vpTools.capturePose() : null),
+    stepView: () => { stepView(); return viewIx; },
     runLint: () => lint.run(),
   };
 }
