@@ -60,8 +60,13 @@ export function pageUrl(page, params) {
   return './' + page + (q ? '?' + q : '');
 }
 
-export const flyUrl = (air, field, start) =>
-  pageUrl('index.html', { freeflight: [air, field, start].filter(Boolean).join(',') });
+export const flyUrl = (air, field, start) => {
+  // Include the current page so index.html can navigate back here when the flight ends.
+  const returnPage = (location.pathname.split('/').pop() || '');
+  const params = { freeflight: [air, field, start].filter(Boolean).join(',') };
+  if (returnPage) params.return = returnPage;
+  return pageUrl('index.html', params);
+};
 
 // --- OPFS-only install ----------------------------------------------------------
 
