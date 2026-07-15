@@ -135,8 +135,10 @@ export async function setEnabled(id, enabled) {
 
 // A pack record from an analysis: the manifest essentials + enabled flag + the
 // small generated-list text (so we can materialize later without re-reading the
-// archive).  Blob storage is separate (streaming vs in-memory).
-function recordFromAnalysis(analysis, enabled) {
+// archive).  Blob storage is separate (streaming vs in-memory).  Exported (pure,
+// no OPFS touch) for the update-from-zip flow (web/pack-update.js), which builds
+// the successor record itself so it can carry state over before writing.
+export function recordFromAnalysis(analysis, enabled) {
   const record = {
     id: analysis.id,
     name: analysis.name,
