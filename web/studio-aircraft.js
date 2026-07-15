@@ -20,6 +20,9 @@ import {
 import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf, estimateCockpit } from './dnm-gltf.js';
 import { mountViewpointTools } from './viewpoint-tools.js';
+import { mountDatEditor } from './studio-dat.js';
+import { buildMovablesSection } from './studio-movables.js';
+import { buildLintSection } from './dnm-lint-ui.js';
 
 const S = ({
   ja: {
@@ -240,6 +243,7 @@ let byName = new Map();  // basename -> entry, rebuilt by rebuildSlots
 let preview = null;
 let previewedBytes = null; // the visual bytes currently mounted — paint updates
                            // live via setPaint, so only a different FILE remounts
+let movablesEditor = null; // handle returned by buildMovablesSection
 
 // Cockpit eye point (YS aircraft coords = the .dat COCKPITP value) and where
 // it came from: 'recipe' | 'glb' | 'dat' | 'estimate' | 'user'.  Sticky
@@ -261,6 +265,8 @@ let editBadge, slotsBox, acMsg, btnRow;
 let paintPanel, paintMsg;
 let ckInputs = null, ckSrcNote = null;
 let exListBox = null, exInputRefs = [], vpMsg = null, cycleBtn = null, captureBtn = null, mainRadio = null;
+let datEditorWrap = null;    // container div for the .dat editor panel
+let datEditorHandle = null;  // { load } returned by mountDatEditor
 
 // --- the big preview surface (main) ------------------------------------------------
 
@@ -330,6 +336,10 @@ function refreshPreview() {
     animBar.appendChild(r);
   }
   if (!any) animBar.appendChild(el('div', 'msg', S.animNone));
+
+  // Notify the movables editor that the preview has been (re)mounted so gizmos
+  // can be injected into the new scene.
+  if (movablesEditor) movablesEditor.refresh();
 }
 
 // --- assemble section ---------------------------------------------------------------
@@ -359,8 +369,8 @@ function rebuildSlots(preset) {
     coarse: mkSel(S.slotCoarse, candidates.dnm, pre('coarse') || guess.coarse, false),
   };
   if (!preset && generatedDat) sels.dat.value = '@generated';
-  sels.visual.addEventListener('change', () => { refreshPreview(); renderPaint(); deriveCockpit(); });
-  sels.dat.addEventListener('change', deriveCockpit);
+  sels.visual.addEventListener('change', () => { refreshPreview(); renderPaint(); deriveCockpit(); if (movablesEditor) movablesEditor.refresh(); });
+  sels.dat.addEventListener('change', () => { deriveCockpit(); refreshDatEditor(); });
 
   const nameIn = Object.assign(document.createElement('input'), {
     type: 'text',
@@ -435,6 +445,32 @@ function rebuildSlots(preset) {
   refreshPreview();
   renderPaint();
   deriveCockpit();
+  refreshDatEditor();
+}
+
+// --- dat editor refresh -------------------------------------------------------------
+
+function refreshDatEditor() {
+  if (!datEditorWrap) return;
+  datEditorWrap.innerHTML = '';
+  datEditorHandle = null;
+  const pick = (sel) => (sel && sel.value === '@generated' ? generatedDat
+    : sel && sel.value ? byName.get(sel.value) : null);
+  const datEntry = sels ? pick(sels.dat) : null;
+  if (!datEntry) return;
+  const h2 = el('h2', null, LANG === 'ja' ? '✏️ .dat エディタ' : '✏️ .dat Editor');
+  datEditorWrap.appendChild(h2);
+  const intro = el('p', 'intro', LANG === 'ja'
+    ? '飛行特性の全パラメータをフォームまたは生テキストで編集できます。保存すると組み立てに反映されます。'
+    : 'Edit all flight-model parameters as a form or raw text. Save writes back into the assembly.');
+  datEditorWrap.appendChild(intro);
+  datEditorHandle = mountDatEditor(datEditorWrap, {
+    getBytes: () => datEntry.bytes,
+    setBytes: (bytes) => { datEntry.bytes = bytes; },
+    LANG,
+    el,
+    row,
+  });
 }
 
 function buildAssembleSection(rail) {
@@ -461,6 +497,9 @@ function buildAssembleSection(rail) {
   btnRow = el('div', 'btnrow');
   rail.appendChild(acMsg);
   rail.appendChild(btnRow);
+
+  datEditorWrap = el('div');
+  rail.appendChild(datEditorWrap);
 
   const addFiles = async (fileList) => {
     let glbBase = null;
@@ -1104,9 +1143,38 @@ async function main() {
   const chrome = studioChrome(S.title);
   buildSurface(chrome.main);
   buildAssembleSection(chrome.rail);
+  // Thin mount: the linter UI lives in dnm-lint-ui.js; we only hand it the
+  // files currently assigned to the slots (collision/cockpit lint differently).
+  const lint = buildLintSection(chrome.rail, () => {
+    if (!sels) return [];
+    const pick = (sel, kind) => {
+      const ent = sel.value && sel.value !== '@generated' ? byName.get(sel.value) : null;
+      return ent ? { name: ent.name, bytes: ent.bytes, kind } : null;
+    };
+    return [
+      pick(sels.visual, 'visual'), pick(sels.coarse, 'visual'),
+      pick(sels.collision, 'collision'), pick(sels.cockpit, 'cockpit'),
+    ].filter(Boolean);
+  });
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
   buildViewpointsSection(chrome.rail);
+  buildViewpointsSection(chrome.rail);
+
+  // Movable-part & light GUI editor.  Mounts into the rail; reads the visual
+  // entry and the live preview handle via closures over module state.
+  movablesEditor = buildMovablesSection(chrome.rail, {
+    getVisualEntry: () => visualEntry(),
+    getPreview: () => preview,
+    onBytesChanged: (newBytes, _name) => {
+      const ent = visualEntry();
+      if (!ent) return;
+      ent.bytes = newBytes;
+      previewedBytes = null; // force remount on next refresh
+      refreshPreview();
+      renderPaint();
+    },
+  });
   await buildDatSection(chrome.rail);
   buildBlenderSection(chrome.rail);
 
@@ -1156,6 +1224,7 @@ async function main() {
     excams: () => excams.map((c) => ({ ...c })),
     capturePose: () => (vpTools ? vpTools.capturePose() : null),
     stepView: () => { stepView(); return viewIx; },
+    runLint: () => lint.run(),
   };
 }
 main();

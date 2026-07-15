@@ -86,6 +86,12 @@ const S = ({
       empty: 'パックが空です（有効なファイルがありません）',
       noEntries: 'パックのリストに有効なエントリがありませんでした',
     },
+    attribPolicy: {
+      'redist-mod-ok': '再配布可・改変可',
+      'redist-nomod': '再配布可・改変不可',
+      'no-redist': '再配布不可',
+      'ask-author': '要許可（作者に連絡）',
+    },
     playBtn: '▶ プレイ開始',
     playHint: '機体・マップを自分で選ぶ／対戦をホストするときはこちら（エンジンのメニューが開きます）',
     flyAgain: '↻ 続きから',
@@ -155,6 +161,12 @@ const S = ({
       unsafe: 'The pack contains an unsafe path (..)',
       empty: 'The pack is empty (no usable files)',
       noEntries: 'The pack lists contained no usable entries',
+    },
+    attribPolicy: {
+      'redist-mod-ok': 'Redistribution OK / mods OK',
+      'redist-nomod': 'Redistribution OK / no mods',
+      'no-redist': 'No redistribution',
+      'ask-author': 'Ask the author',
     },
     playBtn: '▶ Play',
     playHint: 'Choose your own aircraft & maps, or host multiplayer — this opens the engine menu',
@@ -379,6 +391,15 @@ function renderList(packs) {
       cat.style.cssText = 'color:#8fa3bb;font-size:12px';
       left.appendChild(nm);
       left.appendChild(cat);
+      // Attribution badge (async fill; appending to a row replaced by a
+      // re-render is harmless — the node is simply detached).
+      attributionOf(p.id).then((a) => {
+        if (!a) return;
+        const at = document.createElement('span');
+        at.textContent = '  ' + [a.author && ('© ' + a.author), S.attribPolicy[a.policy]].filter(Boolean).join(' · ');
+        at.style.cssText = 'color:#7d93b0;font-size:11px';
+        left.appendChild(at);
+      });
 
       const ctl = document.createElement('div');
       ctl.style.cssText = 'flex:none;display:flex;gap:6px;align-items:center';
@@ -764,6 +785,31 @@ async function aircraftIdentities(id) {
       if (t.length >= 2 && t[1]) out.push(t[1]);
     }
   }
+  return out;
+}
+
+// Attribution metadata (author / redistribution policy) some packs carry in
+// their embedded recipe (workbench.json, written by the pack studio — see
+// web/studio-pack-core.js).  DISPLAY ONLY: read lazily per row, memoized;
+// packs without a recipe resolve to null with no blob read, and a pack that
+// recorded nothing shows nothing (never inferred).
+const RECIPE_PATH = 'workbench.json'; // = RECIPE_FILE in workbench.js
+const attribCache = new Map(); // pack id -> {author, policy} | null
+async function attributionOf(id) {
+  if (attribCache.has(id)) return attribCache.get(id);
+  let out = null;
+  try {
+    const rec = await opfs.getRecord(id);
+    const rf = rec && (rec.files || []).find((f) => f.path === RECIPE_PATH);
+    if (rf) {
+      const recipe = JSON.parse(new TextDecoder().decode(await opfs.getBlob(rf.sha256)));
+      const a = recipe && recipe.attribution;
+      const author = a ? String(a.author || '').trim() : '';
+      const policy = a && S.attribPolicy[a.policy] ? a.policy : '';
+      if (author || policy) out = { author, policy };
+    }
+  } catch (e) { /* display-only — a broken recipe shows nothing */ }
+  attribCache.set(id, out);
   return out;
 }
 
