@@ -481,11 +481,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// null = not allocated, false = unavailable (createEquirectLayer threw),
 		// object = {layer,canvas,inLayers} once created.
 		skyRes:null,
-		// Per-hand ring/dot cursor quads that track both menu-ray hit points.
-		// The engine still has one mouse pointer, so trigger ownership is
-		// arbitrated separately; both aim points remain visible.  Each entry:
-		// undefined = untried, false = unavailable, or {quad,canvas,inLayers}.
-		cursorRes:{right:undefined,left:undefined},
+		// One transparent, full-menu cursor overlay quad.  Both hand cursors are
+		// painted into this ONE texture in menu UV coordinates, so their visual
+		// positions use exactly the same aspect/transform as the menu and cannot
+		// drift toward a central square.  Keeping both hands in one layer also
+		// avoids one cursor disappearing when a headset's composition-layer
+		// budget is tight. null = unavailable/not allocated.
+		cursorRes:null,
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -1314,7 +1316,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.menuAnchor={pos:menuPos,quat:yawQ};
 		try
 		{
-			vr.menuRes.quad.transform=new XRRigidTransform(menuPos,yawQ);
+			var menuTransform=new XRRigidTransform(menuPos,yawQ);
+			vr.menuRes.quad.transform=menuTransform;
+			// The cursor overlay has the exact same physical extent and transform
+			// as the menu.  Layer ordering (cursor after menu) puts its transparent
+			// pixels on top without a world-space offset/parallax error.
+			if(vr.cursorRes && vr.cursorRes.quad)
+			{
+				vr.cursorRes.quad.transform=menuTransform;
+			}
 		}
 		catch(e){}
 	}
@@ -1497,93 +1507,98 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return layersChanged;
 	}
 
-	// ---- Menu ray cursor (small ring/dot quad at the hit point) -------------
+	// ---- Menu ray cursor (transparent overlay matched to the menu quad) ------
 	// The engine's hover highlight alone makes dialog lists and small buttons
-	// guesswork on device, so a ~2.5cm cursor quad floats just in front of the
-	// menu quad at the controller-ray hit point (processMenuRayInput stores it
-	// in each menuRayState.hands entry, menu-quad-local space). Texture is drawn once (a
-	// static ring + dot) but transferred EVERY presented frame -- Round-4
-	// discipline: never gate uploads on change, non-presented swapchain
-	// buffers freeze otherwise.
-
-	function buildCursorCanvas(hand)
+	// guesswork on device.  Earlier revisions used one tiny world-positioned
+	// quad per hand; on Quest the pointer rings then occupied a central square
+	// even though hover reached the menu corners.  The hit math was right, but
+	// the independently transformed visual layers were not.  Paint both rings
+	// into one transparent quad with the menu's exact dimensions/transform,
+	// using the SAME u/v values that feed mouse pixels.  Transfer it EVERY
+	// presented frame -- non-presented swapchain buffers can otherwise freeze.
+	var CURSOR_OVERLAY_MAX_PX=1024;
+	var CURSOR_DIAMETER_M=0.025;
+	function cursorOverlayPoint(u,v,w,h)
 	{
-		var S=32;
-		var c=document.createElement('canvas');
-		c.width=S; c.height=S;
-		var ctx=c.getContext('2d');
-		if(!ctx){ return null; }
-		ctx.clearRect(0,0,S,S);
+		return {
+			x:Math.max(0,Math.min(1,u))*Math.max(0,w-1),
+			y:Math.max(0,Math.min(1,v))*Math.max(0,h-1)
+		};
+	}
+	function drawCursorMark(ctx,x,y,hand,canvasW)
+	{
+		// Keep the ring's physical diameter stable as the overlay resolution
+		// follows the menu aspect.  A 1024px-wide, 1.6m menu yields ~16px.
+		var radius=Math.max(5,canvasW*CURSOR_DIAMETER_M/MENU_QUAD_WIDTH_M/2);
 		// Dark contrast ring (outermost) so the cursor reads on light menus.
 		ctx.beginPath();
-		ctx.arc(S/2,S/2,14,0,Math.PI*2);
+		ctx.arc(x,y,radius+2,0,Math.PI*2);
 		ctx.lineWidth=2;
 		ctx.strokeStyle='rgba(0,0,0,0.6)';
 		ctx.stroke();
 		// Main white ring.
 		ctx.beginPath();
-		ctx.arc(S/2,S/2,11,0,Math.PI*2);
-		ctx.lineWidth=3;
+		ctx.arc(x,y,radius,0,Math.PI*2);
+		ctx.lineWidth=Math.max(2,radius*0.28);
 		ctx.strokeStyle='rgba(255,255,255,0.95)';
 		ctx.stroke();
 		// Distinct centre dots make simultaneous left/right aim points easy to
 		// tell apart: cyan = left, warm yellow = right.
 		ctx.beginPath();
-		ctx.arc(S/2,S/2,3,0,Math.PI*2);
+		ctx.arc(x,y,Math.max(2,radius*0.28),0,Math.PI*2);
 		ctx.fillStyle=('left'===hand ? 'rgba(80,220,255,0.95)' : 'rgba(255,220,80,0.95)');
 		ctx.fill();
-		return c;
 	}
 
 	function setupCursor()
 	{
-		if(!vr.mvBinding || !vr.refSpace)
+		if(vr.cursorRes || !vr.mvBinding || !vr.refSpace || !vr.menuRes)
 		{
 			return; // Layers path only (test mode / non-layers browsers skip).
 		}
-		var hands=['right','left'];
-		for(var hi=0; hi<hands.length; ++hi)
+		var fitted=fitMenuTextureSize(vr.menuRes.w,vr.menuRes.h,CURSOR_OVERLAY_MAX_PX);
+		var canvas=document.createElement('canvas');
+		canvas.width=fitted.w;
+		canvas.height=fitted.h;
+		var ctx=canvas.getContext('2d');
+		if(!ctx)
 		{
-			var hand=hands[hi];
-			if(undefined!==vr.cursorRes[hand])
-			{
-				continue;
-			}
-			var canvas=buildCursorCanvas(hand);
-			if(!canvas)
-			{
-				vr.cursorRes[hand]=false;
-				continue;
-			}
+			return;
+		}
+		try
+		{
+			var quad=vr.mvBinding.createQuadLayer({
+				space:vr.refSpace,
+				viewPixelWidth:fitted.w,
+				viewPixelHeight:fitted.h,
+				layout:'mono',
+				width:vr.menuRes.quadW,
+				height:vr.menuRes.quadH
+			});
 			try
 			{
-				var quad=vr.mvBinding.createQuadLayer({
-					space:vr.refSpace,
-					viewPixelWidth:32,
-					viewPixelHeight:32,
-					layout:'mono',
-					width:0.025,   // metres: ~2.5cm ring, small enough not to
-					height:0.025   // occlude the menu row under it.
-				});
-				vr.cursorRes[hand]={quad:quad,canvas:canvas,inLayers:false};
+				if('blendTextureSourceAlpha' in quad)
+				{
+					quad.blendTextureSourceAlpha=true;
+				}
 			}
-			catch(e)
+			catch(e){}
+			if(vr.menuAnchor)
 			{
-				console.warn('[vr] menu cursor quad failed ('+hand+'): '+(e&&e.message?e.message:e));
-				vr.cursorRes[hand]=false;
+				quad.transform=new XRRigidTransform(vr.menuAnchor.pos,vr.menuAnchor.quat);
 			}
+			vr.cursorRes={quad:quad,canvas:canvas,ctx:ctx,inLayers:false};
+		}
+		catch(e)
+		{
+			console.warn('[vr] menu cursor overlay failed: '+(e&&e.message?e.message:e));
 		}
 	}
 
 	function teardownCursor()
 	{
-		var hands=['right','left'];
-		for(var hi=0; hi<hands.length; ++hi)
-		{
-			var res=vr.cursorRes[hands[hi]];
-			try{ if(res&&res.quad){ res.quad.destroy(); } }catch(e){}
-		}
-		vr.cursorRes={right:undefined,left:undefined};
+		try{ if(vr.cursorRes&&vr.cursorRes.quad){ vr.cursorRes.quad.destroy(); } }catch(e){}
+		vr.cursorRes=null;
 	}
 
 	// Called once per onXRFrame (after processMenuRayInput has refreshed
@@ -1593,43 +1608,33 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var menuVisible=!!(vr.menuRes && vr.menuRes.inLayers);
 		var layersChanged=false;
-		var hands=['right','left'];
-		for(var hi=0; hi<hands.length; ++hi)
+		var res=vr.cursorRes;
+		if(!res)
 		{
-			var hand=hands[hi];
-			var res=vr.cursorRes[hand];
-			if(!res)
+			return;
+		}
+		var hands=['right','left'];
+		var show=menuVisible && (menuRayState.hands.right.wasHit||menuRayState.hands.left.wasHit);
+		if(!show)
+		{
+			if(res.inLayers)
 			{
-				continue;
+				res.inLayers=false;
+				layersChanged=true;
 			}
-			var ray=menuRayState.hands[hand];
-			var show=(menuVisible && ray.wasHit);
-			if(!show)
+		}
+		else
+		{
+			res.ctx.clearRect(0,0,res.canvas.width,res.canvas.height);
+			for(var hi=0; hi<hands.length; ++hi)
 			{
-				if(res.inLayers)
+				var hand=hands[hi];
+				var ray=menuRayState.hands[hand];
+				if(ray.wasHit)
 				{
-					res.inLayers=false;
-					layersChanged=true;
+					var point=cursorOverlayPoint(ray.hitU,ray.hitV,res.canvas.width,res.canvas.height);
+					drawCursorMark(res.ctx,point.x,point.y,hand,res.canvas.width);
 				}
-				continue;
-			}
-			// Reposition to the hit point, slightly in front of the menu quad,
-			// in world space (refSpace).  hitVX/hitVY are in quad-LOCAL coords;
-			// transform to refSpace via the anchor.
-			if(vr.menuAnchor)
-			{
-				try
-				{
-					var lp=rotateVecByQuat(
-						{x:ray.hitVX,y:ray.hitVY,z:0.01},
-						vr.menuAnchor.quat);
-					var wp={
-						x:lp.x+vr.menuAnchor.pos.x,
-						y:lp.y+vr.menuAnchor.pos.y,
-						z:lp.z+vr.menuAnchor.pos.z};
-					res.quad.transform=new XRRigidTransform(wp,vr.menuAnchor.quat);
-				}
-				catch(e){}
 			}
 			if(!res.inLayers)
 			{
@@ -1793,13 +1798,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return out;
 	};
 
-	// One physical cursor per hand plus one arbitrated engine-mouse owner.
-	// hitVX/hitVY are in the menu quad's LOCAL coordinate system.  Both hands
+	// One visual cursor per hand plus one arbitrated engine-mouse owner.
+	// hitU/hitV are the menu UV coordinates shared by cursor and mouse. Both hands
 	// stay visible; whichever hand presses trigger takes mouse ownership, and
-	// an in-progress drag keeps ownership until release/leave.
+	// an in-progress drag keeps ownership until release/leave.  Deliberately
+	// moving the other hand transfers hover ownership without requiring a click.
 	function makeMenuRayHandState()
 	{
-		return {wasHit:false,hitVX:0,hitVY:0,prevTrig:false};
+		return {wasHit:false,hitU:0,hitV:0,prevTrig:false};
 	}
 	var menuRayState={activeHand:null,prevMx:-1,prevMy:-1,prevTrig:false,
 		hands:{right:makeMenuRayHandState(),left:makeMenuRayHandState()}};
@@ -1811,7 +1817,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		menuRayState.prevTrig=false;
 		menuRayState.hands={right:makeMenuRayHandState(),left:makeMenuRayHandState()};
 	}
-	function chooseMenuRayHand(hits,activeHand,mouseDown,previousTriggers)
+	function chooseMenuRayHand(hits,activeHand,mouseDown,previousTriggers,movedHands)
 	{
 		// Never let the other hand steal an active drag.
 		if(mouseDown && activeHand && hits[activeHand])
@@ -1827,6 +1833,18 @@ EM_JS(void,YsfwInstallWebXR,(),
 			if(hits[hand] && hits[hand].trig && !previousTriggers[hand])
 			{
 				return hand;
+			}
+		}
+		// When both rays remain on the menu, make the hand the pilot actually
+		// moved own hover.  Ignore sub-threshold controller jitter; if both moved
+		// together, retaining the current owner is the least surprising result.
+		movedHands=movedHands||{};
+		if(!!movedHands.right!==!!movedHands.left)
+		{
+			var moved=movedHands.right ? 'right' : 'left';
+			if(hits[moved])
+			{
+				return moved;
 			}
 		}
 		// Otherwise keep hover ownership stable while that ray remains on the
@@ -1893,7 +1911,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// intersection stays correct when the head moves independently of the
 	// anchored quad.
 	//
-	// Per-hand wasHit / hitVX / hitVY feed the two visible cursor layers.  The
+	// Per-hand wasHit / hitU / hitV feed both rings in the cursor overlay. The
 	// engine still receives a single mouse stream, chosen by
 	// chooseMenuRayHand (fresh trigger edges can claim it from either hand).
 	function processMenuRayInput(frame)
@@ -1918,7 +1936,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 
 		var sources=frame.session.inputSources;
 		var hits={right:null,left:null};
+		var movedHands={right:false,left:false};
 		var hands=['right','left'];
+		var previousHit={
+			right:(menuRayState.hands.right.wasHit ? {u:menuRayState.hands.right.hitU,v:menuRayState.hands.right.hitV} : null),
+			left:(menuRayState.hands.left.wasHit ? {u:menuRayState.hands.left.hitU,v:menuRayState.hands.left.hitV} : null)
+		};
 		for(var h0=0; h0<hands.length; ++h0)
 		{
 			menuRayState.hands[hands[h0]].wasHit=false;
@@ -1961,12 +1984,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 				mx:pixel.x,
 				my:pixel.y,
 				trig:!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5),
-				localX:hit.localX,localY:hit.localY
+				u:hit.u,v:hit.v
 			};
 			hits[hand]=rec;
+			var old=previousHit[hand];
+			movedHands[hand]=(!old || 0.002<Math.abs(hit.u-old.u)+Math.abs(hit.v-old.v));
 			menuRayState.hands[hand].wasHit=true;
-			menuRayState.hands[hand].hitVX=hit.localX;
-			menuRayState.hands[hand].hitVY=hit.localY;
+			menuRayState.hands[hand].hitU=hit.u;
+			menuRayState.hands[hand].hitV=hit.v;
 		}
 
 		// If a dragging hand left the quad, release at its LAST valid pixel
@@ -1983,7 +2008,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			right:menuRayState.hands.right.prevTrig,
 			left:menuRayState.hands.left.prevTrig
 		};
-		var chosen=chooseMenuRayHand(hits,menuRayState.activeHand,menuRayState.prevTrig,previousTriggers);
+		var chosen=chooseMenuRayHand(hits,menuRayState.activeHand,menuRayState.prevTrig,previousTriggers,movedHands);
 		if(!chosen)
 		{
 			// No controller hit the menu this frame.  Preserve the engine's last
@@ -2813,6 +2838,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 	function processControllerPlain(entry,viewerQuat,rawSrc)
 	{
 		var ptr=_YsfwVrControlDataPointer()>>2;
+		// [7] is a level-sensed "either XR trigger" confirmation input for
+		// FsCenterJoystick's pre-flight screen.  updateControllers (or the
+		// headless poke hook) clears it once at the start of each whole frame;
+		// individual hand calls only OR a press into it.
+		if(entry.trigger>TRIGGER_THRESHOLD)
+		{
+			HEAPF32[ptr+7]=1;
+		}
 		var physGrabbed=entry.squeeze>GRAB_THRESHOLD;
 		// True while the main-menu quad is being shown: B/Y dispatch ESC so the
 		// pilot can navigate back, and flight-control inputs (stick/throttle/
@@ -4316,9 +4349,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.skyRes && vr.skyRes.inLayers && vr.skyRes.layer){ layers.push(vr.skyRes.layer); }
 		// Menu quad: placed after the sky so it composites over it.
 		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
-		// Per-hand ray cursors: front-most, floating just in front of the menu.
-		if(vr.cursorRes.right && vr.cursorRes.right.inLayers){ layers.push(vr.cursorRes.right.quad); }
-		if(vr.cursorRes.left && vr.cursorRes.left.inLayers){ layers.push(vr.cursorRes.left.quad); }
+		// Transparent cursor overlay: front-most and exactly coextensive with
+		// the menu. Both hand rings share this one composition layer.
+		if(vr.cursorRes && vr.cursorRes.inLayers){ layers.push(vr.cursorRes.quad); }
 		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
 	}
 
@@ -4840,6 +4873,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// which path below is taken.
 		updateHelpAutoHide();
 
+		// Rebuilt as an OR across all tracked hands by processControllerPlain.
+		// Clear before asking for a pose so a transient tracking loss cannot
+		// leave the pre-flight confirmation trigger stuck down.
+		HEAPF32[(_YsfwVrControlDataPointer()>>2)+7]=0;
 		var pose=frame.getViewerPose(vr.refSpace);
 		if(pose)
 		{
@@ -5285,6 +5322,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var vq=viewerQuat ? {x:viewerQuat[0],y:viewerQuat[1],z:viewerQuat[2],w:viewerQuat[3]} : {x:0,y:0,z:0,w:1};
 		var vp=viewerPos ? {x:viewerPos[0],y:viewerPos[1],z:viewerPos[2]} : {x:0,y:0,z:0};
+		// Match updateControllers: this slot represents this complete frame,
+		// then processControllerPlain ORs in either hand's trigger.
+		HEAPF32[(_YsfwVrControlDataPointer()>>2)+7]=0;
 		for(var i=0; i<list.length; ++i)
 		{
 			var e=list[i];
@@ -5422,6 +5462,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 	vr.menuQuadMetricSize=menuQuadMetricSize;
 	vr.chooseMenuRayHand=chooseMenuRayHand;
 	vr.menuUvToPixel=menuUvToPixel;
+	vr.cursorOverlayPoint=cursorOverlayPoint;
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read

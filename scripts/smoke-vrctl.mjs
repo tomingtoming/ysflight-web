@@ -103,6 +103,32 @@ function readCtl() {
   return globalThis.Module.ysfwVr.readControlBlock();
 }
 
+// ---- Pre-flight confirmation trigger ------------------------------------
+// Before flight-control axes, pin down the frame-level confirmation trigger
+// in control slot [7].  Both controller calls share one frame: a left press
+// must survive a later idle-right call (OR semantics), then clear on the next
+// all-released frame.  FsCenterJoystick consumes this exact slot so either XR
+// hand can pass its pre-flight prompt even though legacy joystick polling
+// cannot see XRInputSource gamepads.
+const confirmTrigger = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const neutral = { pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, buttons: {} };
+  vr.pokeControllerFrame([
+    { ...neutral, hand: 'left', trigger: 1 },
+    { ...neutral, hand: 'right', trigger: 0 },
+  ]);
+  const pressed = vr.readControlBlock()[7];
+  vr.pokeControllerFrame([
+    { ...neutral, hand: 'left', trigger: 0 },
+    { ...neutral, hand: 'right', trigger: 0 },
+  ]);
+  return { pressed, released: vr.readControlBlock()[7] };
+});
+check('pre-flight confirm: either-hand trigger is ORed into control slot [7]',
+  1 === confirmTrigger.pressed, JSON.stringify(confirmTrigger));
+check('pre-flight confirm: slot [7] clears on the next released frame',
+  0 === confirmTrigger.released, JSON.stringify(confirmTrigger));
+
 // ---- Group 1: pitch -> elevator -----------------------------------------
 // Grab the right (stick) hand at an identity grip pose, then move the grip
 // to +22.5deg about the local X axis -- half of the 45deg max deflection.

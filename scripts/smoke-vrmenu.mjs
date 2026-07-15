@@ -137,7 +137,7 @@ const missingHook = await page.evaluate(() => {
   for (const k of [
     'forceVrMenu', 'readMenuData', 'readMenuStats', 'teardownMenuForTest',
     'intersectRayWithAnchoredQuad', 'fitMenuTextureSize', 'menuQuadMetricSize',
-    'chooseMenuRayHand', 'menuUvToPixel',
+    'chooseMenuRayHand', 'menuUvToPixel', 'cursorOverlayPoint',
   ]) {
     if (!vr[k]) return 'vr.' + k;
   }
@@ -288,6 +288,8 @@ const menuGeometryTests = await page.evaluate(() => {
     metric,
     topLeft: vr.menuUvToPixel(0, 0, fitted.w, fitted.h),
     bottomRight: vr.menuUvToPixel(1, 1, fitted.w, fitted.h),
+    cursorTopLeft: vr.cursorOverlayPoint(0, 0, 1024, 576),
+    cursorBottomRight: vr.cursorOverlayPoint(1, 1, 1024, 576),
   };
 });
 check('menu fit: high-DPI 16:9 canvas keeps aspect while capping at 2048px',
@@ -300,6 +302,10 @@ check('menu ray: UV corners map inside the first/last valid texture pixels',
   menuGeometryTests.topLeft.x === 0 && menuGeometryTests.topLeft.y === 0 &&
   menuGeometryTests.bottomRight.x === 2047 && menuGeometryTests.bottomRight.y === 1151,
   'pixels=' + JSON.stringify(menuGeometryTests));
+check('menu cursor: overlay uses the same full-range UV corners (no central-square transform)',
+  menuGeometryTests.cursorTopLeft.x === 0 && menuGeometryTests.cursorTopLeft.y === 0 &&
+  menuGeometryTests.cursorBottomRight.x === 1023 && menuGeometryTests.cursorBottomRight.y === 575,
+  'cursorPixels=' + JSON.stringify({ topLeft: menuGeometryTests.cursorTopLeft, bottomRight: menuGeometryTests.cursorBottomRight }));
 
 // ---- Two-hand pointer arbitration ----------------------------------------
 // Both hits remain visible; the engine mouse has one owner.  A fresh trigger
@@ -313,6 +319,12 @@ const handTests = await page.evaluate(() => {
     leftClaims: pick({ right: { trig: false }, left: { trig: true } }, 'right', false, idle),
     rightClaims: pick({ right: { trig: true }, left: { trig: false } }, 'left', false, idle),
     dragKeepsLeft: pick({ right: { trig: true }, left: { trig: true } }, 'left', true, idle),
+    leftMovementClaimsHover: pick(
+      { right: { trig: false }, left: { trig: false } }, 'right', false, idle,
+      { right: false, left: true }),
+    rightMovementClaimsHover: pick(
+      { right: { trig: false }, left: { trig: false } }, 'left', false, idle,
+      { right: true, left: false }),
   };
 });
 check('menu ray: left hand works when it is the only hit', handTests.onlyLeft === 'left', JSON.stringify(handTests));
@@ -320,6 +332,8 @@ check('menu ray: hover owner remains stable while both hands point', handTests.s
 check('menu ray: fresh left trigger claims the pointer', handTests.leftClaims === 'left', JSON.stringify(handTests));
 check('menu ray: fresh right trigger claims the pointer', handTests.rightClaims === 'right', JSON.stringify(handTests));
 check('menu ray: an active left drag cannot be stolen by right', handTests.dragKeepsLeft === 'left', JSON.stringify(handTests));
+check('menu ray: moving the left hand transfers hover ownership', handTests.leftMovementClaimsHover === 'left', JSON.stringify(handTests));
+check('menu ray: moving the right hand transfers hover ownership', handTests.rightMovementClaimsHover === 'right', JSON.stringify(handTests));
 
 // ---- teardownMenu: menuData cleared on session teardown -------------------
 // Run the REAL teardown (vr.teardownMenuForTest wraps teardownMenu): it must
