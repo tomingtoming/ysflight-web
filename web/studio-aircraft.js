@@ -1159,7 +1159,6 @@ async function main() {
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
   buildViewpointsSection(chrome.rail);
-  buildViewpointsSection(chrome.rail);
 
   // Movable-part & light GUI editor.  Mounts into the rail; reads the visual
   // entry and the live preview handle via closures over module state.
