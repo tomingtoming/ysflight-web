@@ -21,6 +21,7 @@ import {
   parseRecipe, fmtBytes, memberBytes, summarize, memberFlight, ATTRIBUTION_POLICIES,
 } from './studio-pack-core.js';
 import * as opfs from './opfs-store.js';
+import { prepareUpdate, commitUpdate } from './pack-update.js';
 import { zipSync } from './vendor/fflate.js';
 
 const S = ({
@@ -82,6 +83,16 @@ const S = ({
     exportBtn: '⬇ zipをダウンロード',
     exportNeedSave: '（先に保存してください）',
     exported: (n) => '✓ ' + n + '.zip を書き出しました',
+    updTitle: '⤴️ ZIPから更新',
+    updIntro: '編集中のパックの中身を、選んだ zip の内容で差し替えます（パック名・有効/無効・作者情報は引き継ぎ）。書き出した zip を外部で手直しした版の取り込みに。',
+    updBtn: '⤴️ zipを選んで更新',
+    updNeedEdit: '（✏️ で保存済みのパックを開いているときに使えます）',
+    updConfirm: (n, d, hasRecipe) => '「' + n + '」を選択した zip の内容で更新します。\n' +
+      '追加 ' + d.added.length + ' ／ 削除 ' + d.removed.length + ' ／ 変更 ' + d.changed.length + ' ／ 変更なし ' + d.unchanged + '\n' +
+      '（有効/無効の状態と作者情報は引き継がれます）' +
+      (hasRecipe ? '' : '\n⚠ この zip にはレシピ（workbench.json）が無いため、更新後はマイ作品の棚から外れ、ゲームページの「追加パック」欄での管理になります'),
+    updSame: '選択した zip は今の内容と同一です（更新は不要でした）',
+    updDoneNoRecipe: '✓ 更新しました。zip にレシピが無いため、以降はゲームページの「追加パック」欄で管理されます',
     editingBadge: (n) => '✏️ 編集中: ' + n,
     working: '作業中…',
     errorPrefix: 'エラー: ',
@@ -147,6 +158,16 @@ const S = ({
     exportBtn: '⬇ Download zip',
     exportNeedSave: '(Save first)',
     exported: (n) => '✓ Exported ' + n + '.zip',
+    updTitle: '⤴️ Update from ZIP',
+    updIntro: 'Replace the edited pack\'s contents with a chosen zip (name, on/off state, and author info carry over). For re-importing an exported zip you touched up outside.',
+    updBtn: '⤴️ Choose a zip & update',
+    updNeedEdit: '(Available while editing a saved pack via ✏️)',
+    updConfirm: (n, d, hasRecipe) => 'Update “' + n + '” with the selected zip?\n' +
+      'Added ' + d.added.length + ' / removed ' + d.removed.length + ' / changed ' + d.changed.length + ' / unchanged ' + d.unchanged + '\n' +
+      '(The on/off state and author info carry over.)' +
+      (hasRecipe ? '' : '\n⚠ This zip has no recipe (workbench.json): after the update the pack leaves this shelf and is managed in the game page\'s add-on panel'),
+    updSame: 'The selected zip is identical to the current contents (nothing to update)',
+    updDoneNoRecipe: '✓ Updated. The zip carries no recipe, so the pack is now managed in the game page\'s add-on panel',
     editingBadge: (n) => '✏️ Editing: ' + n,
     working: 'Working…',
     errorPrefix: 'Error: ',
@@ -600,6 +621,67 @@ function buildRail() {
     expMsg.textContent = S.exported(sanitize(savedName));
   });
 
+  // ⤴️ Update from ZIP: the inverse of export — replace THIS pack's record
+  // with a zip's contents while keeping its identity/state (pack-update.js).
+  // The successor keeps being a creation only if the zip carries a recipe
+  // (an exported pack zip does); otherwise it moves to the game page's
+  // add-on panel, which the confirm dialog warns about.
+  rail.appendChild(el('h2', null, S.updTitle));
+  rail.appendChild(el('p', 'intro', S.updIntro));
+  const updBtn = el('button', null, S.updBtn);
+  const updWrap = el('div', 'btnrow');
+  updWrap.style.justifyContent = 'flex-start';
+  updWrap.appendChild(updBtn);
+  rail.appendChild(updWrap);
+  const updMsg = el('div', 'msg');
+  rail.appendChild(updMsg);
+  updBtn.addEventListener('click', () => {
+    if (!editingId) { updMsg.textContent = S.updNeedEdit; return; }
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    inp.accept = '.zip';
+    inp.addEventListener('change', async () => {
+      const file = inp.files && inp.files[0];
+      if (!file) return;
+      updBtn.disabled = true;
+      updMsg.textContent = S.working;
+      try {
+        const oldRec = await opfs.getRecord(editingId);
+        if (!oldRec) throw new Error('pack record not found: ' + editingId);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let prep;
+        try {
+          prep = await prepareUpdate(oldRec, bytes, { sha256: webSha256, store: opfs });
+        } catch (e) {
+          try { await opfs.gc(); } catch (_) {}
+          throw e;
+        }
+        if (prep.sameId) { updMsg.textContent = S.updSame; return; }
+        if (!self.confirm(S.updConfirm(oldRec.name || editingId, prep.diff, prep.newHasRecipe))) {
+          try { await opfs.gc(); } catch (_) {}
+          updMsg.textContent = '';
+          return;
+        }
+        const rec = await commitUpdate(oldRec, prep.analysis, { store: opfs });
+        if (prep.newRecipeType) {
+          // Reload the right editor on the successor (a non-pack recipe
+          // reroutes via the normal ?edit dispatch).
+          location.replace(pageUrl('studio-pack.html', { edit: rec.id }));
+        } else {
+          editingId = null;
+          savedZip = null;
+          savedName = null;
+          updMsg.textContent = S.updDoneNoRecipe;
+        }
+      } catch (e) {
+        updMsg.textContent = S.errorPrefix + ((e && e.message) || e);
+      } finally {
+        updBtn.disabled = false;
+      }
+    });
+    inp.click();
+  });
+
   return { nameIn, editBadge };
 }
 
@@ -670,6 +752,19 @@ async function main2() {
       available: availCol.querySelectorAll('button[data-add]').length,
       members: members.length,
     }),
+    // Smoke/console driver: update the pack being edited from zip bytes (the
+    // UI flow minus the picker/confirm/navigation).
+    updateFromZip: async (bytes) => {
+      if (!editingId) throw new Error('no pack being edited');
+      const oldRec = await opfs.getRecord(editingId);
+      const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      const prep = await prepareUpdate(oldRec, buf, { sha256: webSha256, store: opfs });
+      if (prep.sameId) return { id: editingId, updated: false, same: true };
+      const rec = await commitUpdate(oldRec, prep.analysis, { store: opfs });
+      const oldId = editingId;
+      editingId = rec.id;
+      return { id: rec.id, oldId, updated: true, diff: prep.diff, hasRecipe: prep.newHasRecipe };
+    },
     // Smoke/console driver: curate every available creation into a pack and save.
     composeAll: async (name) => {
       members = [];
