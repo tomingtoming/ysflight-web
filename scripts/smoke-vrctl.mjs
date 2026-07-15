@@ -212,6 +212,45 @@ const keysAfterTrigger = await page.evaluate(() => {
 });
 check('trigger: fire-gun key ("Space") dispatched', keysAfterTrigger.includes('Space'), 'keys=' + JSON.stringify(keysAfterTrigger));
 
+// ---- Group 4b: menu input isolation ------------------------------------
+// Quest field report: on the flight-setup menu, the left trigger clicked
+// the Aircraft button under its ray, but the right trigger opened Formation.
+// The right branch used to dispatch its normal RIGHT_DIAL Space key before
+// reaching the late menuVisible guard; Space activated the GUI's separately
+// keyboard-focused button in addition to the ray's synthetic mouse click.
+// Pin down that BOTH hands now return through the common menu-first route:
+// no flight key, stick/throttle grab, or pre-flight-confirm slot may leak.
+const menuInputIsolation = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const savedMenuRes = vr.menuRes;
+  const neutral = { pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} };
+  vr.menuRes = { inLayers: true };
+  vr.pokeControllerFrame([
+    { ...neutral, hand: 'right' },
+    { ...neutral, hand: 'left' },
+  ]);
+  window.__vrctlKeys = [];
+  vr.pokeControllerFrame([
+    { ...neutral, hand: 'right', squeeze: 1, trigger: 1, buttons: { a: true, b: false } },
+    { ...neutral, hand: 'left', squeeze: 1, trigger: 1, buttons: { a: true, b: false } },
+  ]);
+  const block = vr.readControlBlock();
+  const keys = window.__vrctlKeys.slice();
+  vr.pokeControllerFrame([
+    { ...neutral, hand: 'right' },
+    { ...neutral, hand: 'left' },
+  ]);
+  vr.menuRes = savedMenuRes;
+  return { keys, stickGrabbed: block[0], throttleGrabbed: block[4], confirmTrigger: block[7] };
+});
+check('menu routing: right/left triggers dispatch no flight key',
+  0 === menuInputIsolation.keys.length, JSON.stringify(menuInputIsolation));
+check('menu routing: grips do not activate stick or throttle',
+  0 === menuInputIsolation.stickGrabbed && 0 === menuInputIsolation.throttleGrabbed,
+  JSON.stringify(menuInputIsolation));
+check('menu routing: trigger click does not bleed into pre-flight confirmation',
+  0 === menuInputIsolation.confirmTrigger, JSON.stringify(menuInputIsolation));
+
 // ---- Group 5 (extra coverage): face buttons -> brake / view-cycle keys ---
 // Right A no longer fires gear on the bare press edge (see Feature 1 / Group
 // 6 below): a press with no release yet must NOT dispatch KeyG immediately.

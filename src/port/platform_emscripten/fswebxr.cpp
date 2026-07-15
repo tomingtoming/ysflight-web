@@ -2838,20 +2838,122 @@ EM_JS(void,YsfwInstallWebXR,(),
 	function processControllerPlain(entry,viewerQuat,rawSrc)
 	{
 		var ptr=_YsfwVrControlDataPointer()>>2;
-		// [7] is a level-sensed "either XR trigger" confirmation input for
-		// FsCenterJoystick's pre-flight screen.  updateControllers (or the
-		// headless poke hook) clears it once at the start of each whole frame;
-		// individual hand calls only OR a press into it.
-		if(entry.trigger>TRIGGER_THRESHOLD)
-		{
-			HEAPF32[ptr+7]=1;
-		}
-		var physGrabbed=entry.squeeze>GRAB_THRESHOLD;
 		// True while the main-menu quad is being shown: B/Y dispatch ESC so the
 		// pilot can navigate back, and flight-control inputs (stick/throttle/
 		// trigger/dial) are suppressed -- the menu uses ray-to-mouse injection
 		// instead (see processMenuRayInput/YsfwInjectMouseEvent).
 		var menuVisible=!!(vr.menuRes&&vr.menuRes.inLayers);
+		// Menu routing MUST run before either hand's normal flight branch.  The
+		// old right-hand path did not test menuVisible until after its stick,
+		// dial and trigger logic.  A right trigger therefore injected BOTH the
+		// ray's mouse click and RIGHT_DIAL's default Space key; in the flight-
+		// setup GUI that Space activated the keyboard-focused Formation button
+		// instead of the Aircraft button under the ray.  The left-hand branch
+		// happened to test menuVisible before its dial/trigger, producing the
+		// observed asymmetric behaviour.  Consume both hands symmetrically here
+		// and return before ANY flight-control action can leak into the menu.
+		if(menuVisible)
+		{
+			var menuTriggerPressed=entry.trigger>TRIGGER_THRESHOLD;
+			if('right'===entry.hand)
+			{
+				// Release any state that may have been active before returning to
+				// the menu, but do not turn a menu grip/trigger into a flight input.
+				HEAPF32[ptr+0]=0;
+				HEAPF32[ptr+1]=0;
+				HEAPF32[ptr+2]=0;
+				HEAPF32[ptr+3]=0;
+				vr.ctl.stick.grabbed=false;
+				vr.ctl.stick.q0=null;
+				vr.ctl.propAnchor.right=null;
+				var menuRightDial=vr.ctl.dial.right;
+				if(menuRightDial.engaged && 'hold'===menuRightDial.engaged.mode)
+				{
+					vrKeyEdge(menuRightDial.engaged.code,false);
+				}
+				menuRightDial.engaged=null;
+				vr.ctl.rightTrigger=menuTriggerPressed; // consume level, no key
+
+				// A has no menu meaning.  Track/own its physical level so a press
+				// begun in the menu cannot become a gear tap after the transition.
+				var menuAPressed=!!(entry.buttons && entry.buttons.a);
+				if(menuAPressed)
+				{
+					vr.ctl.aBtn.pressed=true;
+					vr.ctl.aBtn.owned=true;
+					vr.ctl.aBtn.recentered=true; // suppress hold action too
+				}
+				else
+				{
+					vr.ctl.aBtn.pressed=false;
+					vr.ctl.aBtn.owned=false;
+					vr.ctl.aBtn.recentered=false;
+				}
+
+				// B remains the explicit go-back action while the menu is visible.
+				var menuBPressed=!!(entry.buttons && entry.buttons.b);
+				vrKeyEdge('KeyB',false);
+				if(menuBPressed && !vr.ctl.rightB)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap('Escape');
+				}
+				vr.ctl.rightB=menuBPressed;
+				vr.ctl.rightBSwallow=menuBPressed;
+			}
+			else if('left'===entry.hand)
+			{
+				HEAPF32[ptr+4]=0;
+				vr.ctl.thr.grabbed=false;
+				vr.ctl.thr.p0=null;
+				vr.ctl.thr.fwd0=null;
+				vr.ctl.propAnchor.left=null;
+				var menuLeftDial=vr.ctl.dial.left;
+				if(menuLeftDial.engaged && 'hold'===menuLeftDial.engaged.mode)
+				{
+					vrKeyEdge(menuLeftDial.engaged.code,false);
+				}
+				menuLeftDial.engaged=null;
+				vr.ctl.leftTrigger=menuTriggerPressed; // consume level, no key
+
+				// X likewise has no menu meaning; consume it without toggling help.
+				var menuXPressed=!!(entry.buttons && entry.buttons.a);
+				if(menuXPressed)
+				{
+					vr.ctl.xBtn.pressed=true;
+					vr.ctl.xBtn.owned=true;
+					vr.ctl.xBtn.helped=true; // suppress hold action too
+				}
+				else
+				{
+					vr.ctl.xBtn.pressed=false;
+					vr.ctl.xBtn.owned=false;
+					vr.ctl.xBtn.helped=false;
+				}
+
+				// Y mirrors B as the left-hand go-back action.
+				var menuYPressed=!!(entry.buttons && entry.buttons.b);
+				if(menuYPressed && !vr.ctl.leftY)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap('Escape');
+				}
+				vr.ctl.leftY=menuYPressed;
+				vr.ctl.leftYSwallow=menuYPressed;
+			}
+			return;
+		}
+
+		// [7] is a level-sensed "either XR trigger" confirmation input for
+		// FsCenterJoystick's pre-flight screen.  updateControllers (or the
+		// headless poke hook) clears it once at the start of each whole frame;
+		// individual hand calls only OR a press into it.  Menu triggers return
+		// above so a click that launches a flight cannot bleed into this slot.
+		if(entry.trigger>TRIGGER_THRESHOLD)
+		{
+			HEAPF32[ptr+7]=1;
+		}
+		var physGrabbed=entry.squeeze>GRAB_THRESHOLD;
 		// While a modal in-flight dialog is open (see SimDrawVrGui / fsvr.h's
 		// FsVrGuiDataPointer), ONE hand's dial/trigger/A-B inputs are
 		// rerouted to operate that dialog instead of their normal
@@ -3079,21 +3181,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// release-if-held safety so a brake held from before the dialog
 			// opened doesn't stay stuck on.
 			var bPressed=!!(entry.buttons && entry.buttons.b);
-			if(menuVisible)
-			{
-				// While the main menu is visible, B dispatches ESC (go back).
-				// Flight-control input (air brake) is suppressed entirely.
-				vrKeyEdge('KeyB',false); // Ensure KeyB is released.
-				if(bPressed && !vr.ctl.rightB)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap('Escape');
-				}
-				vr.ctl.rightB=bPressed;
-				// Skip remainder of right-hand processing (stick/dial/trigger
-				// are all suppressed while the menu is the active UI).
-				return;
-			}
 			if(rActive && bPressed)
 			{
 				// This press overlapped dialog ownership (the cancel press
@@ -3271,20 +3358,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			// same or a later frame of that same physical press.
 			var yPressed=!!(entry.buttons && entry.buttons.b);
 			var yPressEdge=(yPressed && !vr.ctl.leftY);
-			if(menuVisible)
-			{
-				// While the main menu is visible, Y dispatches ESC (go back).
-				// The normal view-cycle action is suppressed.
-				if(yPressEdge)
-				{
-					vrHapticPulse(rawSrc);
-					vrKeyTap('Escape');
-				}
-				vr.ctl.leftY=yPressed;
-				// Skip remainder of left-hand processing (throttle/dial/trigger
-				// are all suppressed while the menu is the active UI).
-				return;
-			}
 			if(lActive && yPressed)
 			{
 				vr.ctl.leftYSwallow=true;
