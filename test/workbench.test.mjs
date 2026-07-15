@@ -326,7 +326,7 @@ test('runway RGN matches the stock landing-surface structure (crescent oracle)',
       { x: 4000, z: 4000, headingDeg: 37, lengthM: 2500, widthM: 60 },
     ],
   });
-  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/rgnx.fld']);
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['user/rgnx/rgnx.fld']);
   const ours = fld.match(/^RGN\nARE [^\n]+\nPOS [^\n]+\nID 1\nEND$/gm) || [];
   assert.equal(ours.length, 2, 'one id-1 region per runway');
   assert.match(fld, /^RGN\nARE -25\.00 -510\.00 25\.00 510\.00\nPOS 0\.00 0\.00 0\.00 0 0 0\nID 1\nEND$/m);
