@@ -20,6 +20,7 @@ import { mountPreview } from './dnm-preview.js';
 import { dnmToGlb, glbToDnm, dnmToCollisionSrf, estimateCockpit } from './dnm-gltf.js';
 import { mountDatEditor } from './studio-dat.js';
 import { buildMovablesSection } from './studio-movables.js';
+import { buildLintSection } from './dnm-lint-ui.js';
 
 const S = ({
   ja: {
@@ -831,6 +832,19 @@ async function main() {
   const chrome = studioChrome(S.title);
   buildSurface(chrome.main);
   buildAssembleSection(chrome.rail);
+  // Thin mount: the linter UI lives in dnm-lint-ui.js; we only hand it the
+  // files currently assigned to the slots (collision/cockpit lint differently).
+  const lint = buildLintSection(chrome.rail, () => {
+    if (!sels) return [];
+    const pick = (sel, kind) => {
+      const ent = sel.value && sel.value !== '@generated' ? byName.get(sel.value) : null;
+      return ent ? { name: ent.name, bytes: ent.bytes, kind } : null;
+    };
+    return [
+      pick(sels.visual, 'visual'), pick(sels.coarse, 'visual'),
+      pick(sels.collision, 'collision'), pick(sels.cockpit, 'cockpit'),
+    ].filter(Boolean);
+  });
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
   buildCockpitSection(chrome.rail);
@@ -892,6 +906,7 @@ async function main() {
     hasPreview: () => !!preview,
     cockpit: () => (cockpit ? { ...cockpit, source: cockpitSource } : null),
     setCockpitView: (on) => { if (preview) preview.setCockpitView(on); return !!(preview && preview.getCockpitView()); },
+    runLint: () => lint.run(),
   };
 }
 main();
