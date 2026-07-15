@@ -14,10 +14,13 @@ import {
 } from './studio-shared.js';
 import {
   classifyLoose, assembleAircraftZip, makeDatFromBase,
-  extractDnmColors, repaintDnm,
+  extractDnmColors, repaintDnm, getDatCockpit, setDatCockpit,
 } from './workbench.js';
 import { mountPreview } from './dnm-preview.js';
-import { dnmToGlb, glbToDnm, dnmToCollisionSrf } from './dnm-gltf.js';
+import { dnmToGlb, glbToDnm, dnmToCollisionSrf, estimateCockpit } from './dnm-gltf.js';
+import { mountDatEditor } from './studio-dat.js';
+import { buildMovablesSection } from './studio-movables.js';
+import { buildLintSection } from './dnm-lint-ui.js';
 
 const S = ({
   ja: {
@@ -91,6 +94,16 @@ const S = ({
     datSet: (n) => '✓ ' + n + ' を機体組み立ての .dat スロットに入れました',
     datNeedName: '新しい機体名を入れてください',
     datDup: '⚠ その名前は既存の機体と重複しています（別名を推奨）',
+    ckTitle: '🧑‍✈️ コックピット',
+    ckIntro: '一人称視点の目の位置（YS機体座標・m）。保存時に .dat の COCKPITP へ書き込まれ、レシピにも残ります。',
+    ckX: '左右 x（右+）', ckY: '上下 y（上+）', ckZ: '前後 z（機首+）',
+    ckView: '👀 コックピットビュー', ckViewOff: '🔭 外部視点に戻る（ドラッグで見回し）',
+    ckSrc: {
+      recipe: 'レシピの保存値', dat: '.dat の COCKPITP から', glb: '.glb のカメラから', user: '手動指定',
+      estimate: 'ジオメトリから推定（機首から全長の約7%後方）— 要調整',
+    },
+    ckNone: '（外観 .dnm か .dat を入れると初期値を提案します）',
+    glbCockpit: '＋ コックピット位置を .glb のカメラから取り込みました',
     libEditingBadge: (n) => '✏️ 編集中: ' + n,
   },
   en: {
@@ -164,6 +177,16 @@ const S = ({
     datSet: (n) => '✓ Placed ' + n + ' into the assembly’s .dat slot',
     datNeedName: 'Enter a new aircraft name',
     datDup: '⚠ That name clashes with an existing aircraft (pick another)',
+    ckTitle: '🧑‍✈️ Cockpit',
+    ckIntro: 'First-person eye position (YS aircraft coords, meters). Written into the .dat COCKPITP on save, and kept in the recipe.',
+    ckX: 'x (starboard +)', ckY: 'y (up +)', ckZ: 'z (nose +)',
+    ckView: '👀 Cockpit view', ckViewOff: '🔭 Back to orbit (drag to look around)',
+    ckSrc: {
+      recipe: 'from the saved recipe', dat: 'from the .dat COCKPITP', glb: 'from the .glb camera', user: 'set by hand',
+      estimate: 'estimated from geometry (~7% of the length behind the nose) — adjust to taste',
+    },
+    ckNone: '(assign a visual .dnm or a .dat and a starting value appears)',
+    glbCockpit: '+ Cockpit position imported from the .glb camera',
     libEditingBadge: (n) => '✏️ Editing: ' + n,
   },
 })[LANG];
@@ -180,11 +203,21 @@ let byName = new Map();  // basename -> entry, rebuilt by rebuildSlots
 let preview = null;
 let previewedBytes = null; // the visual bytes currently mounted — paint updates
                            // live via setPaint, so only a different FILE remounts
+let movablesEditor = null; // handle returned by buildMovablesSection
+
+// Cockpit eye point (YS aircraft coords = the .dat COCKPITP value) and where
+// it came from: 'recipe' | 'glb' | 'dat' | 'estimate' | 'user'.  Sticky
+// sources (user/recipe/glb) survive slot changes; derived ones re-derive.
+let cockpit = null;
+let cockpitSource = null;
 
 // DOM handles filled during boot.
 let previewWrap, surfaceHint, animBar;
 let editBadge, slotsBox, acMsg, btnRow;
 let paintPanel, paintMsg;
+let ckInputs = null, ckSrcNote = null, ckViewBtn = null;
+let datEditorWrap = null;    // container div for the .dat editor panel
+let datEditorHandle = null;  // { load } returned by mountDatEditor
 
 // --- the big preview surface (main) ------------------------------------------------
 
@@ -250,6 +283,10 @@ function refreshPreview() {
     animBar.appendChild(r);
   }
   if (!any) animBar.appendChild(el('div', 'msg', S.animNone));
+
+  // Notify the movables editor that the preview has been (re)mounted so gizmos
+  // can be injected into the new scene.
+  if (movablesEditor) movablesEditor.refresh();
 }
 
 // --- assemble section ---------------------------------------------------------------
@@ -279,7 +316,8 @@ function rebuildSlots(preset) {
     coarse: mkSel(S.slotCoarse, candidates.dnm, pre('coarse') || guess.coarse, false),
   };
   if (!preset && generatedDat) sels.dat.value = '@generated';
-  sels.visual.addEventListener('change', () => { refreshPreview(); renderPaint(); });
+  sels.visual.addEventListener('change', () => { refreshPreview(); renderPaint(); deriveCockpit(); if (movablesEditor) movablesEditor.refresh(); });
+  sels.dat.addEventListener('change', () => { deriveCockpit(); refreshDatEditor(); });
 
   const nameIn = Object.assign(document.createElement('input'), {
     type: 'text',
@@ -299,6 +337,15 @@ function rebuildSlots(preset) {
         dat: pick(sels.dat), visual: pick(sels.visual), collision: pick(sels.collision),
         cockpit: pick(sels.cockpit), coarse: pick(sels.coarse),
       };
+      // Cockpit -> .dat: write COCKPITP into the outgoing flight model (the
+      // engine's F1 view reads only the .dat).  Left byte-identical when the
+      // .dat already says exactly this.
+      if (cockpit && slots.dat) {
+        const cur = getDatCockpit(slots.dat.bytes);
+        if (!cur || cur.x !== cockpit.x || cur.y !== cockpit.y || cur.z !== cockpit.z) {
+          slots.dat = { ...slots.dat, bytes: setDatCockpit(slots.dat.bytes, cockpit) };
+        }
+      }
       const asm = assembleAircraftZip({
         name: nameIn.value.trim() || undefined,
         ...slots,
@@ -306,6 +353,7 @@ function rebuildSlots(preset) {
           packName: nameIn.value.trim() || undefined,
           slots: Object.fromEntries(Object.entries(slots).map(([k, v]) => [k, v ? v.name : null])),
           datRecipe: sels.dat.value === '@generated' ? datRecipe : null,
+          cockpit: cockpit ? { x: cockpit.x, y: cockpit.y, z: cockpit.z } : null,
         },
       });
       const res = await saveOrReplace(asm.zipBytes, asm.packName, editingId);
@@ -334,6 +382,33 @@ function rebuildSlots(preset) {
 
   refreshPreview();
   renderPaint();
+  deriveCockpit();
+  refreshDatEditor();
+}
+
+// --- dat editor refresh -------------------------------------------------------------
+
+function refreshDatEditor() {
+  if (!datEditorWrap) return;
+  datEditorWrap.innerHTML = '';
+  datEditorHandle = null;
+  const pick = (sel) => (sel && sel.value === '@generated' ? generatedDat
+    : sel && sel.value ? byName.get(sel.value) : null);
+  const datEntry = sels ? pick(sels.dat) : null;
+  if (!datEntry) return;
+  const h2 = el('h2', null, LANG === 'ja' ? '✏️ .dat エディタ' : '✏️ .dat Editor');
+  datEditorWrap.appendChild(h2);
+  const intro = el('p', 'intro', LANG === 'ja'
+    ? '飛行特性の全パラメータをフォームまたは生テキストで編集できます。保存すると組み立てに反映されます。'
+    : 'Edit all flight-model parameters as a form or raw text. Save writes back into the assembly.');
+  datEditorWrap.appendChild(intro);
+  datEditorHandle = mountDatEditor(datEditorWrap, {
+    getBytes: () => datEntry.bytes,
+    setBytes: (bytes) => { datEntry.bytes = bytes; },
+    LANG,
+    el,
+    row,
+  });
 }
 
 function buildAssembleSection(rail) {
@@ -361,6 +436,9 @@ function buildAssembleSection(rail) {
   rail.appendChild(acMsg);
   rail.appendChild(btnRow);
 
+  datEditorWrap = el('div');
+  rail.appendChild(datEditorWrap);
+
   const addFiles = async (fileList) => {
     let glbBase = null;
     for (const f of Array.from(fileList)) {
@@ -377,6 +455,13 @@ function buildAssembleSection(rail) {
           entries.push({ name, bytes: res.dnm });
           glbBase = base;
           const auto = [];
+          // A Cockpit camera in the glb (our export, or one added in Blender)
+          // carries the eye point into the recipe.
+          if (res.cockpit) {
+            cockpit = res.cockpit;
+            cockpitSource = 'glb';
+            auto.push(S.glbCockpit);
+          }
           if (!entries.some((e) => /\.srf$/i.test(e.name))) {
             const coll = dnmToCollisionSrf(res.dnm);
             entries.push({ name: base + '_coll.srf', bytes: coll });
@@ -516,6 +601,89 @@ function buildPaintSection(rail) {
   rail.appendChild(paintMsg);
 }
 
+// --- cockpit section ------------------------------------------------------------------
+// The eye position for the first-person (F1) view.  The value lives in three
+// places, all wired here: the recipe (workbench.json, for re-editing), the
+// outgoing .dat's COCKPITP line (what the engine reads), and the preview
+// (marker + cockpit-view toggle, an approachable approximation — the truth is
+// always the 🛫 flight).
+
+function updateCockpitUi() {
+  if (!ckInputs) return;
+  for (const k of ['x', 'y', 'z']) {
+    if (document.activeElement !== ckInputs[k]) ckInputs[k].value = cockpit ? String(cockpit[k]) : '';
+  }
+  ckSrcNote.textContent = cockpit ? (S.ckSrc[cockpitSource] || '') : S.ckNone;
+  if (preview) preview.setCockpit(cockpit);
+  const canView = !!(preview && cockpit);
+  ckViewBtn.disabled = !canView;
+  if (!canView || !preview.getCockpitView()) {
+    ckViewBtn.textContent = S.ckView;
+    ckViewBtn.classList.remove('accent');
+  }
+}
+
+// Initial-value ladder: ① a sticky value (hand-set / recipe / glb camera)
+// stays put; ② the assigned .dat's existing COCKPITP; ③ a geometry estimate
+// (labeled as such in the UI).
+function deriveCockpit() {
+  if (!ckInputs) return;
+  if (cockpit && cockpitSource !== 'dat' && cockpitSource !== 'estimate') { updateCockpitUi(); return; }
+  const datEnt = sels && sels.dat
+    ? (sels.dat.value === '@generated' ? generatedDat : sels.dat.value ? byName.get(sels.dat.value) : null)
+    : null;
+  const fromDat = datEnt && /\.dat$/i.test(datEnt.name) ? getDatCockpit(datEnt.bytes) : null;
+  if (fromDat) {
+    cockpit = fromDat;
+    cockpitSource = 'dat';
+  } else {
+    const ent = visualEntry();
+    let est = null;
+    try { est = ent ? estimateCockpit(ent.bytes) : null; } catch (e) { est = null; }
+    cockpit = est;
+    cockpitSource = est ? 'estimate' : null;
+  }
+  updateCockpitUi();
+}
+
+function buildCockpitSection(rail) {
+  rail.appendChild(el('h2', null, S.ckTitle));
+  rail.appendChild(el('p', 'intro', S.ckIntro));
+  const box = el('div');
+  rail.appendChild(box);
+  ckInputs = {};
+  for (const k of ['x', 'y', 'z']) {
+    const inp = Object.assign(document.createElement('input'), { type: 'number', step: '0.05' });
+    inp.addEventListener('input', () => {
+      const v = {
+        x: parseFloat(ckInputs.x.value),
+        y: parseFloat(ckInputs.y.value),
+        z: parseFloat(ckInputs.z.value),
+      };
+      if (![v.x, v.y, v.z].every(Number.isFinite)) return;
+      cockpit = v;
+      cockpitSource = 'user';
+      updateCockpitUi();
+    });
+    row(box, S['ck' + k.toUpperCase()], inp);
+    ckInputs[k] = inp;
+  }
+  ckSrcNote = el('div', 'msg');
+  box.appendChild(ckSrcNote);
+  const btnR = el('div', 'btnrow');
+  btnR.style.justifyContent = 'flex-start';
+  ckViewBtn = el('button', null, S.ckView);
+  ckViewBtn.addEventListener('click', () => {
+    if (!preview || !cockpit) return;
+    const on = !preview.getCockpitView();
+    preview.setCockpitView(on);
+    ckViewBtn.textContent = on ? S.ckViewOff : S.ckView;
+    ckViewBtn.classList.toggle('accent', on);
+  });
+  btnR.appendChild(ckViewBtn);
+  box.appendChild(btnR);
+}
+
 // --- dat wizard section ---------------------------------------------------------------
 
 async function buildDatSection(rail) {
@@ -642,7 +810,9 @@ function buildBlenderSection(rail) {
     const ent = visualEntry();
     if (!ent) { msg.textContent = S.blExportNone; return; }
     try {
-      const res = dnmToGlb(ent.bytes);
+      // The cockpit rides along as a glTF camera so Blender shows the
+      // pilot's view and a re-import restores the value.
+      const res = dnmToGlb(ent.bytes, cockpit ? { cockpit } : undefined);
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([res.glb], { type: 'model/gltf-binary' }));
       a.download = ent.name.replace(/\.dnm$/i, '') + '.glb';
@@ -662,8 +832,38 @@ async function main() {
   const chrome = studioChrome(S.title);
   buildSurface(chrome.main);
   buildAssembleSection(chrome.rail);
+  // Thin mount: the linter UI lives in dnm-lint-ui.js; we only hand it the
+  // files currently assigned to the slots (collision/cockpit lint differently).
+  const lint = buildLintSection(chrome.rail, () => {
+    if (!sels) return [];
+    const pick = (sel, kind) => {
+      const ent = sel.value && sel.value !== '@generated' ? byName.get(sel.value) : null;
+      return ent ? { name: ent.name, bytes: ent.bytes, kind } : null;
+    };
+    return [
+      pick(sels.visual, 'visual'), pick(sels.coarse, 'visual'),
+      pick(sels.collision, 'collision'), pick(sels.cockpit, 'cockpit'),
+    ].filter(Boolean);
+  });
   buildBorrowSection(chrome.rail);
   buildPaintSection(chrome.rail);
+  buildCockpitSection(chrome.rail);
+
+  // Movable-part & light GUI editor.  Mounts into the rail; reads the visual
+  // entry and the live preview handle via closures over module state.
+  movablesEditor = buildMovablesSection(chrome.rail, {
+    getVisualEntry: () => visualEntry(),
+    getPreview: () => preview,
+    onBytesChanged: (newBytes, _name) => {
+      const ent = visualEntry();
+      if (!ent) return;
+      ent.bytes = newBytes;
+      previewedBytes = null; // force remount on next refresh
+      refreshPreview();
+      renderPaint();
+    },
+  });
+
   await buildDatSection(chrome.rail);
   buildBlenderSection(chrome.rail);
 
@@ -683,6 +883,11 @@ async function main() {
         entries = await packPayload(editId, 'aircraft/');
         generatedDat = null;
         datRecipe = c.recipe.datRecipe || null;
+        const rc = c.recipe.cockpit;
+        if (rc && [rc.x, rc.y, rc.z].every(Number.isFinite)) {
+          cockpit = { x: rc.x, y: rc.y, z: rc.z };
+          cockpitSource = 'recipe';
+        }
         editingId = editId;
         editBadge.textContent = S.libEditingBadge(c.name || editId);
         preset = { slots: c.recipe.slots || {}, packName: c.recipe.packName || c.name };
@@ -699,6 +904,9 @@ async function main() {
     page: 'aircraft',
     getEntries: () => entries.map((e) => e.name),
     hasPreview: () => !!preview,
+    cockpit: () => (cockpit ? { ...cockpit, source: cockpitSource } : null),
+    setCockpitView: (on) => { if (preview) preview.setCockpitView(on); return !!(preview && preview.getCockpitView()); },
+    runLint: () => lint.run(),
   };
 }
 main();

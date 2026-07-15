@@ -276,9 +276,46 @@ test('assembleSceneryZip runways: pavement PLGs + landable pad + threshold spawn
   assert.match(stp, /^C ATTITUDE 90\.00deg 0\.00deg 0\.00deg$/m);
   assert.match(stp, /^C CTLLDGEA TRUE$/m);
 
+  // Safe-pavement region: an RGN rect with ID 1, rotated with the runway.
+  // fsexistence.cpp FsAirplane::HitGround only treats touchdown/rollout as
+  // on-runway when GetFieldRegion finds a region whose id passes
+  // FsSimulation::IsSafeTerrainRegionId (1 = runway, 2 = taxiway); without it
+  // the rollout is out-of-runway (rough-field pitch jolts / crash).  ARE is
+  // the local-frame min/max (long side along local +z), POS holds the
+  // rotation in 32768 = pi units — the same layout stock fields use.
+  assert.match(fld, /^RGN\nARE -32\.50 -1010\.00 32\.50 1010\.00\nPOS 1000\.00 0\.00 -2000\.00 16384 0 0\nID 1\nEND$/m);
+
   const a = await analyzePack(asm.zipBytes, { sha256 });
   assert.deepEqual(a.categories, ['scenery']);
   assert.equal(a.diagnostics.missing, 0);
+});
+
+test('runway RGN matches the stock landing-surface structure (crescent oracle)', () => {
+  // The measuring stick: stock fields mark every runway with an RGN id-1
+  // rect region — that is the ONLY thing IsSafeTerrainRegionId accepts as
+  // pavement.  Parse crescent.fld and prove the structure we emit is the
+  // same shape as the stock one.
+  const crescent = readFileSync(join(here, '..', 'upstream', 'YSFLIGHT', 'runtime', 'scenery', 'crescent.fld'), 'utf8').replace(/\r/g, '');
+  const stockRgns = crescent.match(/^RGN\nARE [^\n]+\nPOS [^\n]+\nID (\d+)\nEND$/gm) || [];
+  assert.ok(stockRgns.length > 0, 'stock field carries RGN blocks');
+  assert.ok(stockRgns.some((r) => /\nID 1\nEND$/.test(r)), 'stock field has an id-1 (runway) region');
+
+  // Ours: same 5-line block shape, one per runway, id 1, local-frame ARE
+  // symmetric around the center (rotation lives in POS, so rotated runways
+  // stay landable — GetRectRegionFromPoint untransforms by POS/att first).
+  const asm = assembleSceneryZip({
+    name: 'RGNX',
+    runways: [
+      { x: 0, z: 0, headingDeg: 0, lengthM: 1000, widthM: 30 },
+      { x: 4000, z: 4000, headingDeg: 37, lengthM: 2500, widthM: 60 },
+    ],
+  });
+  const fld = new TextDecoder().decode(unzipSync(asm.zipBytes)['scenery/rgnx.fld']);
+  const ours = fld.match(/^RGN\nARE [^\n]+\nPOS [^\n]+\nID 1\nEND$/gm) || [];
+  assert.equal(ours.length, 2, 'one id-1 region per runway');
+  assert.match(fld, /^RGN\nARE -25\.00 -510\.00 25\.00 510\.00\nPOS 0\.00 0\.00 0\.00 0 0 0\nID 1\nEND$/m);
+  // 37deg: rotation is carried by POS (37 * 32768 / 180 ~ 6736), ARE stays local.
+  assert.match(fld, /^RGN\nARE -40\.00 -1260\.00 40\.00 1260\.00\nPOS 4000\.00 0\.00 4000\.00 6736 0 0\nID 1\nEND$/m);
 });
 
 test('makeDatFromBase extras: SET knobs replace-or-append, smoke gets a generator', () => {
