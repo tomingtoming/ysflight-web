@@ -30,6 +30,12 @@ try {
 const D2R = Math.PI / 180;
 const latin1 = (b) => new TextDecoder('latin1').decode(b);
 
+test('aircraft studio mounts the viewpoint controls exactly once', () => {
+  const src = readFileSync(join(here, '..', 'web', 'studio-aircraft.js'), 'utf8');
+  const mounts = src.match(/^\s*buildViewpointsSection\(chrome\.rail\);$/gm) || [];
+  assert.equal(mounts.length, 1);
+});
+
 // --- .dat EXCAMERA -----------------------------------------------------------------
 
 test('getDatExCameras reads the stock b747 lines verbatim, in F1 order', { skip: !getDatExCameras }, () => {
