@@ -196,9 +196,46 @@ export function parseRecipe(recipe) {
 // lists are scanned) and to the analyzer (root-level files don't affect the
 // wrapper-peel, exactly like the recipe that already rides at the root).
 // The caller zips this (fflate zipSync) and hands it to the install pipeline.
+//
+// Layout (community convention, YSFHQ style): the engine-scanned .lst files
+// keep their category dirs (aircraft/ scenery/ ground/), while every payload
+// file is relocated under user/<packName>/ — list references are rewritten to
+// match.  Member snapshots may carry either the old flat layout (aircraft/x)
+// or the new user/<work>/x one; both relocate the same way, keyed by full
+// old path, so re-editing an old pack composes cleanly.
 export function composeEntries(members, packName, attribution) {
+  const packDir = 'user/' + sanitize(packName) + '/';
   const entries = {};
-  for (const m of members) for (const f of m.files) entries[f.path] = f.bytes;
+  const taken = new Set(); // zip entry paths, lowercased (cheap uniquifier)
+  const place = (want) => {
+    let out = want, n = 2;
+    while (taken.has(out.toLowerCase())) out = want.replace(/(\.[^.]*)?$/, '_' + (n++) + '$1');
+    taken.add(out.toLowerCase());
+    return out;
+  };
+  for (const m of members) {
+    // Pass 1 (per member): final path for each file — payload relocates to
+    // user/<pack>/<namespaced base>, lists stay in their category dirs.
+    const rename = new Map(); // member-snapshot path -> zip entry path
+    for (const f of m.files) {
+      const base = f.path.slice(f.path.lastIndexOf('/') + 1);
+      rename.set(f.path, /\.lst$/i.test(base) ? place(f.path) : place(packDir + base));
+    }
+    // Pass 2: emit, rewriting this member's list references to the relocated
+    // paths (a member's lists only ever reference its own snapshot files).
+    for (const f of m.files) {
+      let bytes = f.bytes;
+      if (/\.lst$/i.test(f.path)) {
+        let text = td.decode(bytes);
+        for (const [oldP, newP] of rename) {
+          if (oldP === f.path || oldP === newP) continue;
+          text = text.split(oldP).join(newP);
+        }
+        bytes = te.encode(text);
+      }
+      entries[rename.get(f.path)] = bytes;
+    }
+  }
   const a = normalizeAttribution(attribution);
   entries[RECIPE_FILE] = te.encode(JSON.stringify(buildRecipe(packName, members, a)));
   if (a) entries['README.txt'] = te.encode(buildReadme(packName, a, members));

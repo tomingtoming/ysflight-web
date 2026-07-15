@@ -13,6 +13,7 @@
 
 import { analyzePackStreaming, MAX_PACK_BYTES } from './packs.js';
 import * as opfs from './opfs-store.js';
+import { prepareUpdate, commitUpdate } from './pack-update.js';
 import { createMemfsLru } from './memfs-lru.js';
 import { unzipSync } from './vendor/fflate.js';
 
@@ -38,6 +39,14 @@ const S = ({
     enableTitle: 'クリックで有効化', disableTitle: 'クリックで無効化',
     errorPrefix: 'エラー: ',
     uninstallTitle: 'アンインストール',
+    updateBtn: '⤴',
+    updateTitle: 'ZIPから更新 — このパックの中身を選んだ zip で差し替えます（パック名・有効/無効・作者情報は引き継ぎ）',
+    updateConfirm: (n, d) => '「' + n + '」を選択した zip の内容で更新します。\n' +
+      '追加 ' + d.added.length + ' ／ 削除 ' + d.removed.length + ' ／ 変更 ' + d.changed.length + ' ／ 変更なし ' + d.unchanged + '\n' +
+      (d.changed.length ? '変更例: ' + d.changed.slice(0, 3).join(', ') + '\n' : '') +
+      '（有効/無効の状態と作者情報は引き継がれます）',
+    updateSame: '選択した zip は今の内容と同一です（更新は不要でした）',
+    updated: (n, d) => '✓ 「' + n + '」を更新しました（追加 ' + d.added.length + ' ／ 削除 ' + d.removed.length + ' ／ 変更 ' + d.changed.length + '）',
     confirmDelete: (n) => '「' + n + '」を削除しますか？',
     disableAllBtn: '全部無効化', enableAllBtn: '全部有効化', deleteAllBtn: '全部削除',
     disableAllTitle: '全パックを一括で無効化（原典YSFLIGHTに戻す。あとで有効化できます）',
@@ -114,6 +123,14 @@ const S = ({
     enableTitle: 'Click to enable', disableTitle: 'Click to disable',
     errorPrefix: 'Error: ',
     uninstallTitle: 'Uninstall',
+    updateBtn: '⤴',
+    updateTitle: 'Update from ZIP — replace this pack\'s contents with a chosen zip (name, on/off state, and author info carry over)',
+    updateConfirm: (n, d) => 'Update “' + n + '” with the selected zip?\n' +
+      'Added ' + d.added.length + ' / removed ' + d.removed.length + ' / changed ' + d.changed.length + ' / unchanged ' + d.unchanged + '\n' +
+      (d.changed.length ? 'e.g. changed: ' + d.changed.slice(0, 3).join(', ') + '\n' : '') +
+      '(The on/off state and author info carry over.)',
+    updateSame: 'The selected zip is identical to the current contents (nothing to update)',
+    updated: (n, d) => '✓ Updated “' + n + '” (added ' + d.added.length + ' / removed ' + d.removed.length + ' / changed ' + d.changed.length + ')',
     confirmDelete: (n) => 'Delete “' + n + '”?',
     disableAllBtn: 'Disable all', enableAllBtn: 'Enable all', deleteAllBtn: 'Delete all',
     disableAllTitle: 'Disable every pack at once (back to plain YSFLIGHT; you can re-enable later)',
@@ -473,6 +490,41 @@ function renderList(packs) {
           setErr(e);
         }
       });
+      // ⤴ Update from ZIP: replace this pack's contents with a newer zip while
+      // keeping its identity (name), on/off state, and author info — the
+      // versioning verb for self-authored packs (import alone always creates a
+      // NEW pack, because ids are content hashes).
+      const upd = document.createElement('button');
+      upd.textContent = S.updateBtn;
+      upd.title = S.updateTitle;
+      upd.style.cssText =
+        'font-size:12px;padding:4px 8px;border-radius:5px;border:1px solid #2a3647;background:#0d141d;color:#8fa3bb;cursor:pointer';
+      upd.addEventListener('click', () => {
+        const inp = document.createElement('input');
+        inp.type = 'file';
+        inp.accept = '.zip';
+        inp.addEventListener('change', async () => {
+          const file = inp.files && inp.files[0];
+          if (!file) return;
+          upd.disabled = true;
+          const s = document.getElementById('ysfw-pack-status');
+          try {
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            const res = await updateFromZip(p.id, bytes,
+              async (diff) => self.confirm(S.updateConfirm(p.name || p.id, diff)));
+            if (s) {
+              s.textContent = res.same ? S.updateSame
+                : res.updated ? S.updated(res.name, res.diff) : s.textContent;
+            }
+          } catch (e) {
+            if (s) s.textContent = S.errorPrefix + friendlyErr(e);
+          } finally {
+            upd.disabled = false;
+          }
+        });
+        inp.click();
+      });
+
       const del = document.createElement('button');
       del.textContent = '🗑';
       del.title = S.uninstallTitle;
@@ -489,6 +541,7 @@ function renderList(packs) {
       });
       if (fly) ctl.appendChild(fly);
       ctl.appendChild(toggle);
+      ctl.appendChild(upd);
       ctl.appendChild(del);
 
       row.appendChild(left);
@@ -628,6 +681,47 @@ async function uninstall(id) {
   await sync();
   await refresh();
   return { id, removed: true };
+}
+
+// Update an installed pack's contents from a new zip (see web/pack-update.js
+// for the carry-over rules; this adds the engine-FS half).  Same lineage as
+// the studios' re-edit -> replace-save: the successor gets a new content-hash
+// id, the old id retires, orphan blobs are GC'd.  `confirmFn(diff)` is asked
+// (async, may be a dialog) before anything irreversible; on cancel the blobs
+// the prepare streamed in are reclaimed and nothing changed.
+async function updateFromZip(id, bytes, confirmFn) {
+  if (!adapter) throw new Error('pack layer not ready');
+  const oldRec = await opfs.getRecord(id);
+  if (!oldRec) throw new Error('pack not installed: ' + id);
+  let prep;
+  try {
+    prep = await prepareUpdate(oldRec, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+      { sha256: webSha256, store: opfs });
+  } catch (e) {
+    try { await opfs.gc(); } catch (_) {} // reclaim blobs the rejected zip streamed in
+    throw e;
+  }
+  if (prep.sameId) return { id, updated: false, same: true, name: oldRec.name };
+  if (confirmFn && !(await confirmFn(prep.diff))) {
+    try { await opfs.gc(); } catch (_) {}
+    return { id, updated: false, cancelled: true, name: oldRec.name };
+  }
+  const rec = await commitUpdate(oldRec, prep.analysis, { store: opfs });
+  // Engine-FS swap, mirroring uninstallCore (old) + installCore (new): drop the
+  // old generated lists + materialized payload, then materialize the successor's
+  // listing when it is enabled.
+  for (const g of oldRec.generated || []) await adapter.rmrf(g.file);
+  await adapter.rmrf('packs/' + oldRec.id);
+  if (lru) lru.forgetPrefix('packs/' + oldRec.id + '/');
+  forgetPrefetchForId(oldRec.id);
+  if (rec.enabled !== false) await opfs.materialize(rec, adapter, { metaOnly: true });
+  cacheRemove(oldRec.id);
+  cacheUpsert({ id: rec.id, name: rec.name, enabled: rec.enabled !== false, bytes: rec.bytes, categories: rec.categories });
+  attribCache.delete(oldRec.id);
+  attribCache.delete(rec.id);
+  await sync();
+  await refresh();
+  return { id: rec.id, oldId: oldRec.id, updated: true, diff: prep.diff, name: rec.name };
 }
 
 // Bulk enable/disable EVERY installed pack in one pass.  A first release doesn't
@@ -801,13 +895,18 @@ async function attributionOf(id) {
   try {
     const rec = await opfs.getRecord(id);
     const rf = rec && (rec.files || []).find((f) => f.path === RECIPE_PATH);
+    let a = null;
     if (rf) {
       const recipe = JSON.parse(new TextDecoder().decode(await opfs.getBlob(rf.sha256)));
-      const a = recipe && recipe.attribution;
-      const author = a ? String(a.author || '').trim() : '';
-      const policy = a && S.attribPolicy[a.policy] ? a.policy : '';
-      if (author || policy) out = { author, policy };
+      a = recipe && recipe.attribution;
+    } else if (rec && rec.attribution) {
+      // Record-level carry from "update from ZIP" (the new zip shipped no
+      // recipe, so the pack's previously recorded attribution rides the record).
+      a = rec.attribution;
     }
+    const author = a ? String(a.author || '').trim() : '';
+    const policy = a && S.attribPolicy[a.policy] ? a.policy : '';
+    if (author || policy) out = { author, policy };
   } catch (e) { /* display-only — a broken recipe shows nothing */ }
   attribCache.set(id, out);
   return out;
@@ -1572,6 +1671,7 @@ window.ysfwPacks = {
   installFromBytes,
   setEnabled,
   uninstall,
+  updateFromZip,        // update an installed pack's contents from a new zip (state carries over)
   setEnabledAll,        // bulk: enable/disable every installed pack (one syncfs+refresh)
   uninstallAll,         // bulk: uninstall every installed pack (one gc+syncfs+refresh)
   list: listInstalled,

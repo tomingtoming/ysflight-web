@@ -93,8 +93,25 @@ test('composeEntries -> zip -> analyzePack: the studio output stays installable'
   ];
   const entries = composeEntries(members, 'QoLPack');
   assert.ok(entries[RECIPE_FILE], 'recipe rides in the zip');
+  // Community layout: lists stay in their category dirs, every payload file is
+  // relocated under user/<packName>/ with the list references rewritten.
+  assert.deepEqual(Object.keys(entries).sort(), [
+    'aircraft/air_f15_f15.lst',
+    'scenery/sce_isle_isle.lst',
+    'user/QoLPack/f15_f15.dat',
+    'user/QoLPack/f15_f15.dnm',
+    'user/QoLPack/f15_f15coll.srf',
+    'user/QoLPack/isle_isle.fld',
+    'user/QoLPack/isle_isle.stp',
+    RECIPE_FILE,
+  ].sort());
+  assert.equal(D(entries['aircraft/air_f15_f15.lst']),
+    'user/QoLPack/f15_f15.dat user/QoLPack/f15_f15.dnm user/QoLPack/f15_f15coll.srf\n');
+  assert.equal(D(entries['scenery/sce_isle_isle.lst']),
+    'WB_ISLE user/QoLPack/isle_isle.fld user/QoLPack/isle_isle.stp\n');
   const a = await analyzePack(zipSync(entries), { sha256, name: 'QoLPack', now: 1700000000000 });
   assert.deepEqual(a.categories.slice().sort(), ['aircraft', 'scenery']);
+  assert.equal(a.diagnostics.missing, 0, 'every relocated reference resolves');
   // The recipe survives the analyzer as an ordinary payload file and parses back.
   const recipeHashed = a.hashed.find((h) => h.path === RECIPE_FILE);
   assert.ok(recipeHashed, 'recipe is content-hashed like everything else');
@@ -102,6 +119,31 @@ test('composeEntries -> zip -> analyzePack: the studio output stays installable'
   const back = parseRecipe(recipe);
   assert.equal(back.packName, 'QoLPack');
   assert.equal(back.members.length, 2);
+});
+
+test('composeEntries: basename collisions across members are uniquified, refs follow', () => {
+  // san 'a' + file 'b_c.dnm' and san 'a_b' + file 'c.dnm' both namespace to
+  // a_b_c.dnm; merging into one user/<pack>/ dir must not clobber either.
+  const m1 = mkMember('a', 'aircraft', [
+    { path: 'aircraft/air_a.lst', bytes: E('aircraft/a_b_c.dat aircraft/a_b_c.dnm aircraft/a_x.srf\n') },
+    { path: 'aircraft/a_b_c.dat', bytes: E('IDENTIFY "M1"\nCATEGORY F\n') },
+    { path: 'aircraft/a_b_c.dnm', bytes: E('DNM1') },
+    { path: 'aircraft/a_x.srf', bytes: E('SRF1') },
+  ], 'a');
+  const m2 = mkMember('a_b', 'aircraft', [
+    { path: 'aircraft/air_a_b.lst', bytes: E('aircraft/a_b_c.dat aircraft/a_b_c.dnm aircraft/a_b_x.srf\n') },
+    { path: 'aircraft/a_b_c.dat', bytes: E('IDENTIFY "M2"\nCATEGORY F\n') },
+    { path: 'aircraft/a_b_c.dnm', bytes: E('DNM2') },
+    { path: 'aircraft/a_b_x.srf', bytes: E('SRF2') },
+  ], 'a_b');
+  const entries = composeEntries([m1, m2], 'P');
+  // Both members' payloads survive, the second under uniquified names.
+  assert.equal(D(entries['user/P/a_b_c.dnm']), 'DNM1');
+  assert.equal(D(entries['user/P/a_b_c_2.dnm']), 'DNM2');
+  assert.equal(D(entries['aircraft/air_a.lst']),
+    'user/P/a_b_c.dat user/P/a_b_c.dnm user/P/a_x.srf\n');
+  assert.equal(D(entries['aircraft/air_a_b.lst']),
+    'user/P/a_b_c_2.dat user/P/a_b_c_2.dnm user/P/a_b_x.srf\n');
 });
 
 test('composeEntries serializes an unchanged pack to identical recipe bytes (stable id)', () => {
