@@ -261,9 +261,10 @@
         fsTitle: '全画面切替（F11 / ⌃⌘F）',
         vrEnter: '🥽 VR',
         vrExit: '🥽 VR終了',
-        vrTitle: 'VRヘッドセットで飛ぶ（WebXR・実験的機能）。頭の向きが視点になります。HUD・計器・メニューはVR中は表示されません',
+        vrTitle: 'VRヘッドセットで飛ぶ（WebXR・実験的機能）。メインメニューまたはフライト中に開始してください',
         vrFail: 'VRセッションを開始できませんでした',
         vrMenuUnsupported: 'VRメニューにはWebXRレイヤー対応ブラウザ（Quest等）が必要です。フライト開始後にVRへ入ってください',
+        vrWrongContext: 'VRはメインメニューまたはフライト中に開始してください。デモなどの2D画面はVR表示に対応していません',
         intro: 'ジョイスティック未接続なら マウスが操縦桿 です。',
         rows: [
           ['マウス移動', '操縦桿（上下＝ピッチ / 左右＝ロール）'],
@@ -330,9 +331,10 @@
         fsTitle: 'Toggle fullscreen (F11 / ⌃⌘F)',
         vrEnter: '🥽 VR',
         vrExit: '🥽 Exit VR',
-        vrTitle: 'Fly in a VR headset (WebXR, experimental). Head tracking drives the view; HUD, instruments and menus are not shown in VR',
+        vrTitle: 'Fly in a VR headset (WebXR, experimental). Start from the main menu or during a flight',
         vrFail: 'Could not start the VR session',
         vrMenuUnsupported: 'The VR menu requires a WebXR-layers-capable browser (e.g. Quest). Enter VR after starting a flight instead',
+        vrWrongContext: 'Start VR from the main menu or during a flight. 2D-only screens such as the demo are not available in VR',
         intro: 'With no joystick, your mouse is the control stick.',
         rows: [
           ['Move mouse', 'Control stick (up/down = pitch, left/right = roll)'],
@@ -1261,10 +1263,11 @@
       // was auto-ended by the watchdog because the menu quad could never be
       // created (fswebxr.cpp sets endReason), explain why instead of silently
       // dropping the user back to the 2D page.
-      if (Module.ysfwVr && Module.ysfwVr.endReason === 'menu-unsupported') {
+      var vrEndReason = Module.ysfwVr && Module.ysfwVr.endReason;
+      if (vrEndReason === 'menu-unsupported' || vrEndReason === 'not-menu-or-flight') {
         Module.ysfwVr.endReason = null;
         var m = document.createElement('div');
-        m.textContent = TXT.help.vrMenuUnsupported;
+        m.textContent = (vrEndReason === 'menu-unsupported' ? TXT.help.vrMenuUnsupported : TXT.help.vrWrongContext);
         m.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(60,16,16,.92);color:#f5d5d5;border:1px solid #5a2a2a;border-radius:8px;padding:8px 14px;font-size:12px;max-width:80vw';
         document.body.appendChild(m);
         setTimeout(function () { if (m.parentNode) m.remove(); }, 8000);

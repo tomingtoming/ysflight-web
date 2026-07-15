@@ -387,6 +387,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// render of a session.
 		menuIdleFrames:1e9,
 		menuAnchor:null, // {pos:{x,y,z},quat:{x,y,z,w}} in vr.refSpace; null = not anchored yet
+		// Frames spent in a state that is neither the main menu nor a flight.
+		// Such 2D-only screens cannot be presented correctly in immersive VR;
+		// on device their last projection texture otherwise freezes and follows
+		// the head.  A short grace covers menu->flight transitions.
+		unsupportedVrFrames:0,
 		// Why the last session ended, when the JS side knows better than the
 		// bare 'end' event.  null = normal end; 'menu-unsupported' = the
 		// watchdog fired while the menu was up because the menu quad could
@@ -476,12 +481,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// null = not allocated, false = unavailable (createEquirectLayer threw),
 		// object = {layer,canvas,inLayers} once created.
 		skyRes:null,
-		// Small ring/dot cursor quad that tracks the menu ray hit point
-		// (layers path only) -- without it, aiming at dialog lists and small
-		// buttons is guesswork since the engine's hover highlight is the only
-		// feedback.  null = not allocated, false = unavailable,
-		// object = {quad,canvas,inLayers} once created.
-		cursorRes:null,
+		// Per-hand ring/dot cursor quads that track both menu-ray hit points.
+		// The engine still has one mouse pointer, so trigger ownership is
+		// arbitrated separately; both aim points remain visible.  Each entry:
+		// undefined = untried, false = unavailable, or {quad,canvas,inLayers}.
+		cursorRes:{right:undefined,left:undefined},
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -1163,6 +1167,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// swapchain every frame the engine wrote to it (menuDrawn flag).
 	// The quad is anchored in vr.refSpace (world-fixed) so it stays put when
 	// the player's head moves (anchorMenuQuad; see also vrRecenter hook).
+	var MENU_MAX_TEXTURE_PX=2048;
+	var MENU_QUAD_WIDTH_M=1.6;
+	function fitMenuTextureSize(srcW,srcH,maxPx)
+	{
+		srcW=Math.max(1,Math.round(srcW||1));
+		srcH=Math.max(1,Math.round(srcH||1));
+		maxPx=Math.max(1,Math.round(maxPx||MENU_MAX_TEXTURE_PX));
+		// Scale both axes by ONE factor.  Clamping them independently turns a
+		// high-DPI widescreen Quest canvas into an almost-square menu and makes
+		// the ray/cursor appear confined to a central square.
+		var scale=Math.min(1,maxPx/Math.max(srcW,srcH));
+		return {w:Math.max(1,Math.round(srcW*scale)),h:Math.max(1,Math.round(srcH*scale))};
+	}
+	function menuQuadMetricSize(texW,texH)
+	{
+		var w=MENU_QUAD_WIDTH_M;
+		return {w:w,h:w*Math.max(1,texH)/Math.max(1,texW)};
+	}
 	function setupMenu()
 	{
 		if(vr.menuRes)
@@ -1179,8 +1201,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 
 		var canvas=Module.canvas||document.getElementById('canvas');
-		var W=Math.min(canvas ? canvas.width : 800, 2048);
-		var H=Math.min(canvas ? canvas.height : 600, 2048);
+		var fitted=fitMenuTextureSize(canvas ? canvas.width : 800,canvas ? canvas.height : 600,MENU_MAX_TEXTURE_PX);
+		var W=fitted.w;
+		var H=fitted.h;
 		if(W<=0||H<=0)
 		{
 			return;
@@ -1218,6 +1241,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GL.textures[texId]=tex; tex.name=texId;
 
 		var quad=null;
+		var quadSize=menuQuadMetricSize(W,H);
 		if(!inTestMode)
 		{
 			try
@@ -1227,8 +1251,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 					viewPixelWidth:W,
 					viewPixelHeight:H,
 					layout:'mono',
-					width:1.6,
-					height:1.6*H/W
+					width:quadSize.w,
+					height:quadSize.h
 				});
 				// Placeholder; overwritten by anchorMenuQuad before the quad
 				// ever enters the layers list.
@@ -1248,7 +1272,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		HEAPF32[p+3]=W; HEAPF32[p+4]=H;
 		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
 
-		vr.menuRes={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H,quad:quad,inLayers:false};
+		vr.menuRes={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H,
+			quadW:quadSize.w,quadH:quadSize.h,quad:quad,inLayers:false};
 		console.log('[vr] menu '+W+'x'+H+' (fbId='+fbId+' texId='+texId+(inTestMode?' testMode':'')+')');
 	}
 
@@ -1383,7 +1408,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			return;
 		}
-		if(!vr.mvBinding || !vr.viewerSpace)
+		if(!vr.mvBinding || !vr.refSpace)
 		{
 			return; // Not available in test mode.
 		}
@@ -1399,7 +1424,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		try
 		{
 			layer=vr.mvBinding.createEquirectLayer({
-				space:vr.viewerSpace,
+				// WebXR Layers requires equirect/cube layers to use a
+				// non-viewer XRReferenceSpace.  Quest rejects viewerSpace here,
+				// which was why the intended pre-dawn background degraded to black.
+				space:vr.refSpace,
 				viewPixelWidth:2048,
 				viewPixelHeight:1024,
 				layout:'mono',
@@ -1473,12 +1501,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// The engine's hover highlight alone makes dialog lists and small buttons
 	// guesswork on device, so a ~2.5cm cursor quad floats just in front of the
 	// menu quad at the controller-ray hit point (processMenuRayInput stores it
-	// in menuRayState.hitVX/hitVY, viewer space).  Texture is drawn once (a
+	// in each menuRayState.hands entry, menu-quad-local space). Texture is drawn once (a
 	// static ring + dot) but transferred EVERY presented frame -- Round-4
 	// discipline: never gate uploads on change, non-presented swapchain
 	// buffers freeze otherwise.
 
-	function buildCursorCanvas()
+	function buildCursorCanvas(hand)
 	{
 		var S=32;
 		var c=document.createElement('canvas');
@@ -1498,60 +1526,64 @@ EM_JS(void,YsfwInstallWebXR,(),
 		ctx.lineWidth=3;
 		ctx.strokeStyle='rgba(255,255,255,0.95)';
 		ctx.stroke();
-		// Warm centre dot (matches the reticle accent used elsewhere).
+		// Distinct centre dots make simultaneous left/right aim points easy to
+		// tell apart: cyan = left, warm yellow = right.
 		ctx.beginPath();
 		ctx.arc(S/2,S/2,3,0,Math.PI*2);
-		ctx.fillStyle='rgba(255,220,80,0.95)';
+		ctx.fillStyle=('left'===hand ? 'rgba(80,220,255,0.95)' : 'rgba(255,220,80,0.95)');
 		ctx.fill();
 		return c;
 	}
 
 	function setupCursor()
 	{
-		if(vr.cursorRes===false || vr.cursorRes)
-		{
-			return;
-		}
 		if(!vr.mvBinding || !vr.refSpace)
 		{
 			return; // Layers path only (test mode / non-layers browsers skip).
 		}
-		var canvas=buildCursorCanvas();
-		if(!canvas)
+		var hands=['right','left'];
+		for(var hi=0; hi<hands.length; ++hi)
 		{
-			vr.cursorRes=false;
-			return;
+			var hand=hands[hi];
+			if(undefined!==vr.cursorRes[hand])
+			{
+				continue;
+			}
+			var canvas=buildCursorCanvas(hand);
+			if(!canvas)
+			{
+				vr.cursorRes[hand]=false;
+				continue;
+			}
+			try
+			{
+				var quad=vr.mvBinding.createQuadLayer({
+					space:vr.refSpace,
+					viewPixelWidth:32,
+					viewPixelHeight:32,
+					layout:'mono',
+					width:0.025,   // metres: ~2.5cm ring, small enough not to
+					height:0.025   // occlude the menu row under it.
+				});
+				vr.cursorRes[hand]={quad:quad,canvas:canvas,inLayers:false};
+			}
+			catch(e)
+			{
+				console.warn('[vr] menu cursor quad failed ('+hand+'): '+(e&&e.message?e.message:e));
+				vr.cursorRes[hand]=false;
+			}
 		}
-		var quad;
-		try
-		{
-			quad=vr.mvBinding.createQuadLayer({
-				space:vr.refSpace,
-				viewPixelWidth:32,
-				viewPixelHeight:32,
-				layout:'mono',
-				width:0.025,   // metres: ~2.5cm ring, small enough not to
-				height:0.025   // occlude the menu row under it.
-			});
-		}
-		catch(e)
-		{
-			console.warn('[vr] menu cursor quad failed: '+(e&&e.message?e.message:e));
-			vr.cursorRes=false;
-			return;
-		}
-		vr.cursorRes={quad:quad,canvas:canvas,inLayers:false};
 	}
 
 	function teardownCursor()
 	{
-		if(!vr.cursorRes || vr.cursorRes===false)
+		var hands=['right','left'];
+		for(var hi=0; hi<hands.length; ++hi)
 		{
-			vr.cursorRes=null;
-			return;
+			var res=vr.cursorRes[hands[hi]];
+			try{ if(res&&res.quad){ res.quad.destroy(); } }catch(e){}
 		}
-		try{ if(vr.cursorRes.quad){ vr.cursorRes.quad.destroy(); } }catch(e){}
-		vr.cursorRes=null;
+		vr.cursorRes={right:undefined,left:undefined};
 	}
 
 	// Called once per onXRFrame (after processMenuRayInput has refreshed
@@ -1559,15 +1591,28 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// visible and a controller ray is on the quad; hides it otherwise.
 	function updateMenuCursor(frame)
 	{
-		if(!vr.cursorRes || vr.cursorRes===false)
-		{
-			return;
-		}
 		var menuVisible=!!(vr.menuRes && vr.menuRes.inLayers);
-		var show=(menuVisible && menuRayState.wasHit);
 		var layersChanged=false;
-		if(show)
+		var hands=['right','left'];
+		for(var hi=0; hi<hands.length; ++hi)
 		{
+			var hand=hands[hi];
+			var res=vr.cursorRes[hand];
+			if(!res)
+			{
+				continue;
+			}
+			var ray=menuRayState.hands[hand];
+			var show=(menuVisible && ray.wasHit);
+			if(!show)
+			{
+				if(res.inLayers)
+				{
+					res.inLayers=false;
+					layersChanged=true;
+				}
+				continue;
+			}
 			// Reposition to the hit point, slightly in front of the menu quad,
 			// in world space (refSpace).  hitVX/hitVY are in quad-LOCAL coords;
 			// transform to refSpace via the anchor.
@@ -1576,32 +1621,27 @@ EM_JS(void,YsfwInstallWebXR,(),
 				try
 				{
 					var lp=rotateVecByQuat(
-						{x:menuRayState.hitVX,y:menuRayState.hitVY,z:0.01},
+						{x:ray.hitVX,y:ray.hitVY,z:0.01},
 						vr.menuAnchor.quat);
 					var wp={
 						x:lp.x+vr.menuAnchor.pos.x,
 						y:lp.y+vr.menuAnchor.pos.y,
 						z:lp.z+vr.menuAnchor.pos.z};
-					vr.cursorRes.quad.transform=new XRRigidTransform(wp,vr.menuAnchor.quat);
+					res.quad.transform=new XRRigidTransform(wp,vr.menuAnchor.quat);
 				}
 				catch(e){}
 			}
-			if(!vr.cursorRes.inLayers)
+			if(!res.inLayers)
 			{
-				vr.cursorRes.inLayers=true;
+				res.inLayers=true;
 				layersChanged=true;
 			}
 			try
 			{
-				var sub=vr.mvBinding.getSubImage(vr.cursorRes.quad,frame);
-				uploadCanvasToSubImage(vr.cursorRes.canvas,sub);
+				var sub=vr.mvBinding.getSubImage(res.quad,frame);
+				uploadCanvasToSubImage(res.canvas,sub);
 			}
 			catch(e){}
-		}
-		else if(vr.cursorRes.inLayers)
-		{
-			vr.cursorRes.inLayers=false;
-			layersChanged=true;
 		}
 		if(layersChanged)
 		{
@@ -1624,10 +1664,19 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// long enough to ride out a hiccup, short enough that the quad is gone
 	// before the flight scene fades in after a menu->flight transition.
 	var MENU_HIDE_GRACE=8;
+	var UNSUPPORTED_VR_GRACE=45; // ~0.63s at 72Hz: enough for menu/flight transitions.
 	function updateMenuLayer(frame)
 	{
 		if(!vr.menuRes)
 		{
+			// If the menu FBO failed but the sky layer exists, cover a non-flight
+			// entry while the watchdog prepares to return to 2D.  This avoids
+			// presenting a frozen, head-following projection texture even during
+			// the short failure grace window.
+			if(updateSkyLayer(frame,!globalThis.ysfwInFlight))
+			{
+				syncRenderStateLayers();
+			}
 			return;
 		}
 		var p=_YsfwVrMenuDataPointer()>>2;
@@ -1685,11 +1734,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			layersChanged=true;
 		}
 
-		// Sky equirect tracks the same visibility (grace window included);
+		// Sky equirect tracks menu visibility (grace window included).  It also
+		// covers any non-flight/non-menu entry during the short auto-exit grace,
+		// hiding the stale projection texture that otherwise follows the head.
 		// drives its own inLayers and upload, returns true if inLayers changed
 		// (we OR into layersChanged so the single syncRenderStateLayers call
 		// below covers both).
-		if(updateSkyLayer(frame,menuVisible))
+		if(updateSkyLayer(frame,menuVisible||!globalThis.ysfwInFlight))
 		{
 			layersChanged=true;
 		}
@@ -1742,10 +1793,57 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return out;
 	};
 
-	// hitVX/hitVY: hit point in the menu quad's LOCAL coordinate system (quad
-	// face in the XY plane, +Z facing the viewer).  Read by updateMenuCursor
-	// to place the cursor in world space via vr.menuAnchor.
-	var menuRayState={prevMx:-1,prevMy:-1,prevTrig:false,wasHit:false,hitVX:0,hitVY:0};
+	// One physical cursor per hand plus one arbitrated engine-mouse owner.
+	// hitVX/hitVY are in the menu quad's LOCAL coordinate system.  Both hands
+	// stay visible; whichever hand presses trigger takes mouse ownership, and
+	// an in-progress drag keeps ownership until release/leave.
+	function makeMenuRayHandState()
+	{
+		return {wasHit:false,hitVX:0,hitVY:0,prevTrig:false};
+	}
+	var menuRayState={activeHand:null,prevMx:-1,prevMy:-1,prevTrig:false,
+		hands:{right:makeMenuRayHandState(),left:makeMenuRayHandState()}};
+	function resetMenuRayState()
+	{
+		menuRayState.activeHand=null;
+		menuRayState.prevMx=-1;
+		menuRayState.prevMy=-1;
+		menuRayState.prevTrig=false;
+		menuRayState.hands={right:makeMenuRayHandState(),left:makeMenuRayHandState()};
+	}
+	function chooseMenuRayHand(hits,activeHand,mouseDown,previousTriggers)
+	{
+		// Never let the other hand steal an active drag.
+		if(mouseDown && activeHand && hits[activeHand])
+		{
+			return activeHand;
+		}
+		// A fresh trigger edge explicitly claims ownership.  Check the current
+		// owner first only when both hands press on the same frame.
+		var order=(activeHand==='left' ? ['left','right'] : ['right','left']);
+		for(var i=0; i<order.length; ++i)
+		{
+			var hand=order[i];
+			if(hits[hand] && hits[hand].trig && !previousTriggers[hand])
+			{
+				return hand;
+			}
+		}
+		// Otherwise keep hover ownership stable while that ray remains on the
+		// menu; if it left, fall back to whichever hand still hits.
+		if(activeHand && hits[activeHand])
+		{
+			return activeHand;
+		}
+		return hits.right ? 'right' : (hits.left ? 'left' : null);
+	}
+	function menuUvToPixel(u,v,texW,texH)
+	{
+		return {
+			x:Math.round(Math.max(0,Math.min(1,u))*Math.max(0,texW-1)),
+			y:Math.round(Math.max(0,Math.min(1,v))*Math.max(0,texH-1))
+		};
+	}
 	// Pure ray-vs-anchored-quad intersection (no XR/session state) so
 	// headless tests can drive it -- same pattern as
 	// vr.yawOnlyQuatFromOrientation.  Inputs: ray origin/orientation
@@ -1795,9 +1893,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// intersection stays correct when the head moves independently of the
 	// anchored quad.
 	//
-	// wasHit / hitVX / hitVY: whether a controller ray is currently on the
-	// menu quad and where (quad-LOCAL metres) -- read by updateMenuCursor to
-	// place the ring cursor in world space.
+	// Per-hand wasHit / hitVX / hitVY feed the two visible cursor layers.  The
+	// engine still receives a single mouse stream, chosen by
+	// chooseMenuRayHand (fresh trigger edges can claim it from either hand).
 	function processMenuRayInput(frame)
 	{
 		if(!vr.menuRes||!vr.refSpace||!vr.menuAnchor)
@@ -1812,18 +1910,34 @@ EM_JS(void,YsfwInstallWebXR,(),
 			return;
 		}
 
-		var quadW=1.6;
-		var quadH=1.6*texH/texW;
+		var quadW=vr.menuRes.quadW||MENU_QUAD_WIDTH_M;
+		var quadH=vr.menuRes.quadH||menuQuadMetricSize(texW,texH).h;
 
 		var aPos=vr.menuAnchor.pos;
 		var aQuat=vr.menuAnchor.quat;
 
 		var sources=frame.session.inputSources;
-		var hitMx=-1,hitMy=-1,hitTrig=false,hitVX=0,hitVY=0;
+		var hits={right:null,left:null};
+		var hands=['right','left'];
+		for(var h0=0; h0<hands.length; ++h0)
+		{
+			menuRayState.hands[hands[h0]].wasHit=false;
+		}
 		for(var i=0; i<sources.length; ++i)
 		{
 			var src=sources[i];
 			if(!src.targetRaySpace)
+			{
+				continue;
+			}
+			var hand=src.handedness;
+			if(hand!=='right'&&hand!=='left')
+			{
+				// Best effort for controllers that omit handedness: assign the
+				// first two sources deterministically so they still remain usable.
+				hand=hits.right ? 'left' : 'right';
+			}
+			if(hits[hand])
 			{
 				continue;
 			}
@@ -1840,55 +1954,67 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				continue;
 			}
-			hitMx=Math.round(hit.u*texW);
-			hitMy=Math.round(hit.v*texH);
-			hitVX=hit.localX;
-			hitVY=hit.localY;
 			// Trigger button = left mouse click.
 			var gp=src.gamepad;
-			hitTrig=!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5);
-			break; // First controller that hits the menu wins.
+			var pixel=menuUvToPixel(hit.u,hit.v,texW,texH);
+			var rec={
+				mx:pixel.x,
+				my:pixel.y,
+				trig:!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5),
+				localX:hit.localX,localY:hit.localY
+			};
+			hits[hand]=rec;
+			menuRayState.hands[hand].wasHit=true;
+			menuRayState.hands[hand].hitVX=hit.localX;
+			menuRayState.hands[hand].hitVY=hit.localY;
 		}
 
-		if(hitMx<0)
+		// If a dragging hand left the quad, release at its LAST valid pixel
+		// before considering the other hand.  This prevents a stuck button and
+		// avoids relocating the UP edge to the other cursor.
+		if(menuRayState.prevTrig && menuRayState.activeHand && !hits[menuRayState.activeHand])
 		{
-			// No controller hit the menu this frame.  If the ray just left the
-			// quad, close out the interaction: release a held click (so a
-			// drag off the edge doesn't leave the button stuck down) and send
-			// one final MOVE at the last coordinates.  The engine's hover
-			// highlight stays on the last-pointed item -- there is no mouse
-			// coordinate that means "nowhere" -- which is a known cosmetic
-			// limitation (see PR body).
-			if(menuRayState.wasHit)
+			_YsfwInjectMouseEvent(3,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
+			menuRayState.prevTrig=false;
+			menuRayState.activeHand=null;
+		}
+
+		var previousTriggers={
+			right:menuRayState.hands.right.prevTrig,
+			left:menuRayState.hands.left.prevTrig
+		};
+		var chosen=chooseMenuRayHand(hits,menuRayState.activeHand,menuRayState.prevTrig,previousTriggers);
+		if(!chosen)
+		{
+			// No controller hit the menu this frame.  Preserve the engine's last
+			// hover coordinate (there is no mouse coordinate meaning "nowhere").
+			if(menuRayState.activeHand)
 			{
-				if(menuRayState.prevTrig)
-				{
-					_YsfwInjectMouseEvent(3,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
-				}
-				else
-				{
-					_YsfwInjectMouseEvent(1,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
-				}
-				menuRayState.prevTrig=false;
-				menuRayState.wasHit=false;
+				_YsfwInjectMouseEvent(1,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
+			}
+			menuRayState.activeHand=null;
+			menuRayState.prevTrig=false;
+			for(var h1=0; h1<hands.length; ++h1)
+			{
+				var hh1=hands[h1];
+				menuRayState.hands[hh1].prevTrig=!!(hits[hh1]&&hits[hh1].trig);
 			}
 			return;
 		}
-		menuRayState.wasHit=true;
-		menuRayState.hitVX=hitVX;
-		menuRayState.hitVY=hitVY;
+		var selected=hits[chosen];
+		menuRayState.activeHand=chosen;
 
 		// Inject mouse move.
-		if(hitMx!==menuRayState.prevMx||hitMy!==menuRayState.prevMy||hitTrig!==menuRayState.prevTrig)
+		if(selected.mx!==menuRayState.prevMx||selected.my!==menuRayState.prevMy||selected.trig!==menuRayState.prevTrig)
 		{
 			// eventType: 1=FSMOUSEEVENT_MOVE, 2=FSMOUSEEVENT_LBUTTONDOWN, 3=FSMOUSEEVENT_LBUTTONUP
-			var lb=(hitTrig ? 1 : 0);
+			var lb=(selected.trig ? 1 : 0);
 			var evtType;
-			if(hitTrig&&!menuRayState.prevTrig)
+			if(selected.trig&&!menuRayState.prevTrig)
 			{
 				evtType=2; // left button down
 			}
-			else if(!hitTrig&&menuRayState.prevTrig)
+			else if(!selected.trig&&menuRayState.prevTrig)
 			{
 				evtType=3; // left button up
 			}
@@ -1896,10 +2022,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				evtType=1; // move
 			}
-			_YsfwInjectMouseEvent(evtType,lb,0,0,hitMx,hitMy);
-			menuRayState.prevMx=hitMx;
-			menuRayState.prevMy=hitMy;
-			menuRayState.prevTrig=hitTrig;
+			_YsfwInjectMouseEvent(evtType,lb,0,0,selected.mx,selected.my);
+			menuRayState.prevMx=selected.mx;
+			menuRayState.prevMy=selected.my;
+			menuRayState.prevTrig=selected.trig;
+		}
+		for(var h2=0; h2<hands.length; ++h2)
+		{
+			var hh2=hands[h2];
+			menuRayState.hands[hh2].prevTrig=!!(hits[hh2]&&hits[hh2].trig);
 		}
 	}
 
@@ -4185,8 +4316,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.skyRes && vr.skyRes.inLayers && vr.skyRes.layer){ layers.push(vr.skyRes.layer); }
 		// Menu quad: placed after the sky so it composites over it.
 		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
-		// Ray cursor: front-most, floats just in front of the menu quad.
-		if(vr.cursorRes && vr.cursorRes.inLayers && vr.cursorRes.quad){ layers.push(vr.cursorRes.quad); }
+		// Per-hand ray cursors: front-most, floating just in front of the menu.
+		if(vr.cursorRes.right && vr.cursorRes.right.inLayers){ layers.push(vr.cursorRes.right.quad); }
+		if(vr.cursorRes.left && vr.cursorRes.left.inLayers){ layers.push(vr.cursorRes.left.quad); }
 		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
 	}
 
@@ -4761,6 +4893,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// and add/remove the quad from renderState.layers as visibility changes.
 		updateMenuLayer(frame);
 
+		// Immersive presentation is supported only for the main menu and an
+		// active flight.  Demo/attract and other 2D-only screens do not redraw
+		// the XR projection correctly; leaving their last texture alive makes a
+		// frozen rectangle follow the head.  The sky layer covers the short
+		// grace window (updateMenuLayer), then we return to 2D with an explicit
+		// reason.  Resetting on every supported frame also covers transitions.
+		var menuVisibleNow=!!(vr.menuRes&&vr.menuRes.inLayers);
+		if(globalThis.ysfwInFlight||menuVisibleNow)
+		{
+			vr.unsupportedVrFrames=0;
+		}
+		else if(UNSUPPORTED_VR_GRACE<++vr.unsupportedVrFrames)
+		{
+			vr.endReason=(!vr.menuRes||!vr.menuRes.quad) ? 'menu-unsupported' : 'not-menu-or-flight';
+			session.end().catch(function(){});
+			return;
+		}
+
 		// Ray-to-mouse synthesis: project controller aim rays onto the menu quad
 		// plane and inject synthetic mouse events into the engine while the
 		// menu is being shown.
@@ -4827,6 +4977,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0};
 		vr.jsPerf={ctl:0,dial:0,layers:0};
 		vr.endReason=null;
+		vr.unsupportedVrFrames=0;
 		vr.jsPerfWindow=0;
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
 		return navigator.xr.requestSession('immersive-vr',{requiredFeatures:['local'],optionalFeatures:['layers']}).then(function(session)
@@ -4996,6 +5147,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 						vr.mvDepthSize=null;
 					}
 					vr.simSilentFrames=0;
+					vr.unsupportedVrFrames=0;
 
 					// Controller state: zero the whole 16-float block for
 					// cleanliness (FsVrIsActive is 0 from here on, so the
@@ -5036,10 +5188,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					// menuRes/skyRes/cursorRes are nulled by their teardown
 					// functions below (nulling them first would make the
 					// teardowns early-return and leak the GL resources).
-					menuRayState.wasHit=false;
-					menuRayState.prevTrig=false;
-					menuRayState.prevMx=-1;
-					menuRayState.prevMy=-1;
+					resetMenuRayState();
 
 					teardownHud();
 					teardownGui();
@@ -5266,8 +5415,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return [r.x,r.y,r.z,r.w];
 	};
 	vr.recenter=vrRecenter;
-	// Pure-math test hook (no XR state) -- see intersectRayWithAnchoredQuad.
+	// Pure-math menu test hooks (no XR state) -- ray geometry, proportional
+	// texture fit, physical quad aspect, and two-hand mouse arbitration.
 	vr.intersectRayWithAnchoredQuad=intersectRayWithAnchoredQuad;
+	vr.fitMenuTextureSize=fitMenuTextureSize;
+	vr.menuQuadMetricSize=menuQuadMetricSize;
+	vr.chooseMenuRayHand=chooseMenuRayHand;
+	vr.menuUvToPixel=menuUvToPixel;
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read

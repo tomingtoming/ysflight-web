@@ -134,7 +134,11 @@ const missingHook = await page.evaluate(() => {
   const M = globalThis.Module;
   const vr = M && M.ysfwVr;
   if (!vr) return 'Module.ysfwVr';
-  for (const k of ['forceVrMenu', 'readMenuData', 'readMenuStats', 'teardownMenuForTest']) {
+  for (const k of [
+    'forceVrMenu', 'readMenuData', 'readMenuStats', 'teardownMenuForTest',
+    'intersectRayWithAnchoredQuad', 'fitMenuTextureSize', 'menuQuadMetricSize',
+    'chooseMenuRayHand', 'menuUvToPixel',
+  ]) {
     if (!vr[k]) return 'vr.' + k;
   }
   if (typeof M._YsfwVrMenuDataPointer !== 'function') return 'Module._YsfwVrMenuDataPointer';
@@ -270,6 +274,52 @@ const rayTests = await page.evaluate(() => {
   check('ray-quad: ray aimed away from the quad is rejected',
     rayTests.behind === null, 'hit=' + JSON.stringify(rayTests.behind));
 }
+
+// ---- Quest-size menu fit + full-edge pixel mapping -----------------------
+// A high-DPI Quest canvas can exceed 2048px on both axes.  Both dimensions
+// must use one scale factor: independent clamps turned 3200x1800 into
+// 2048x1800 (nearly square), shrinking the usable ray area toward the centre.
+const menuGeometryTests = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const fitted = vr.fitMenuTextureSize(3200, 1800, 2048);
+  const metric = vr.menuQuadMetricSize(fitted.w, fitted.h);
+  return {
+    fitted,
+    metric,
+    topLeft: vr.menuUvToPixel(0, 0, fitted.w, fitted.h),
+    bottomRight: vr.menuUvToPixel(1, 1, fitted.w, fitted.h),
+  };
+});
+check('menu fit: high-DPI 16:9 canvas keeps aspect while capping at 2048px',
+  menuGeometryTests.fitted.w === 2048 && menuGeometryTests.fitted.h === 1152,
+  'fit=' + JSON.stringify(menuGeometryTests.fitted));
+check('menu fit: physical quad keeps the same 16:9 aspect',
+  Math.abs(menuGeometryTests.metric.w - 1.6) < 1e-9 && Math.abs(menuGeometryTests.metric.h - 0.9) < 1e-9,
+  'metric=' + JSON.stringify(menuGeometryTests.metric));
+check('menu ray: UV corners map inside the first/last valid texture pixels',
+  menuGeometryTests.topLeft.x === 0 && menuGeometryTests.topLeft.y === 0 &&
+  menuGeometryTests.bottomRight.x === 2047 && menuGeometryTests.bottomRight.y === 1151,
+  'pixels=' + JSON.stringify(menuGeometryTests));
+
+// ---- Two-hand pointer arbitration ----------------------------------------
+// Both hits remain visible; the engine mouse has one owner.  A fresh trigger
+// edge from either hand must claim it, while an active drag cannot be stolen.
+const handTests = await page.evaluate(() => {
+  const pick = globalThis.Module.ysfwVr.chooseMenuRayHand;
+  const idle = { right: false, left: false };
+  return {
+    onlyLeft: pick({ right: null, left: { trig: false } }, null, false, idle),
+    stableRight: pick({ right: { trig: false }, left: { trig: false } }, 'right', false, idle),
+    leftClaims: pick({ right: { trig: false }, left: { trig: true } }, 'right', false, idle),
+    rightClaims: pick({ right: { trig: true }, left: { trig: false } }, 'left', false, idle),
+    dragKeepsLeft: pick({ right: { trig: true }, left: { trig: true } }, 'left', true, idle),
+  };
+});
+check('menu ray: left hand works when it is the only hit', handTests.onlyLeft === 'left', JSON.stringify(handTests));
+check('menu ray: hover owner remains stable while both hands point', handTests.stableRight === 'right', JSON.stringify(handTests));
+check('menu ray: fresh left trigger claims the pointer', handTests.leftClaims === 'left', JSON.stringify(handTests));
+check('menu ray: fresh right trigger claims the pointer', handTests.rightClaims === 'right', JSON.stringify(handTests));
+check('menu ray: an active left drag cannot be stolen by right', handTests.dragKeepsLeft === 'left', JSON.stringify(handTests));
 
 // ---- teardownMenu: menuData cleared on session teardown -------------------
 // Run the REAL teardown (vr.teardownMenuForTest wraps teardownMenu): it must
