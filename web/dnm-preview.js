@@ -483,6 +483,10 @@ export function mountPreview(container, bytes) {
   tick();
 
   return {
+    scene,          // Three.js Scene — lets overlays (e.g. gizmos) add objects
+    renderer,       // Three.js WebGLRenderer — for future overlay compositing
+    parsedDnm: parsed,        // raw parsed structure for node inspection
+    builtObject: built,       // { object3d, movableGroups, meshesByLabel }
     movable: built.movableGroups,
     setMovable: (group, t) => setMovable(group, t),
     setPaint: (mapping) => applyPaint(built.meshesByLabel, mapping),
