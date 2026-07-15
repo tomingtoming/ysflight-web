@@ -386,7 +386,9 @@ export function mountPreview(container, bytes) {
   // yaw/pitch look-around on drag (no orbit); meshes are already DoubleSide,
   // so the hull stays visible from inside.
   let ckPos = null;                          // {x,y,z} YS coords, or null
-  let ckMode = false, ckYaw = 0, ckPitch = 0; // look-around angles (0 = nose)
+  let ckAtt = null;                          // optional {h,p,b} YS view attitude, RADIANS
+  let ckMode = false, ckYaw = 0, ckPitch = 0; // look-around angles (0 = the eye's own attitude)
+  let downHook = null;                       // sibling tools may claim a pointerdown
   const eye = new THREE.Vector3(), look = new THREE.Vector3();
   const place = () => {
     if (ckMode && ckPos) {
@@ -416,7 +418,11 @@ export function mountPreview(container, bytes) {
   const setCockpitView = (on) => {
     ckMode = !!(on && ckPos);
     if (ckMode) {
-      ckYaw = 0; ckPitch = 0;
+      // Start the look-around at the eye's own attitude (EXCAMERA h/p): YS h
+      // yaws LEFT for + while ckYaw looks starboard for +, so ckYaw = -h.
+      // Bank is not represented in the preview (the truth is the 🛫 flight).
+      ckYaw = ckAtt ? -(ckAtt.h || 0) : 0;
+      ckPitch = ckAtt ? (ckAtt.p || 0) : 0;
       cam.fov = 60; cam.near = 0.05;
       ckMarker.visible = false; // it would sit right in the lens
     } else {
@@ -427,6 +433,7 @@ export function mountPreview(container, bytes) {
   };
   const el = renderer.domElement;
   el.addEventListener('pointerdown', (e) => {
+    if (downHook && downHook(e)) return;
     lx = e.clientX; ly = e.clientY; downX = e.clientX; downY = e.clientY;
     dragging = true;
     gizPending = gizmoPointerToNDC(e.clientX, e.clientY, el.getBoundingClientRect(), GIZ).inGizmo;
@@ -492,14 +499,22 @@ export function mountPreview(container, bytes) {
     setAutoSpin: (on) => { spin = on; spinBtn.style.opacity = on ? '.9' : '.4'; },
     // Cockpit eye point in YS aircraft coords ({x,y,z} = the COCKPITP value),
     // or null to clear.  Marker shows whenever set (except while inside).
+    // p may also carry an EXCAMERA view attitude {h,p,b} in RADIANS (YsAtt3
+    // conventions) — the next setCockpitView(true) starts looking that way.
     setCockpit: (p) => {
       ckPos = p && [p.x, p.y, p.z].every(Number.isFinite) ? { x: p.x, y: p.y, z: p.z } : null;
+      ckAtt = p && Number.isFinite(p.h) ? { h: p.h, p: p.p || 0, b: p.b || 0 } : null;
       if (ckPos) ckMarker.position.set(ckPos.x, ckPos.y, ckPos.z);
       if (!ckPos && ckMode) setCockpitView(false);
       ckMarker.visible = !!ckPos && !ckMode;
     },
     setCockpitView,
     getCockpitView: () => ckMode,
+    // Escape hatches for sibling tools (studio viewpoint gizmos): the live
+    // three.js objects, and a pointerdown interceptor — return true from the
+    // hook to claim the gesture (the orbit drag then ignores it).
+    three: { scene, camera: cam, renderer, modelRoot: built.object3d, radius },
+    setPointerDownHook: (fn) => { downHook = fn; },
     dispose: () => {
       cancelAnimationFrame(raf);
       renderer.dispose();
