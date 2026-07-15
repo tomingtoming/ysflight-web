@@ -1079,18 +1079,29 @@
     window.addEventListener('pageshow', resumeSignaling);
   })();
 
-  // ---- Quick Flight: return to the top (pre-boot shell) when the flight ends --
+  // ---- Quick Flight: return to the originating page when the flight ends -------
   // Quick Flight deep-links via ?freeflight=..., booting straight into a flight.
   // The engine reports flight state through globalThis.ysfwInFlight (set by its
   // ChangeRunMode).  When the user exits the flight back to the engine menu,
   // ysfwInFlight flips true -> false; we treat that edge as "flight over" and
-  // navigate to the clean URL, which IS the pre-boot shell (the top page).  Armed
-  // only for ?freeflight launches, so normal in-engine menu navigation after a
-  // manual boot is untouched.  We latch on having actually entered flight first,
-  // so the initial pre-boot false never counts as an exit.
+  // navigate back.  If ?return=<page> is present and passes the whitelist check
+  // we go there; otherwise we fall back to the clean top-page URL.  Armed only
+  // for ?freeflight launches, so normal in-engine menu navigation after a manual
+  // boot is untouched.  We latch on having actually entered flight first, so the
+  // initial pre-boot false never counts as an exit.
+  //
+  // SECURITY: open-redirect guard — only bare filenames on the explicit whitelist
+  // are accepted.  Any value containing / \ : or .. is rejected regardless.
   (function () {
     var q = new URLSearchParams(location.search);
-    if (!q.get('freeflight')) return;  // only Quick Flight deep-links return to top
+    if (!q.get('freeflight')) return;  // only Quick Flight deep-links trigger return
+    var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html'];
+    function validateReturnPage(raw) {
+      if (!raw) return null;
+      if (/[/\\:]|\.\./.test(raw)) return null;  // defence-in-depth character check
+      return RETURN_WHITELIST.indexOf(raw.toLowerCase()) !== -1 ? raw : null;
+    }
+    var returnPage = validateReturnPage(q.get('return'));
     var enteredFlight = false;
     // The no-joystick mouse-as-stick fallback is non-obvious, so the FIRST time a
     // Quick Flight actually reaches flight, auto-open the controls legend once on PC
@@ -1108,13 +1119,20 @@
       if (globalThis.ysfwInFlight) { if (!enteredFlight) maybeAutoHelp(); enteredFlight = true; return; }
       if (!enteredFlight) return;  // still booting into the flight; not an exit yet
       var lang = q.get('lang');  // keep an explicit language override across the reload
-      location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
+      if (returnPage) {
+        // Navigate back to the studio/workbench page that launched this flight.
+        location.assign(location.origin + location.pathname.replace(/[^/]*$/, '') + returnPage + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
+      } else {
+        // Fallback: return to the clean top page.
+        location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
+      }
     }, 800);
   })();
 
   // Replay playback: return to the top page when the replay ends, mirroring the Quick
   // Flight return above.  Driven by globalThis.ysfwReplaying (set by the engine's
   // ChangeRunMode for YSRUNMODE_REPLAYRECORD).  Armed only for ?replay launches.
+  // NOTE: replay links do not yet carry ?return= (deferred; see fix/fly-return PR).
   (function () {
     var q = new URLSearchParams(location.search);
     if (!q.get('replay')) return;
