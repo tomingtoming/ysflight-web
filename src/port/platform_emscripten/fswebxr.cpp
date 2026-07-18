@@ -1683,37 +1683,42 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var zv={x:xv.y*y.z-xv.z*y.y,y:xv.z*y.x-xv.x*y.z,z:xv.x*y.y-xv.y*y.x};
 		return {pos:mid,quat:quatFromBasis(xv,y,zv)};
 	}
-	function buildBeamCanvas(hand)
+	// Redraws a beam's strip texture for the current lit fraction.  The quad
+	// itself NEVER changes size (see setupBeams: fixed BEAM_MAX_LEN_M span) --
+	// on-device testing showed per-frame XRQuadLayer width/height mutation is
+	// not honoured by the compositor (the beam stayed at its creation length
+	// and pierced the menu board past the cursor ring), so the variable
+	// length lives entirely in the texture's alpha: the strip is lit from the
+	// hand end (bottom, v=1) up to the hit fraction and transparent beyond,
+	// with a small glow at the cut so the beam visibly LANDS on the ring.
+	function drawBeamCanvas(res,hand,litFrac)
 	{
-		var canvas=document.createElement('canvas');
-		canvas.width=8;
-		canvas.height=128;
-		var ctx=canvas.getContext('2d');
-		if(!ctx)
-		{
-			return null;
-		}
+		var canvas=res.canvas;
+		var ctx=res.ctx;
+		var W=canvas.width,H=canvas.height;
+		litFrac=Math.max(0.02,Math.min(1,litFrac));
+		var cutY=H*(1-litFrac); // canvas top = quad +Y = far end.
 		var core=('left'===hand ? '80,220,255' : '255,220,80');
-		// Vertical run: top = far end (soft tip), bottom = hand end
-		// (slightly brighter, like a real laser's origin).
-		var grad=ctx.createLinearGradient(0,0,0,canvas.height);
-		grad.addColorStop(0,'rgba('+core+',0)');
-		grad.addColorStop(0.08,'rgba('+core+',0.5)');
-		grad.addColorStop(0.85,'rgba('+core+',0.55)');
-		grad.addColorStop(1,'rgba('+core+',0.65)');
+		ctx.clearRect(0,0,W,H);
+		// Vertical run: soft tip glow at the cut, slightly brighter at the
+		// hand end, transparent above the cut.
+		var grad=ctx.createLinearGradient(0,cutY,0,H);
+		grad.addColorStop(0,'rgba('+core+',0.9)');   // impact end
+		grad.addColorStop(0.12,'rgba('+core+',0.5)');
+		grad.addColorStop(0.9,'rgba('+core+',0.55)');
+		grad.addColorStop(1,'rgba('+core+',0.65)');  // hand end
 		ctx.fillStyle=grad;
-		ctx.fillRect(0,0,canvas.width,canvas.height);
+		ctx.fillRect(0,cutY,W,H-cutY);
 		// Soft horizontal edges so the ribbon reads as a beam, not a strip.
-		var hg=ctx.createLinearGradient(0,0,canvas.width,0);
+		var hg=ctx.createLinearGradient(0,0,W,0);
 		hg.addColorStop(0,'rgba(0,0,0,0)');
 		hg.addColorStop(0.35,'rgba(0,0,0,1)');
 		hg.addColorStop(0.65,'rgba(0,0,0,1)');
 		hg.addColorStop(1,'rgba(0,0,0,0)');
 		ctx.globalCompositeOperation='destination-in';
 		ctx.fillStyle=hg;
-		ctx.fillRect(0,0,canvas.width,canvas.height);
+		ctx.fillRect(0,0,W,H);
 		ctx.globalCompositeOperation='source-over';
-		return canvas;
 	}
 	function setupBeams()
 	{
@@ -1726,8 +1731,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		for(var i=0; i<hands.length; ++i)
 		{
 			var hand=hands[i];
-			var canvas=buildBeamCanvas(hand);
-			if(!canvas)
+			var canvas=document.createElement('canvas');
+			canvas.width=8;
+			canvas.height=256;
+			var ctx=canvas.getContext('2d');
+			if(!ctx)
 			{
 				return;
 			}
@@ -1739,7 +1747,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 					viewPixelHeight:canvas.height,
 					layout:'mono',
 					width:BEAM_WIDTH_M,
-					height:BEAM_DEFAULT_LEN_M,
+					// FIXED span, never mutated: the compositor does not
+					// honour per-frame width/height writes (see
+					// drawBeamCanvas's doc comment) -- the variable lit
+					// length lives in the texture alpha instead.
+					height:BEAM_MAX_LEN_M,
 					transform:new XRRigidTransform({x:0,y:0,z:0})
 				});
 				try
@@ -1750,7 +1762,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					}
 				}
 				catch(e){}
-				res[hand]={quad:quad,canvas:canvas,inLayers:false};
+				res[hand]={quad:quad,canvas:canvas,ctx:ctx,inLayers:false};
 			}
 			catch(e)
 			{
@@ -1818,7 +1830,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 						len=Math.min(t,BEAM_MAX_LEN_M);
 					}
 				}
-				var bp=beamPoseFor(rp,dir,vr.lastViewerPose.position,len);
+				// The quad keeps its FIXED BEAM_MAX_LEN_M span along the ray;
+				// only the texture's lit fraction encodes the length (see
+				// drawBeamCanvas).
+				var bp=beamPoseFor(rp,dir,vr.lastViewerPose.position,BEAM_MAX_LEN_M);
 				if(!bp)
 				{
 					continue;
@@ -1826,7 +1841,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				try
 				{
 					res[hand].quad.transform=new XRRigidTransform(bp.pos,bp.quat);
-					res[hand].quad.height=len;
+					drawBeamCanvas(res[hand],hand,len/BEAM_MAX_LEN_M);
 					var sub=vr.mvBinding.getSubImage(res[hand].quad,frame);
 					uploadCanvasToSubImage(res[hand].canvas,sub);
 					used[hand]=true;
