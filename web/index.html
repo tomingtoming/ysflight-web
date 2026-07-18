@@ -270,6 +270,8 @@
         vrFail: 'VRセッションを開始できませんでした',
         vrMenuUnsupported: 'VRメニューにはWebXRレイヤー対応ブラウザ（Quest等）が必要です。フライト開始後にVRへ入ってください',
         vrWrongContext: 'VRはメインメニューまたはフライト中に開始してください。デモなどの2D画面はVR表示に対応していません',
+        vrTapEnter: '🥽 タップしてVRに入る',
+        vrTapEnterSub: '起動が完了しました。ブラウザの制限により、もう一度タップが必要です',
         intro: 'ジョイスティック未接続なら マウスが操縦桿 です。',
         rows: [
           ['マウス移動', '操縦桿（上下＝ピッチ / 左右＝ロール）'],
@@ -340,6 +342,8 @@
         vrFail: 'Could not start the VR session',
         vrMenuUnsupported: 'The VR menu requires a WebXR-layers-capable browser (e.g. Quest). Enter VR after starting a flight instead',
         vrWrongContext: 'Start VR from the main menu or during a flight. 2D-only screens such as the demo are not available in VR',
+        vrTapEnter: '🥽 Tap to enter VR',
+        vrTapEnterSub: 'Boot finished. The browser needs one more tap to start VR',
         intro: 'With no joystick, your mouse is the control stick.',
         rows: [
           ['Move mouse', 'Control stick (up/down = pitch, left/right = roll)'],
@@ -1335,10 +1339,46 @@
       }
     };
     ysfwBRStack().appendChild(vrBtn);
+    // "Play in VR" autostart (packs-ui.js sets window.__ysfwVrAutostart on its
+    // VR play button): once the engine is up and XR support is confirmed, try
+    // vr.enter() straight away.  The click's transient user activation rarely
+    // survives the wasm boot, so a rejection is the EXPECTED path -- it shows
+    // a big one-tap overlay instead of failing silently.  Either way the
+    // visitor asked for VR on the portal and lands in the VR menu with at
+    // most one extra tap.
+    var vrAutostartTried = false;
+    function showVrTapOverlay() {
+      var wrap = document.createElement('div');
+      wrap.id = 'ysfw-vr-tap';
+      wrap.style.cssText = 'position:fixed;inset:0;z-index:100002;display:flex;align-items:center;justify-content:center;background:rgba(4,8,14,.66)';
+      var btn = document.createElement('button');
+      btn.style.cssText = 'padding:22px 34px;border-radius:14px;border:1px solid #4da3ff;background:#0d141d;color:#e6edf3;cursor:pointer;text-align:center';
+      var b1 = document.createElement('div');
+      b1.textContent = TXT.help.vrTapEnter;
+      b1.style.cssText = 'font-size:20px;font-weight:700';
+      var b2 = document.createElement('div');
+      b2.textContent = TXT.help.vrTapEnterSub;
+      b2.style.cssText = 'font-size:12px;color:#8fa3bb;margin-top:8px';
+      btn.appendChild(b1);
+      btn.appendChild(b2);
+      btn.onclick = function () {
+        wrap.remove();
+        var vr = Module.ysfwVr;
+        if (vr && !vr.session) { vr.enter().catch(function () {}); }
+      };
+      wrap.addEventListener('click', function (e) { if (e.target === wrap) wrap.remove(); });
+      wrap.appendChild(btn);
+      document.body.appendChild(wrap);
+    }
     setInterval(function () {
       var vr = Module.ysfwVr;
       var show = !!(vr && vr.supported);
       vrBtn.style.display = show ? '' : 'none';
+      if (show && window.__ysfwVrAutostart && !vrAutostartTried && !vr.session) {
+        vrAutostartTried = true;
+        window.__ysfwVrAutostart = false;
+        vr.enter().catch(function () { showVrTapOverlay(); });
+      }
     }, 500);
   })();
 
