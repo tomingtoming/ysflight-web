@@ -154,12 +154,13 @@ that owns the session and fills that state every frame:
     The OTHER hand is completely untouched --
     its dial, trigger, A/B/X/Y all keep their normal flight-control meaning,
     exactly as if no dialog were open, so the pilot never loses that hand's
-    functions to a dialog they didn't open. Discoverability: the owner hand's
-    quad is FORCED visible for as long as a dialog stays open (regardless of
+    functions to a dialog they didn't open. Discoverability: while a DRIVABLE
+    dialog stays open the owner hand's quad is FORCED visible (regardless of
     thumbstick engagement) and switches to a dialog-guide face -- N sectors
-    numbered 1..N labelled with the
-    dialog's REAL option text when drivable, or a uniform "ESC" face (with a
-    "see panel" hint once the panel is forced) otherwise -- see
+    numbered 1..N labelled with the dialog's REAL option text. A
+    non-drivable dialog's uniform "ESC" face (with a "see panel" hint once
+    the panel is forced) instead follows the NORMAL engagement-based
+    visibility rule (flick the stick to see it) -- see
     drawGuiDialGuide/rdial.guiMode/rdial.guiMenu (ldial.* symmetrically);
     falls back to the normal dial the instant the dialog closes. Grip-stick
     (aileron/elevator/rudder) and the throttle grip are NEVER affected, on
@@ -169,6 +170,12 @@ that owns the session and fills that state every frame:
     dialog's own N wedges instead of the fixed table's N -- see its doc
     comment), standing in for the visual feedback a pilot not looking at
     the guide quad would otherwise miss.
+    Forced visibility applies to the DRIVABLE face only: the uniform "ESC"
+    face is engagement-gated like the normal dial (flick the stick to see
+    it) -- non-drivable dialogs already force the on-quad panel for their
+    content, and parking a 4-spoke ESC cluster in view for e.g. the whole
+    parked-on-runway stationary dialog or a replay read as noise on
+    device (2026-07 Quest feedback).
   - Perf placard: Module.ysfwVrOptions.perf (?vrperf=1) already printed a
     '[vrperf]' phase-breakdown console line every 5s, but reading the
     browser console while wearing a headset is impractical. The same
@@ -3014,8 +3021,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 			else if(!grabbed && st.grabbed)
 			{
-				// Self-centering: release springs the virtual stick back to
-				// neutral, like a real spring-loaded stick.
+				// Self-centering on release.  NOTE these zeros alone cannot do
+				// it: [0] flips to 0 in the same write, so the engine's
+				// grabbed-branch never consumes them (it reads [1..3] only
+				// while [0] is 1).  The real spring-to-neutral is the engine's
+				// stickEverGrabbed branch (fsvr.h [8], set while grabbed
+				// above): it centers aileron/elevator/rudder on every
+				// non-grabbed frame.  The zeros stay for block cleanliness.
 				HEAPF32[ptr+0]=0;
 				HEAPF32[ptr+1]=0;
 				HEAPF32[ptr+2]=0;
@@ -3031,6 +3043,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 				HEAPF32[ptr+1]=defl.aileron;
 				HEAPF32[ptr+2]=defl.elevator;
 				HEAPF32[ptr+3]=defl.rudder;
+				// stickEverGrabbed latch (fsvr.h [8], the stick counterpart
+				// of throttle's [6]): once set, the engine centers the three
+				// axes on every non-grabbed frame, so releasing the grab
+				// really springs the stick to neutral instead of freezing
+				// the last deflection (the release-edge zeros above land on
+				// the same frame [0] flips to 0 and are never consumed).
+				HEAPF32[ptr+8]=1;
 			}
 
 			var rdial=vr.ctl.dial.right;
@@ -3074,7 +3093,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 			rdial.guiMode=(!guiMenu ? null : (guiMenu.drivable ? 'ap' : 'generic'));
 			if(rActive)
 			{
-				rdial.visible=true;
+				// Forced visibility is now DRIVABLE-ONLY: the N-way face is
+				// the sole way to discover a dialog's real options, so it must
+				// appear unprompted. The generic/ESC face labels nothing (every
+				// sector fires the same Escape), and the dialogs that get it
+				// (replay/continue/stationary/vehicle-change/chat) are either
+				// long-lived overlays a pilot mostly WATCHES (replay) or
+				// auto-shown parked-state info (stationary) -- forcing a
+				// 4-spoke "ESC" cluster into view for their whole lifetime
+				// read as noise on device. The reroute itself is unchanged
+				// (sector tap still fires Escape); flicking the thumbstick
+				// shows the ESC face via the normal engagement rule, and the
+				// forced panel below carries the dialog's actual content.
+				if(guiMenu && guiMenu.drivable)
+				{
+					rdial.visible=true;
+				}
 				// GUI_DIAL_CAPACITY sectors cannot reach every option
 				// (radio-comm's wingman-command menu is exactly at the cap,
 				// see FsGuiRadioCommCommandDialog), and some in-flight
@@ -3410,7 +3444,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 			ldial.guiMode=(!guiMenuL ? null : (guiMenuL.drivable ? 'ap' : 'generic'));
 			if(lActive)
 			{
-				ldial.visible=true;
+				// Drivable-only forced visibility, mirroring the right dial's
+				// rActive branch above (see its comment): the generic/ESC face
+				// follows the normal engagement rule instead of parking a
+				// 4-spoke "ESC" cluster in view for the dialog's lifetime.
+				if(guiMenuL && guiMenuL.drivable)
+				{
+					ldial.visible=true;
+				}
 				if(guiMenuL && (!guiMenuL.drivable || guiMenuL.overflow))
 				{
 					maybeForceGuiPanel();
@@ -5003,14 +5044,18 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// and add/remove the quad from renderState.layers as visibility changes.
 		updateMenuLayer(frame);
 
-		// Immersive presentation is supported only for the main menu and an
-		// active flight.  Demo/attract and other 2D-only screens do not redraw
-		// the XR projection correctly; leaving their last texture alive makes a
-		// frozen rectangle follow the head.  The sky layer covers the short
-		// grace window (updateMenuLayer), then we return to 2D with an explicit
-		// reason.  Resetting on every supported frame also covers transitions.
+		// Immersive presentation is supported for the main menu, an active
+		// flight, and replay playback (YSRUNMODE_REPLAYRECORD exports
+		// ysfwReplaying, not ysfwInFlight -- see fsrunloop.cpp's ChangeRunMode
+		// EM_ASM block; its draw path is the same SimDrawAllScreen multiview
+		// branch a live flight uses, so it presents correctly).  Demo/attract
+		// and other 2D-only screens do not redraw the XR projection correctly;
+		// leaving their last texture alive makes a frozen rectangle follow the
+		// head.  The sky layer covers the short grace window (updateMenuLayer),
+		// then we return to 2D with an explicit reason.  Resetting on every
+		// supported frame also covers transitions.
 		var menuVisibleNow=!!(vr.menuRes&&vr.menuRes.inLayers);
-		if(globalThis.ysfwInFlight||menuVisibleNow)
+		if(globalThis.ysfwInFlight||globalThis.ysfwReplaying||menuVisibleNow)
 		{
 			vr.unsupportedVrFrames=0;
 		}

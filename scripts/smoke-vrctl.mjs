@@ -173,6 +173,33 @@ check('roll: stickGrabbed=1', 1 === b2[0], 'got ' + b2[0]);
 check('roll: aileron ~= +0.5 (wrist rolled right)', Math.abs(b2[1] - 0.5) < 0.08, 'got ' + b2[1]);
 check('roll: elevator ~= 0 (pure roll)', Math.abs(b2[2]) < 0.05, 'got ' + b2[2]);
 
+// ---- Group 2b: stick release -> everGrabbed latch + spring-to-neutral ----
+// fsvr.h [8] stickEverGrabbed: set while grabbed, survives release.  The
+// engine (FsFlightControl::ApplyVrControlOverride) centers aileron/elevator/
+// rudder on every non-grabbed frame while [8] is 1 -- without that latch the
+// last grabbed-frame deflection stayed frozen after release ([0] flips to 0
+// on the same frame as the zero write, so the zeros were never consumed) and
+// the plane kept banking (2026-07 Quest field report).  ctlAileron itself is
+// engine-internal, but the block contract the fix depends on ([8] latched 1,
+// [0] back to 0, [1..3] zeroed) is fully observable here.
+// NOTE Group 2's release->fresh-grab pair lands within STICKY_DOUBLE_MS, so
+// the sticky latch (Group 8's feature) is ENGAGED here -- a single squeeze=0
+// frame is a physical release but not an effective one.  End the latch the
+// way updateSticky documents (one more full press+release cycle), THEN
+// assert the released-state block.
+const b2b = await page.evaluate(() => {
+  const M = globalThis.Module;
+  const vr = M.ysfwVr;
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // physical release (latch keeps grab)
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 1, trigger: 0, buttons: {} }]); // press: arms disengage
+  vr.pokeControllerFrame([{ hand: 'right', pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, buttons: {} }]); // release: latch ends, spring to neutral
+  return vr.readControlBlock();
+});
+console.log('release-test block:', JSON.stringify(b2b));
+check('release: stickGrabbed back to 0', 0 === b2b[0], 'got ' + b2b[0]);
+check('release: deflections zeroed in the block', 0 === b2b[1] && 0 === b2b[2] && 0 === b2b[3], 'got ' + JSON.stringify([b2b[1], b2b[2], b2b[3]]));
+check('release: stickEverGrabbed [8] stays latched 1', 1 === b2b[8], 'got ' + b2b[8]);
+
 // ---- Group 3: throttle ----------------------------------------------------
 // Release the right/stick hand, grab the left/throttle hand at the origin,
 // then push it 0.08m along the default (identity-viewer) forward direction
@@ -250,6 +277,51 @@ check('menu routing: grips do not activate stick or throttle',
   JSON.stringify(menuInputIsolation));
 check('menu routing: trigger click does not bleed into pre-flight confirmation',
   0 === menuInputIsolation.confirmTrigger, JSON.stringify(menuInputIsolation));
+
+// ---- Group 4c: generic (mouse-only) GUI dialog -> ESC face is ------------
+// engagement-gated, not forced visible (2026-07 Quest feedback: the 4-spoke
+// ESC cluster parked in view while sitting on the runway (stationary
+// dialog) or on the continue screen read as noise).  The owner-hand input
+// reroute (every sector tap -> Escape, B/Y cancel) is unchanged -- this
+// group pins the VISIBILITY rule only: not forced while idle, shown by the
+// normal thumbstick-engagement rule.  Drivable dialogs keep forced
+// visibility (smoke-vrgui.mjs's territory -- needs multiview).
+const g4c = await page.evaluate(async () => {
+  const vr = globalThis.Module.ysfwVr;
+  const neutral = { pos: [0, 0, 0], quat: [0, 0, 0, 1], squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} };
+  vr.pokeControllerFrame([{ ...neutral, hand: 'right' }]); // clean no-dialog frame
+  // Attribute the dialog to the right hand, then fabricate a mouse-only
+  // dialog (no hotkey prefixes, apMenu=false) -- the stationary/continue
+  // family's exact shape as serialized by SimSerializeVrGuiMenu.
+  vr.ctl.lastDialTapHand = 'right';
+  vr.ctl.lastDialTapAt = performance.now();
+  vr.pokeGuiMenu(['End Flight', 'Confirm End Flight'], { apMenu: false });
+  vr.pokeControllerFrame([{ ...neutral, hand: 'right' }]);
+  const d = vr.ctl.dial.right;
+  const idle = { guiMode: d.guiMode, visible: d.visible, drivable: !!(d.guiMenu && d.guiMenu.drivable) };
+  // Wait out any prior engagement's fade window (DIAL_HIDE_DELAY_MS=1200)
+  // and poke another idle frame: the OLD code re-forced visible=true on
+  // every owner frame, so a still-visible dial here is exactly the
+  // regression this group exists to catch.
+  await new Promise((resolve) => setTimeout(resolve, 1400));
+  vr.pokeControllerFrame([{ ...neutral, hand: 'right' }]);
+  const faded = { guiMode: d.guiMode, visible: d.visible };
+  // Engaging the thumbstick shows the ESC face via the normal rule.
+  vr.pokeControllerFrame([{ ...neutral, hand: 'right', thumb: [0, -1] }]);
+  const engaged = { guiMode: d.guiMode, visible: d.visible };
+  // Tidy up so later groups inherit a pristine dial: close the dialog,
+  // recentre, and reset the sticky sector pick this gesture moved.
+  vr.pokeControllerFrame([{ ...neutral, hand: 'right' }]);
+  vr.clearGuiOverride();
+  vr.pokeControllerFrame([{ ...neutral, hand: 'right' }]);
+  d.sel = 0;
+  d.visible = false;
+  d.hideAt = 0;
+  return { idle, faded, engaged };
+});
+check('generic dialog: classifies generic/not-drivable', g4c.idle.guiMode === 'generic' && g4c.idle.drivable === false, JSON.stringify(g4c.idle));
+check('generic dialog: ESC face NOT forced visible while the stick is idle', g4c.faded.guiMode === 'generic' && g4c.faded.visible === false, JSON.stringify(g4c.faded));
+check('generic dialog: engaging the thumbstick shows the ESC face (normal engagement rule)', g4c.engaged.guiMode === 'generic' && g4c.engaged.visible === true, JSON.stringify(g4c.engaged));
 
 // ---- Group 5 (extra coverage): face buttons -> brake / view-cycle keys ---
 // Right A no longer fires gear on the bare press edge (see Feature 1 / Group
