@@ -1608,6 +1608,248 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.cursorRes=null;
 	}
 
+	// ---- Controller laser beams for the menu -----------------------------
+	// One thin world-space quad per hand, from the controller's targetRay
+	// origin to the menu plane (or a default length while the ray is off the
+	// board), colour-matched to that hand's cursor ring dot (cyan=left,
+	// warm yellow=right).  2026-07 Quest feedback: with only the hit ring
+	// visible, "where I feel the ray points" and "where the hit lands" read
+	// as disagreeing -- Quest users are trained on a VISIBLE system laser,
+	// so draw one.  Layers path only, same best-effort try/catch discipline
+	// as the cursor overlay; composited between the menu quad and the
+	// cursor ring (the beam is physically in FRONT of the board, the ring
+	// sits ON it).
+	var BEAM_WIDTH_M=0.01;
+	var BEAM_DEFAULT_LEN_M=3.0;
+	var BEAM_MAX_LEN_M=6.0;
+	// Rotation quaternion from an orthonormal right-handed basis given as
+	// COLUMN vectors (the images of the canonical axes).  Standard
+	// trace-branching matrix->quaternion conversion.
+	function quatFromBasis(x,y,z)
+	{
+		var m00=x.x,m01=y.x,m02=z.x;
+		var m10=x.y,m11=y.y,m12=z.y;
+		var m20=x.z,m21=y.z,m22=z.z;
+		var tr=m00+m11+m22,s;
+		if(tr>0)
+		{
+			s=Math.sqrt(tr+1)*2;
+			return {w:0.25*s,x:(m21-m12)/s,y:(m02-m20)/s,z:(m10-m01)/s};
+		}
+		if(m00>m11&&m00>m22)
+		{
+			s=Math.sqrt(1+m00-m11-m22)*2;
+			return {w:(m21-m12)/s,x:0.25*s,y:(m01+m10)/s,z:(m02+m20)/s};
+		}
+		if(m11>m22)
+		{
+			s=Math.sqrt(1+m11-m00-m22)*2;
+			return {w:(m02-m20)/s,x:(m01+m10)/s,y:0.25*s,z:(m12+m21)/s};
+		}
+		s=Math.sqrt(1+m22-m00-m11)*2;
+		return {w:(m10-m01)/s,x:(m02+m20)/s,y:(m12+m21)/s,z:0.25*s};
+	}
+	// Pose for a beam quad: local +Y runs along the ray (texture top = far
+	// end), +Z billboarded toward the head so the flat ribbon always faces
+	// the viewer.  Pure math (no XR state) -- exposed as vr.beamPoseFor for
+	// headless tests.  Returns {pos,quat} or null on degenerate input.
+	function beamPoseFor(rayPos,rayDir,headPos,len)
+	{
+		var d=Math.sqrt(rayDir.x*rayDir.x+rayDir.y*rayDir.y+rayDir.z*rayDir.z);
+		if(!(d>1e-6)||!(len>0))
+		{
+			return null;
+		}
+		var y={x:rayDir.x/d,y:rayDir.y/d,z:rayDir.z/d};
+		var mid={x:rayPos.x+y.x*len/2,y:rayPos.y+y.y*len/2,z:rayPos.z+y.z*len/2};
+		var th={x:headPos.x-mid.x,y:headPos.y-mid.y,z:headPos.z-mid.z};
+		var xv={x:y.y*th.z-y.z*th.y,y:y.z*th.x-y.x*th.z,z:y.x*th.y-y.y*th.x};
+		var xl=Math.sqrt(xv.x*xv.x+xv.y*xv.y+xv.z*xv.z);
+		if(xl<1e-5)
+		{
+			// Ray passes (nearly) through the head: the ribbon is edge-on
+			// anyway, any perpendicular keeps the math finite.
+			xv={x:-y.z,y:0,z:y.x};
+			xl=Math.sqrt(xv.x*xv.x+xv.z*xv.z);
+			if(xl<1e-5)
+			{
+				xv={x:1,y:0,z:0};
+				xl=1;
+			}
+		}
+		xv={x:xv.x/xl,y:xv.y/xl,z:xv.z/xl};
+		// z = x cross y: the toHead component perpendicular to the beam, so
+		// it faces the viewer by construction.
+		var zv={x:xv.y*y.z-xv.z*y.y,y:xv.z*y.x-xv.x*y.z,z:xv.x*y.y-xv.y*y.x};
+		return {pos:mid,quat:quatFromBasis(xv,y,zv)};
+	}
+	function buildBeamCanvas(hand)
+	{
+		var canvas=document.createElement('canvas');
+		canvas.width=8;
+		canvas.height=128;
+		var ctx=canvas.getContext('2d');
+		if(!ctx)
+		{
+			return null;
+		}
+		var core=('left'===hand ? '80,220,255' : '255,220,80');
+		// Vertical run: top = far end (soft tip), bottom = hand end
+		// (slightly brighter, like a real laser's origin).
+		var grad=ctx.createLinearGradient(0,0,0,canvas.height);
+		grad.addColorStop(0,'rgba('+core+',0)');
+		grad.addColorStop(0.08,'rgba('+core+',0.5)');
+		grad.addColorStop(0.85,'rgba('+core+',0.55)');
+		grad.addColorStop(1,'rgba('+core+',0.65)');
+		ctx.fillStyle=grad;
+		ctx.fillRect(0,0,canvas.width,canvas.height);
+		// Soft horizontal edges so the ribbon reads as a beam, not a strip.
+		var hg=ctx.createLinearGradient(0,0,canvas.width,0);
+		hg.addColorStop(0,'rgba(0,0,0,0)');
+		hg.addColorStop(0.35,'rgba(0,0,0,1)');
+		hg.addColorStop(0.65,'rgba(0,0,0,1)');
+		hg.addColorStop(1,'rgba(0,0,0,0)');
+		ctx.globalCompositeOperation='destination-in';
+		ctx.fillStyle=hg;
+		ctx.fillRect(0,0,canvas.width,canvas.height);
+		ctx.globalCompositeOperation='source-over';
+		return canvas;
+	}
+	function setupBeams()
+	{
+		if(vr.beamRes||!vr.mvBinding||!vr.refSpace)
+		{
+			return; // Layers path only, like the cursor overlay.
+		}
+		var res={};
+		var hands=['right','left'];
+		for(var i=0; i<hands.length; ++i)
+		{
+			var hand=hands[i];
+			var canvas=buildBeamCanvas(hand);
+			if(!canvas)
+			{
+				return;
+			}
+			try
+			{
+				var quad=vr.mvBinding.createQuadLayer({
+					space:vr.refSpace,
+					viewPixelWidth:canvas.width,
+					viewPixelHeight:canvas.height,
+					layout:'mono',
+					width:BEAM_WIDTH_M,
+					height:BEAM_DEFAULT_LEN_M,
+					transform:new XRRigidTransform({x:0,y:0,z:0})
+				});
+				try
+				{
+					if('blendTextureSourceAlpha' in quad)
+					{
+						quad.blendTextureSourceAlpha=true;
+					}
+				}
+				catch(e){}
+				res[hand]={quad:quad,canvas:canvas,inLayers:false};
+			}
+			catch(e)
+			{
+				console.warn('[vr] menu beam layer failed: '+(e&&e.message?e.message:e));
+				return;
+			}
+		}
+		vr.beamRes=res;
+	}
+	function teardownBeams()
+	{
+		if(vr.beamRes)
+		{
+			try{ if(vr.beamRes.right&&vr.beamRes.right.quad){ vr.beamRes.right.quad.destroy(); } }catch(e){}
+			try{ if(vr.beamRes.left&&vr.beamRes.left.quad){ vr.beamRes.left.quad.destroy(); } }catch(e){}
+		}
+		vr.beamRes=null;
+	}
+	// Called once per onXRFrame.  Shows each hand's beam while the menu is
+	// visible and that hand has a targetRay pose; hides both otherwise.
+	// The beam ends ON the menu PLANE when the ray crosses it in front of
+	// the pilot (even outside the quad's bounds -- a beam piercing the
+	// board reads as broken), and falls back to a fixed length while
+	// pointing elsewhere so the board is findable by sweeping.
+	function updateMenuBeams(frame)
+	{
+		var res=vr.beamRes;
+		if(!res)
+		{
+			return;
+		}
+		var layersChanged=false;
+		var used={right:false,left:false};
+		var menuVisible=!!(vr.menuRes&&vr.menuRes.inLayers&&vr.menuAnchor);
+		if(menuVisible&&vr.refSpace&&vr.lastViewerPose&&vr.session&&vr.session.inputSources)
+		{
+			var aQi=quatConjugate(vr.menuAnchor.quat);
+			var aP=vr.menuAnchor.pos;
+			var sources=vr.session.inputSources;
+			for(var i=0; i<sources.length; ++i)
+			{
+				var src=sources[i];
+				var hand=src.handedness;
+				if(!src.targetRaySpace||('right'!==hand&&'left'!==hand)||!res[hand]||used[hand])
+				{
+					continue;
+				}
+				var rayPose=frame.getPose(src.targetRaySpace,vr.refSpace);
+				if(!rayPose)
+				{
+					continue;
+				}
+				var rp=rayPose.transform.position;
+				var dir=rotateVecByQuat({x:0,y:0,z:-1},rayPose.transform.orientation);
+				// Distance to the menu PLANE (same local-frame math as
+				// intersectRayWithAnchoredQuad, without the bounds check).
+				var len=BEAM_DEFAULT_LEN_M;
+				var roL=rotateVecByQuat({x:rp.x-aP.x,y:rp.y-aP.y,z:rp.z-aP.z},aQi);
+				var rdL=rotateVecByQuat(dir,aQi);
+				if(roL.z>0&&rdL.z<-1e-6)
+				{
+					var t=-roL.z/rdL.z;
+					if(t>0.02)
+					{
+						len=Math.min(t,BEAM_MAX_LEN_M);
+					}
+				}
+				var bp=beamPoseFor(rp,dir,vr.lastViewerPose.position,len);
+				if(!bp)
+				{
+					continue;
+				}
+				try
+				{
+					res[hand].quad.transform=new XRRigidTransform(bp.pos,bp.quat);
+					res[hand].quad.height=len;
+					var sub=vr.mvBinding.getSubImage(res[hand].quad,frame);
+					uploadCanvasToSubImage(res[hand].canvas,sub);
+					used[hand]=true;
+				}
+				catch(e){}
+			}
+		}
+		var hands=['right','left'];
+		for(var hi=0; hi<hands.length; ++hi)
+		{
+			var h=hands[hi];
+			if(res[h]&&res[h].inLayers!==used[h])
+			{
+				res[h].inLayers=used[h];
+				layersChanged=true;
+			}
+		}
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
+		}
+	}
+
 	// Called once per onXRFrame (after processMenuRayInput has refreshed
 	// menuRayState).  Shows the cursor at the ray hit point while the menu is
 	// visible and a controller ray is on the quad; hides it otherwise.
@@ -2527,6 +2769,28 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			console.warn('[vr] recenter failed: '+(e&&e.message?e.message:e));
 			return;
+		}
+		// Layers created with space:vr.refSpace keep a reference to the OLD
+		// offset-space OBJECT -- the reassignment above does not follow.
+		// Left stale, every world-anchored layer renders displaced by
+		// exactly the recenter delta while ray/controller math uses the new
+		// space (on-device symptom: menu-ray hits landing offset from where
+		// the controller points after a recenter).  Re-point them all.
+		var rebind=[
+			vr.menuRes&&vr.menuRes.quad,
+			vr.cursorRes&&vr.cursorRes.quad,
+			vr.skyRes&&vr.skyRes.layer,
+			vr.helpRes.right&&vr.helpRes.right.quad,
+			vr.helpRes.left&&vr.helpRes.left.quad,
+			vr.beamRes&&vr.beamRes.right&&vr.beamRes.right.quad,
+			vr.beamRes&&vr.beamRes.left&&vr.beamRes.left.quad
+		];
+		for(var ri=0; ri<rebind.length; ++ri)
+		{
+			if(rebind[ri])
+			{
+				try{ rebind[ri].space=vr.refSpace; }catch(e){}
+			}
 		}
 		// If the menu is currently showing, clear the anchor so it re-
 		// positions relative to the new refSpace on the very next frame.
@@ -4463,6 +4727,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.skyRes && vr.skyRes.inLayers && vr.skyRes.layer){ layers.push(vr.skyRes.layer); }
 		// Menu quad: placed after the sky so it composites over it.
 		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
+		// Controller laser beams: physically in front of the menu board, so
+		// composited over it (and under the cursor ring, which sits ON it).
+		if(vr.beamRes && vr.beamRes.right && vr.beamRes.right.inLayers){ layers.push(vr.beamRes.right.quad); }
+		if(vr.beamRes && vr.beamRes.left && vr.beamRes.left.inLayers){ layers.push(vr.beamRes.left.quad); }
 		// Transparent cursor overlay: front-most and exactly coextensive with
 		// the menu. Both hand rings share this one composition layer.
 		if(vr.cursorRes && vr.cursorRes.inLayers){ layers.push(vr.cursorRes.quad); }
@@ -5078,6 +5346,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// above just refreshed; hides itself when the menu is not visible).
 		updateMenuCursor(frame);
 
+		// Controller laser beams from each hand to the menu plane (hide
+		// themselves when the menu is not visible).
+		updateMenuBeams(frame);
+
 		// Watchdog: end the session when the engine stops presenting entirely
 		// (~1.5s of silence).  While the main menu is visible DrawMenu sets
 		// FsVrMarkSimDrawn every frame (keeping simSilentFrames at 0), so the
@@ -5340,9 +5612,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.helpRes={right:undefined,left:undefined};
 					vr.help={visible:false,shownAt:0};
 					vr.perfRes=undefined;
-					// menuRes/skyRes/cursorRes are nulled by their teardown
-					// functions below (nulling them first would make the
-					// teardowns early-return and leak the GL resources).
+					// menuRes/skyRes/cursorRes/beamRes are nulled by their
+					// teardown functions below (nulling them first would make
+					// the teardowns early-return and leak the GL resources).
 					resetMenuRayState();
 
 					teardownHud();
@@ -5351,6 +5623,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					teardownMenu();
 					teardownSky();
 					teardownCursor();
+					teardownBeams();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -5369,6 +5642,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 					setupMenu();
 					setupSky();
 					setupCursor();
+					setupBeams();
 				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
@@ -5581,6 +5855,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 	vr.chooseMenuRayHand=chooseMenuRayHand;
 	vr.menuUvToPixel=menuUvToPixel;
 	vr.cursorOverlayPoint=cursorOverlayPoint;
+	vr.beamPoseFor=beamPoseFor;
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read

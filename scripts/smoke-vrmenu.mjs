@@ -137,7 +137,7 @@ const missingHook = await page.evaluate(() => {
   for (const k of [
     'forceVrMenu', 'readMenuData', 'readMenuStats', 'teardownMenuForTest',
     'intersectRayWithAnchoredQuad', 'fitMenuTextureSize', 'menuQuadMetricSize',
-    'chooseMenuRayHand', 'menuUvToPixel', 'cursorOverlayPoint',
+    'chooseMenuRayHand', 'menuUvToPixel', 'cursorOverlayPoint', 'beamPoseFor',
   ]) {
     if (!vr[k]) return 'vr.' + k;
   }
@@ -306,6 +306,45 @@ check('menu cursor: overlay uses the same full-range UV corners (no central-squa
   menuGeometryTests.cursorTopLeft.x === 0 && menuGeometryTests.cursorTopLeft.y === 0 &&
   menuGeometryTests.cursorBottomRight.x === 1023 && menuGeometryTests.cursorBottomRight.y === 575,
   'cursorPixels=' + JSON.stringify({ topLeft: menuGeometryTests.cursorTopLeft, bottomRight: menuGeometryTests.cursorBottomRight }));
+
+// ---- Controller laser beam pose (pure math) ------------------------------
+// vr.beamPoseFor orients a thin quad so its local +Y runs along the ray and
+// its +Z faces the head (billboarded ribbon).  Checked here: midpoint
+// placement, +Y alignment with the ray, +Z toward the head, and unit quat.
+const beamTests = await page.evaluate(() => {
+  const vr = globalThis.Module.ysfwVr;
+  const rot = (v, q) => {
+    // quat rotate (same math as the implementation's rotateVecByQuat).
+    const x = q.x, y = q.y, z = q.z, w = q.w;
+    const tx = 2 * (y * v.z - z * v.y), ty = 2 * (z * v.x - x * v.z), tz = 2 * (x * v.y - y * v.x);
+    return {
+      x: v.x + w * tx + (y * tz - z * ty),
+      y: v.y + w * ty + (z * tx - x * tz),
+      z: v.z + w * tz + (x * ty - y * tx)
+    };
+  };
+  // Hand at (0.2, 1.2, 0), pointing straight at -Z, head behind at (0, 1.6, 0.3).
+  const bp = vr.beamPoseFor({ x: 0.2, y: 1.2, z: 0 }, { x: 0, y: 0, z: -1 }, { x: 0, y: 1.6, z: 0.3 }, 2.0);
+  if (!bp) return { bp: null };
+  const yAxis = rot({ x: 0, y: 1, z: 0 }, bp.quat);
+  const zAxis = rot({ x: 0, y: 0, z: 1 }, bp.quat);
+  const qLen = Math.sqrt(bp.quat.x ** 2 + bp.quat.y ** 2 + bp.quat.z ** 2 + bp.quat.w ** 2);
+  const toHead = { x: 0 - bp.pos.x, y: 1.6 - bp.pos.y, z: 0.3 - bp.pos.z };
+  const zDotHead = zAxis.x * toHead.x + zAxis.y * toHead.y + zAxis.z * toHead.z;
+  const degenerate = vr.beamPoseFor({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 0, y: 1.6, z: 0 }, 2.0);
+  return { bp, yAxis, qLen, zDotHead, degenerate };
+});
+check('beam pose: midpoint sits halfway along the ray',
+  beamTests.bp && Math.abs(beamTests.bp.pos.x - 0.2) < 1e-6 && Math.abs(beamTests.bp.pos.y - 1.2) < 1e-6 && Math.abs(beamTests.bp.pos.z - (-1.0)) < 1e-6,
+  'bp=' + JSON.stringify(beamTests.bp));
+check('beam pose: local +Y runs along the ray direction',
+  beamTests.bp && Math.abs(beamTests.yAxis.x) < 1e-6 && Math.abs(beamTests.yAxis.y) < 1e-6 && Math.abs(beamTests.yAxis.z - (-1)) < 1e-6,
+  'yAxis=' + JSON.stringify(beamTests.yAxis));
+check('beam pose: unit quaternion, +Z faces the head',
+  beamTests.bp && Math.abs(beamTests.qLen - 1) < 1e-6 && beamTests.zDotHead > 0,
+  'qLen=' + beamTests.qLen + ' zDotHead=' + beamTests.zDotHead);
+check('beam pose: degenerate zero-direction input returns null',
+  beamTests.degenerate === null, 'got ' + JSON.stringify(beamTests.degenerate));
 
 // ---- Two-hand pointer arbitration ----------------------------------------
 // Both hits remain visible; the engine mouse has one owner.  A fresh trigger
