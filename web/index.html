@@ -22,6 +22,11 @@
 <meta name="twitter:image" content="https://ysflight-web.toming.app/icons/og-cover.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
+<!-- diag.js: plain (non-module) script, loaded FIRST so error capture and the
+     unclean-end check are armed before any other script can fail.  Ships
+     heartbeats/errors/breadcrumbs to /clientlog (Workers Logs) for in-headset
+     postmortems -- see web/diag.js. -->
+<script src="diag.js"></script>
 <script type="module" src="packs-ui.js"></script>
 <script type="module" src="pack-net.js"></script>
 <script type="module" src="replays-ui.js"></script>

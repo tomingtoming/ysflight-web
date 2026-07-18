@@ -132,7 +132,7 @@ cp "$ROOT/web/icons/"*.png "$DIST_DIR/icons/"
 
 # Add-on pack layer: engine-agnostic core (packs.js) + pre-boot UI (packs-ui.js)
 # + vendored unzip (vendor/fflate.js).  Plain ES modules, no bundler.
-cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/pack-update.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" "$ROOT/web/workbench.js" "$ROOT/web/staging.js" "$DIST_DIR/"
+cp "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" "$ROOT/web/pack-net.js" "$ROOT/web/pack-update.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" "$ROOT/web/workbench.js" "$ROOT/web/staging.js" "$ROOT/web/diag.js" "$DIST_DIR/"
 mkdir -p "$DIST_DIR/vendor"
 cp "$ROOT/web/vendor/fflate.js" "$DIST_DIR/vendor/"
 

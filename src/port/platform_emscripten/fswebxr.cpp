@@ -1986,10 +1986,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 				try
 				{
 					var sub=vr.mvBinding.getSubImage(vr.menuRes.quad,frame);
+					// Honour the sub-image viewport (see
+					// uploadCanvasToSubImage's identical fix): a packed
+					// allocator hands this layer a rectangle INSIDE a shared
+					// texture, and a copy pinned to (0,0) overwrites whichever
+					// layer owns the corner -- the on-device "second phantom
+					// menu quad" corruption.
+					var mvp=(sub&&sub.viewport)?sub.viewport:null;
+					var mdx=(mvp?mvp.x:0),mdy=(mvp?mvp.y:0);
+					var mcw=(mvp?Math.min(vr.menuRes.w,mvp.width):vr.menuRes.w);
+					var mch=(mvp?Math.min(vr.menuRes.h,mvp.height):vr.menuRes.h);
+					if(mvp&&(mvp.x!==0||mvp.y!==0||mvp.width!==vr.menuRes.w||mvp.height!==vr.menuRes.h))
+					{
+						reportSubImageViewport(mvp,vr.menuRes.w,vr.menuRes.h);
+					}
 					var prevReadFb=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
 					GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,vr.menuRes.fb);
 					GLctx.bindTexture(GLctx.TEXTURE_2D,sub.colorTexture);
-					GLctx.copyTexSubImage2D(GLctx.TEXTURE_2D,0,0,0,0,0,vr.menuRes.w,vr.menuRes.h);
+					GLctx.copyTexSubImage2D(GLctx.TEXTURE_2D,0,mdx,mdy,0,0,mcw,mch);
 					GLctx.bindTexture(GLctx.TEXTURE_2D,null);
 					GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prevReadFb);
 				}
@@ -4506,6 +4520,32 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.dialRes[hand]=res;
 		return res;
 	}
+	// Scratch canvas for the (rare) case a layer's allocated sub-image
+	// viewport size differs from the source canvas -- the content is scaled
+	// through here so it still fills the quad exactly.
+	var subImageScaleScratch=null;
+	// One-shot diagnostic: report the first sub-image whose viewport is NOT
+	// the naive full-texture (0,0,w,h) -- the exact allocator behaviour the
+	// 2026-07 corruption (see below) depends on.  Runs once per session.
+	var subImageVpReported=false;
+	function reportSubImageViewport(vp,srcW,srcH)
+	{
+		if(subImageVpReported)
+		{
+			return;
+		}
+		subImageVpReported=true;
+		var msg='[vr] subimage viewport x='+vp.x+' y='+vp.y+' w='+vp.width+' h='+vp.height+' (src '+srcW+'x'+srcH+')';
+		console.warn(msg);
+		try
+		{
+			if(globalThis.ysfwDiag)
+			{
+				globalThis.ysfwDiag.push('vrvp',{msg:msg});
+			}
+		}
+		catch(e){}
+	}
 	function uploadCanvasToSubImage(canvas,sub)
 	{
 		// Save/restore every bit of GL state this touches: the engine renders
@@ -4522,7 +4562,43 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// the headset.
 		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,true);
 		GLctx.pixelStorei(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-		GLctx.texSubImage2D(GLctx.TEXTURE_2D,0,0,0,GLctx.RGBA,GLctx.UNSIGNED_BYTE,canvas);
+		// Honour the sub-image VIEWPORT (2026-07 Quest field report): the
+		// compositor may pack several layers' sub-images into one shared
+		// texture, and it grew visible once the menu scene crossed ~10 live
+		// layers -- uploads pinned to (0,0) then landed in whichever layer
+		// owned the texture's corner (on device: a second phantom "menu"
+		// quad showing another layer's region, cursor rings drawn offset
+		// from the ray).  Upload into THIS layer's assigned rectangle, and
+		// scale through the scratch canvas if the allocated size differs
+		// from the source.
+		var vp=(sub&&sub.viewport)?sub.viewport:null;
+		var dx=(vp?vp.x:0),dy=(vp?vp.y:0);
+		var src=canvas;
+		if(vp&&(vp.x!==0||vp.y!==0||vp.width!==canvas.width||vp.height!==canvas.height))
+		{
+			reportSubImageViewport(vp,canvas.width,canvas.height);
+		}
+		if(vp&&(vp.width!==canvas.width||vp.height!==canvas.height)&&0<vp.width&&0<vp.height)
+		{
+			if(!subImageScaleScratch)
+			{
+				subImageScaleScratch=document.createElement('canvas');
+			}
+			var sc=subImageScaleScratch;
+			if(sc.width!==vp.width||sc.height!==vp.height)
+			{
+				sc.width=vp.width;
+				sc.height=vp.height;
+			}
+			var sctx=sc.getContext('2d');
+			if(sctx)
+			{
+				sctx.clearRect(0,0,sc.width,sc.height);
+				sctx.drawImage(canvas,0,0,sc.width,sc.height);
+				src=sc;
+			}
+		}
+		GLctx.texSubImage2D(GLctx.TEXTURE_2D,0,dx,dy,GLctx.RGBA,GLctx.UNSIGNED_BYTE,src);
 		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,prevFlipY);
 		GLctx.pixelStorei(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL,prevPremult);
 		GLctx.bindTexture(GLctx.TEXTURE_2D,prevTex);

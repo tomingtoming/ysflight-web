@@ -72,10 +72,54 @@ export default {
     if (url.pathname === '/turn') {
       return turnCredentials(request, env);
     }
+    if (url.pathname === '/clientlog') {
+      return clientLog(request);
+    }
     // Non-signaling paths: serve the static game assets (dist/).
     return env.ASSETS.fetch(request);
   }
 };
+
+// Frontend diagnostics sink (web/diag.js POSTs here): echoes a small JSON
+// batch of client-side events (errors, VR/mode breadcrumbs, heartbeats) into
+// console.log, which observability (enabled in wrangler.jsonc) persists into
+// Workers Logs -- searchable in the dashboard (Workers & Pages -> ysflight-web
+// -> Logs, filter "[clientlog]").  Built for the 2026-07 Quest in-headset hang
+// reports: the headset browser's console is unreachable mid-session, so the
+// page ships its evidence here; a hang shows up as the heartbeat stream
+// STOPPING (plus an "unclean-end" event from the next page load carrying the
+// last known state).
+//
+// Guards: POST-only; same-origin when a browser sends Origin (same rationale
+// as /turn above); 16KB body cap; at most 50 events per batch, each truncated.
+// Volume is a trickle (one heartbeat every 10s while a session is active), so
+// the free-tier log budget is unaffected.
+async function clientLog(request) {
+  if (request.method !== 'POST') {
+    return new Response('POST only', { status: 405, headers: { 'Allow': 'POST' } });
+  }
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== new URL(request.url).origin) {
+    return new Response(null, { status: 403 });
+  }
+  let text = '';
+  try { text = await request.text(); } catch (e) { return new Response(null, { status: 400 }); }
+  if (text.length > 16384) text = text.slice(0, 16384);
+  let batch = null;
+  try { batch = JSON.parse(text); } catch (e) {}
+  if (!batch || !Array.isArray(batch.events)) {
+    return new Response(null, { status: 400 });
+  }
+  const sid = String(batch.sid || '').slice(0, 32);
+  for (const ev of batch.events.slice(0, 50)) {
+    let line = '';
+    try { line = JSON.stringify(ev); } catch (e) { continue; }
+    console.log('[clientlog]', sid, line.slice(0, 2000));
+  }
+  const ua = (request.headers.get('User-Agent') || '').slice(0, 120);
+  console.log('[clientlog-meta]', sid, JSON.stringify({ n: batch.events.length, ua }));
+  return new Response(null, { status: 204 });
+}
 
 // Mint short-lived TURN credentials (Cloudflare Realtime TURN) for the WebRTC
 // peers.  Direct P2P over public STUN cannot traverse symmetric-NAT/CGNAT pairs
