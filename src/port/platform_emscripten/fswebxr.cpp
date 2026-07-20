@@ -704,8 +704,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// occasional actions (radio/AP), added because a VR pilot had no
 		// way to leave a flight at all (2026-07 Quest feedback); dial
 		// sector count is table-driven (updateDialStick/drawDial), so the
-		// odd N=7 needs no other change.
-		{label:'ESC',    code:'Escape',   mode:'tap'}
+		// odd N=7 needs no other change. Labelled by what it DOES (leave
+		// the flight), not the key it sends -- "ESC" alone read as
+		// meaningless on device (second Quest report); the "×2" state hint
+		// (dialEntryStateText) carries the press-twice grammar.
+		{label:'終了',   code:'Escape',   mode:'tap'}
 	];
 
 	// GUI-dialog stick mapping (see SimDrawVrGui's doc comment / fsvr.h's
@@ -1327,12 +1330,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		try{ GLctx.deleteTexture(vr.menuRes.tex); }catch(e){}
 		try{ if(vr.menuRes.depthRb){ GLctx.deleteRenderbuffer(vr.menuRes.depthRb); } }catch(e){}
 		try{ if(vr.menuRes.quad){ vr.menuRes.quad.destroy(); } }catch(e){}
-		// Put the system keyboard away with the menu (blur also drops the
-		// window-handler stand-down via the input's blur listener).
-		if(vr.textInput&&vr.textInput.el&&document.activeElement===vr.textInput.el)
-		{
-			try{ vr.textInput.el.blur(); }catch(e){}
-		}
+		// The VR keyboard lives and dies with the menu boards.
+		teardownKbd();
 		GL.framebuffers[vr.menuRes.fbId]=null;
 		GL.textures[vr.menuRes.texId]=null;
 		vr.menuAnchor=null;
@@ -1968,140 +1967,351 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// per the swapchain-freshness discipline).  8 frames = ~110ms at 72Hz:
 	// long enough to ride out a hiccup, short enough that the quad is gone
 	// before the flight scene fades in after a menu->flight transition.
-	// ---- Text-input bridge (system-keyboard summon) ------------------------
+	// ---- VR keyboard quad (text input on the menu boards) ------------------
 	// menuData[6] (see fsvr.h) reports that the menu frame the engine just
 	// rendered contains a keyboard-focused text box (the aircraft-select
-	// search box, the lobby user-name box, ...).  A web page can only summon
-	// the headset's system keyboard by focusing a real editable DOM element,
-	// so the bridge keeps a hidden 1px <input> and focuses it while that
-	// flag is up -- gated on a recent menu-quad ray click (the click that
-	// focused the box, or a fresh click back into it), so a keyboard the
-	// user deliberately dismissed is never re-summoned against their will.
-	// While the input is focused, fssimplewindow's window-level key handlers
-	// stand down (FsSetDomTextCapture) and every edit reaches the engine
-	// through FsPushTextEdit instead:
-	//   - printable text arrives as 'input' events (insertText -- the only
-	//     channel soft keyboards reliably deliver characters on; their
-	//     keydowns are 'Unidentified', exactly like Android IMEs),
-	//   - backspace arrives as deleteContentBackward (the input holds a
-	//     sentinel string so there is always something to delete),
-	//   - Enter/arrows/Del/Home/End/Tab/Escape arrive as real keydowns on
-	//     the input (no default insertion -> no input event -> no doubling;
-	//     Escape also dismisses the keyboard).
-	// A physical Bluetooth keyboard takes the same path: its letter
-	// keydowns default-insert into the input and come back out as
-	// insertText, everything else via the keydown listener -- one source of
-	// truth for text, soft or physical.  Engine-side the pushes are the
-	// same FsPushKey/FsPushChar pairs the flat keydown path produces, so
-	// FsGuiTextBox sees no difference from desktop typing.
-	var TEXT_SENTINEL='................'; // 16 deletable chars for backspace
-	function textInputState()
+	// search box, the lobby user-name box, ...).  Round 1 of this feature
+	// summoned the HEADSET's system keyboard by focusing a hidden DOM
+	// <input> mid-session -- which crashed the Quest browser outright the
+	// moment the lobby's player-name box was clicked (2026-07 device
+	// report), so the DOM route is gone entirely.  Instead the port draws
+	// its OWN keyboard: a world-anchored quad hanging just under the menu
+	// board, typed on with the same controller ray + trigger the menu
+	// itself uses (processKbdRayInput piggybacks on processMenuRayInput's
+	// per-source loop conventions).  Keystrokes reach the engine through
+	// FsPushTextEdit -- the same FsPushKey/FsPushChar pairs a physical
+	// keyboard's window events produce, so FsGuiTextBox sees no difference;
+	// a Bluetooth keyboard keeps working through the untouched window
+	// handlers.  Draw/upload follows the dial quads' hard-won discipline:
+	// canvas repaints are change-driven (hover/shift), the texture upload
+	// runs every presented frame (see updateDialLayers' stale-face
+	// post-mortem for why the upload must NOT sit behind the repaint gate).
+	var KBD_CANVAS_W=576,KBD_CANVAS_H=240;
+	var KBD_COLS=12,KBD_ROWS=5;
+	var KBD_HIDE_GRACE=8; // frames; same transient-gap tolerance as the menu quad.
+	// Grid layout: w in columns (default 1); ch types that character (shift
+	// uppercases letters), act names a FsPushTextEdit action or the local
+	// shift toggle.  ASCII-only by design -- engine text boxes are
+	// byte-charset (user names, aircraft-name search).
+	var KBD_LAYOUT=[
+		[{ch:'1'},{ch:'2'},{ch:'3'},{ch:'4'},{ch:'5'},{ch:'6'},{ch:'7'},{ch:'8'},{ch:'9'},{ch:'0'},{ch:'-'},{act:'bs',label:'\u232b'}],
+		[{ch:'q'},{ch:'w'},{ch:'e'},{ch:'r'},{ch:'t'},{ch:'y'},{ch:'u'},{ch:'i'},{ch:'o'},{ch:'p'},{ch:'_'},{ch:'.'}],
+		[{ch:'a'},{ch:'s'},{ch:'d'},{ch:'f'},{ch:'g'},{ch:'h'},{ch:'j'},{ch:'k'},{ch:'l'},{act:'enter',label:'OK',w:3}],
+		[{act:'shift',label:'\u21e7',w:2},{ch:'z'},{ch:'x'},{ch:'c'},{ch:'v'},{ch:'b'},{ch:'n'},{ch:'m'},{act:'left',label:'\u2190'},{act:'right',label:'\u2192'}],
+		[{ch:' ',label:'space',w:12}]
+	];
+	function kbdState()
 	{
-		if(!vr.textInput)
+		if(!vr.kbd)
 		{
-			vr.textInput={el:null,lastMenuClickAt:0,stats:{chars:0,edits:0}};
+			vr.kbd={res:undefined,anchor:null,anchorFrom:null,idleFrames:1e9,shift:false,
+				hover:{right:-1,left:-1},prevTrig:{right:false,left:false},
+				drawnKey:null,keys:null,stats:{chars:0,edits:0}};
 		}
-		return vr.textInput;
+		return vr.kbd;
 	}
-	function resetTextSentinel()
+	// Flattened key rects in canvas pixels, computed once: {x,y,w,h,def}.
+	function kbdKeyRects()
 	{
-		var ti=textInputState();
-		if(ti.el)
+		var st=kbdState();
+		if(st.keys)
 		{
-			ti.el.value=TEXT_SENTINEL;
-			try{ ti.el.setSelectionRange(TEXT_SENTINEL.length,TEXT_SENTINEL.length); }catch(e){}
+			return st.keys;
 		}
-	}
-	function ensureTextInputEl()
-	{
-		var ti=textInputState();
-		if(ti.el)
+		var cellW=KBD_CANVAS_W/KBD_COLS,cellH=KBD_CANVAS_H/KBD_ROWS;
+		var keys=[];
+		for(var r=0; r<KBD_LAYOUT.length; ++r)
 		{
-			return ti.el;
-		}
-		var el=document.createElement('input');
-		el.type='text';
-		el.setAttribute('autocomplete','off');
-		el.setAttribute('autocapitalize','off');
-		el.setAttribute('autocorrect','off');
-		el.spellcheck=false;
-		// Focusable but invisible: display:none/visibility:hidden elements
-		// refuse focus, so park a transparent 1px field in the corner.
-		el.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;border:0;padding:0;background:transparent;color:transparent;caret-color:transparent;outline:none;';
-		el.addEventListener('focus',function(){ _FsSetDomTextCapture(1); resetTextSentinel(); });
-		el.addEventListener('blur',function(){ _FsSetDomTextCapture(0); });
-		el.addEventListener('input',function(ev){
-			var t=ev.inputType||'insertText';
-			if('insertText'===t||'insertCompositionText'===t||'insertFromPaste'===t)
+			var row=KBD_LAYOUT[r],c=0;
+			for(var i=0; i<row.length; ++i)
 			{
-				var data=ev.data;
-				if(data)
+				var def=row[i],w=def.w||1;
+				keys.push({x:c*cellW,y:r*cellH,w:w*cellW,h:cellH,def:def});
+				c+=w;
+			}
+		}
+		st.keys=keys;
+		return keys;
+	}
+	// Canvas-pixel point -> key index, or -1.  Same y-down convention as
+	// menuUvToPixel (quad UV v=0 is the canvas top row).
+	function kbdHitKey(px,py)
+	{
+		var keys=kbdKeyRects();
+		for(var i=0; i<keys.length; ++i)
+		{
+			var k=keys[i];
+			if(k.x<=px&&px<k.x+k.w&&k.y<=py&&py<k.y+k.h)
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
+	function kbdKeyLabel(def,shift)
+	{
+		if(def.label)
+		{
+			return def.label;
+		}
+		var ch=def.ch||'';
+		return (shift ? ch.toUpperCase() : ch);
+	}
+	function kbdDispatchKey(i)
+	{
+		var st=kbdState();
+		var keys=kbdKeyRects();
+		if(i<0||keys.length<=i)
+		{
+			return;
+		}
+		var def=keys[i].def;
+		switch(def.act||'char')
+		{
+		case 'char':
+			var ch=(st.shift ? (def.ch||'').toUpperCase() : (def.ch||''));
+			if(ch)
+			{
+				_FsPushTextEdit(0,ch.charCodeAt(0));
+				++st.stats.chars;
+			}
+			break;
+		case 'bs':    _FsPushTextEdit(1,0); ++st.stats.edits; break;
+		case 'enter': _FsPushTextEdit(2,0); ++st.stats.edits; break;
+		case 'left':  _FsPushTextEdit(4,0); ++st.stats.edits; break;
+		case 'right': _FsPushTextEdit(5,0); ++st.stats.edits; break;
+		case 'shift': st.shift=!st.shift; break;
+		}
+	}
+	function drawKbd(ctx)
+	{
+		var st=kbdState();
+		var keys=kbdKeyRects();
+		ctx.clearRect(0,0,KBD_CANVAS_W,KBD_CANVAS_H);
+		ctx.fillStyle='rgba(10,16,20,0.92)';
+		roundRectPath(ctx,0,0,KBD_CANVAS_W,KBD_CANVAS_H,10);
+		ctx.fill();
+		ctx.textAlign='center';
+		ctx.textBaseline='middle';
+		for(var i=0; i<keys.length; ++i)
+		{
+			var k=keys[i];
+			var hovered=(i===st.hover.right||i===st.hover.left);
+			var shiftOn=('shift'===k.def.act&&st.shift);
+			roundRectPath(ctx,k.x+3,k.y+3,k.w-6,k.h-6,6);
+			ctx.fillStyle=(hovered ? 'rgba(255,214,64,0.92)' : (shiftOn ? 'rgba(120,180,255,0.40)' : 'rgba(230,237,243,0.12)'));
+			ctx.fill();
+			ctx.fillStyle=(hovered ? '#20232a' : '#dff2e8');
+			var label=kbdKeyLabel(k.def,st.shift);
+			ctx.font=(1<label.length ? '16px' : '21px')+' system-ui,sans-serif';
+			ctx.fillText(label,k.x+k.w/2,k.y+k.h/2+1);
+		}
+	}
+	function kbdQuadSize()
+	{
+		// Match the menu board's width so the pair reads as one console;
+		// height follows the canvas aspect.
+		var w=((vr.menuRes&&vr.menuRes.quadW) ? vr.menuRes.quadW : 1.2)*0.92;
+		return {w:w,h:w*(KBD_CANVAS_H/KBD_CANVAS_W)};
+	}
+	function ensureKbdResources()
+	{
+		var st=kbdState();
+		if(undefined!==st.res)
+		{
+			return st.res; // cached: an object, or false (unavailable).
+		}
+		var res=false;
+		try
+		{
+			var canvas=document.createElement('canvas');
+			canvas.width=KBD_CANVAS_W;
+			canvas.height=KBD_CANVAS_H;
+			var quad=null;
+			if(vr.mvBinding&&vr.refSpace)
+			{
+				var sz=kbdQuadSize();
+				quad=vr.mvBinding.createQuadLayer({
+					space:vr.refSpace,
+					viewPixelWidth:KBD_CANVAS_W,
+					viewPixelHeight:KBD_CANVAS_H,
+					layout:'mono',
+					width:sz.w,
+					height:sz.h
+				});
+				try{ if('blendTextureSourceAlpha' in quad){ quad.blendTextureSourceAlpha=true; } }catch(e){}
+			}
+			else if(!vr.testMode)
+			{
+				st.res=false;
+				return false; // No layers support and not in the headless harness.
+			}
+			res={canvas:canvas,ctx:canvas.getContext('2d'),quad:quad,inLayers:false};
+		}
+		catch(e)
+		{
+			console.warn('[vr] keyboard quad unavailable: '+(e&&e.message?e.message:e));
+			res=false;
+		}
+		st.res=res;
+		return res;
+	}
+	function anchorKbdQuad()
+	{
+		var st=kbdState();
+		if(!st.res||!vr.menuAnchor||!vr.menuRes)
+		{
+			return;
+		}
+		if(st.anchorFrom===vr.menuAnchor)
+		{
+			return; // Still anchored to the current menu anchor (identity check:
+			        // anchorMenuQuad replaces the object on every re-anchor).
+		}
+		var menuH=vr.menuRes.quadH||0.7;
+		var sz=kbdQuadSize();
+		// The menu anchor is yaw-only, so its local -Y is world down: hang the
+		// keyboard just under the board's bottom edge, coplanar with it.
+		var pos={x:vr.menuAnchor.pos.x,y:vr.menuAnchor.pos.y-(menuH/2+sz.h/2+0.04),z:vr.menuAnchor.pos.z};
+		st.anchor={pos:pos,quat:vr.menuAnchor.quat,w:sz.w,h:sz.h};
+		st.anchorFrom=vr.menuAnchor;
+		if(st.res.quad)
+		{
+			try{ st.res.quad.transform=new XRRigidTransform(pos,vr.menuAnchor.quat); }catch(e){}
+		}
+	}
+	// Per-frame keyboard maintenance, called from updateMenuLayer (so it
+	// only runs in menu contexts).  Returns true when the layers list
+	// changed so the caller folds it into its own syncRenderStateLayers.
+	function updateKbdLayer(frame,menuVisible)
+	{
+		var st=kbdState();
+		var p=_YsfwVrMenuDataPointer()>>2;
+		if(menuVisible&&0!==HEAPF32[p+6])
+		{
+			st.idleFrames=0;
+		}
+		else
+		{
+			++st.idleFrames;
+		}
+		var visible=(st.idleFrames<=KBD_HIDE_GRACE);
+		var res=(visible ? ensureKbdResources() : st.res);
+		if(!res)
+		{
+			return false;
+		}
+		var layersChanged=false;
+		if(visible&&!res.inLayers&&res.quad)
+		{
+			res.inLayers=true;
+			st.drawnKey=null; // Force a repaint on (re)appearance.
+			layersChanged=true;
+		}
+		else if(!visible&&res.inLayers)
+		{
+			res.inLayers=false;
+			st.hover.right=-1;
+			st.hover.left=-1;
+			layersChanged=true;
+		}
+		if(visible)
+		{
+			anchorKbdQuad();
+			var key=st.hover.right+'|'+st.hover.left+'|'+(st.shift?1:0);
+			if(key!==st.drawnKey&&res.ctx)
+			{
+				try
 				{
-					for(var i=0; i<data.length; ++i)
+					drawKbd(res.ctx);
+					st.drawnKey=key;
+				}
+				catch(e){}
+			}
+			// Upload every presented frame regardless of the repaint gate --
+			// see updateDialLayers' stale-face post-mortem.
+			if(res.quad&&res.inLayers&&frame)
+			{
+				try
+				{
+					var sub=vr.mvBinding.getSubImage(res.quad,frame);
+					uploadCanvasToSubImage(res.canvas,sub);
+				}
+				catch(e){}
+			}
+		}
+		return layersChanged;
+	}
+	// Ray hover + trigger typing, called from processMenuRayInput with the
+	// menu's own per-hand hits (a hand pointing at the menu board cannot
+	// simultaneously type -- the quads are coplanar and disjoint).
+	function processKbdRayInput(frame,menuHits)
+	{
+		var st=kbdState();
+		var res=st.res;
+		if(!res||!res.inLayers||!st.anchor)
+		{
+			st.hover.right=-1;
+			st.hover.left=-1;
+			return;
+		}
+		var sources=frame.session.inputSources;
+		var seen={right:false,left:false};
+		for(var i=0; i<sources.length; ++i)
+		{
+			var src=sources[i];
+			if(!src.targetRaySpace)
+			{
+				continue;
+			}
+			var hand=src.handedness;
+			if(hand!=='right'&&hand!=='left')
+			{
+				continue;
+			}
+			if(seen[hand])
+			{
+				continue;
+			}
+			seen[hand]=true;
+			var hover=-1,trig=false;
+			if(!menuHits[hand])
+			{
+				var rayPose=frame.getPose(src.targetRaySpace,vr.refSpace);
+				if(rayPose)
+				{
+					var hit=intersectRayWithAnchoredQuad(
+						rayPose.transform.position,rayPose.transform.orientation,
+						st.anchor.pos,st.anchor.quat,st.anchor.w,st.anchor.h);
+					if(hit)
 					{
-						var c=data.charCodeAt(i);
-						// Engine text boxes are byte-charset (user names,
-						// aircraft names): printable ASCII only.
-						if(32<=c&&c<127)
-						{
-							_FsPushTextEdit(0,c);
-							++ti.stats.chars;
-						}
+						hover=kbdHitKey(hit.u*KBD_CANVAS_W,hit.v*KBD_CANVAS_H);
+						var gp=src.gamepad;
+						trig=!!(gp&&gp.buttons[0]&&gp.buttons[0].value>0.5);
 					}
 				}
 			}
-			else if('deleteContentBackward'===t)
+			st.hover[hand]=hover;
+			if(trig&&!st.prevTrig[hand]&&0<=hover)
 			{
-				_FsPushTextEdit(1,0);
-				++ti.stats.edits;
+				kbdDispatchKey(hover);
+				vrHapticPulse(src);
 			}
-			else if('insertLineBreak'===t)
-			{
-				_FsPushTextEdit(2,0);
-				++ti.stats.edits;
-			}
-			resetTextSentinel();
-		});
-		el.addEventListener('keydown',function(ev){
-			var ACT={Enter:2,NumpadEnter:2,Escape:3,ArrowLeft:4,ArrowRight:5,Delete:6,Home:7,End:8,Tab:9};
-			var a=ACT[ev.code];
-			if(undefined!==a)
-			{
-				_FsPushTextEdit(a,0);
-				++ti.stats.edits;
-				ev.preventDefault();
-				if('Escape'===ev.code)
-				{
-					el.blur();
-				}
-			}
-			// Letter/backspace keydowns: no push here -- their default
-			// mutates the input and comes back as an 'input' event above.
-		});
-		(document.body||document.documentElement).appendChild(el);
-		ti.el=el;
-		return el;
+			st.prevTrig[hand]=trig;
+		}
 	}
-	function updateTextInputBridge(menuVisible)
+	function teardownKbd()
 	{
-		var ti=textInputState();
-		var p=_YsfwVrMenuDataPointer()>>2;
-		var wantText=(menuVisible&&0!==HEAPF32[p+6]);
-		if(wantText)
+		if(!vr.kbd)
 		{
-			var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
-			if(ti.lastMenuClickAt&&(now-ti.lastMenuClickAt)<600&&document.activeElement!==ti.el)
-			{
-				try{ ensureTextInputEl().focus({preventScroll:true}); }catch(e){}
-				ti.lastMenuClickAt=0; // one summon per click
-			}
+			return;
 		}
-		else if(ti.el&&document.activeElement===ti.el)
+		var res=vr.kbd.res;
+		if(res&&res.quad)
 		{
-			// Engine-side focus left the text box (dialog closed, another
-			// widget clicked): put the keyboard away.
-			try{ ti.el.blur(); }catch(e){}
+			try{ res.quad.destroy(); }catch(e){}
 		}
+		vr.kbd=null;
 	}
 
 	var MENU_HIDE_GRACE=8;
@@ -2137,9 +2347,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// never as an uninitialized-FBO square at session start mid-flight.
 		var menuVisible=(vr.menuIdleFrames<=MENU_HIDE_GRACE);
 
-		updateTextInputBridge(menuVisible);
-
 		var layersChanged=false;
+
+		if(updateKbdLayer(frame,menuVisible))
+		{
+			layersChanged=true;
+		}
 
 		if(menuVisible)
 		{
@@ -2507,14 +2720,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 				evtType=1; // move
 			}
 			_YsfwInjectMouseEvent(evtType,lb,0,0,selected.mx,selected.my);
-			if(3===evtType)
-			{
-				// Completed menu click: arms the text-input bridge's summon
-				// window (see updateTextInputBridge) -- if this click landed
-				// on (or keeps focus in) a text box, the engine's focus flag
-				// plus this timestamp bring up the system keyboard.
-				textInputState().lastMenuClickAt=(typeof performance!=='undefined' ? performance.now() : Date.now());
-			}
 			menuRayState.prevMx=selected.mx;
 			menuRayState.prevMy=selected.my;
 			menuRayState.prevTrig=selected.trig;
@@ -2524,6 +2729,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var hh2=hands[h2];
 			menuRayState.hands[hh2].prevTrig=!!(hits[hh2]&&hits[hh2].trig);
 		}
+
+		// The VR keyboard hangs just under this board and is typed on with
+		// the same rays; hands currently over the menu are excluded (the
+		// quads are coplanar and disjoint, so a ray reaches at most one).
+		processKbdRayInput(frame,hits);
 	}
 
 	// Reads back [dialogVisible,apMenu] from the GUI state block -- cheap,
@@ -4236,6 +4446,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 			return fmtPct(state.flap);
 		case 'Digit2':
 			return weaponLabel(state.wpnType)+' '+Math.max(0,Math.round(state.wpnCount));
+		case 'Escape':
+			// The press-twice grammar of the 終了 sector (first ESC closes
+			// any submenu, the second consecutive one leaves the flight).
+			return '×2';
 		}
 		return null;
 	}
@@ -5007,6 +5221,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.skyRes && vr.skyRes.inLayers && vr.skyRes.layer){ layers.push(vr.skyRes.layer); }
 		// Menu quad: placed after the sky so it composites over it.
 		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
+		// VR keyboard: hangs under the menu board, same compositing slot.
+		if(vr.kbd && vr.kbd.res && vr.kbd.res.inLayers && vr.kbd.res.quad){ layers.push(vr.kbd.res.quad); }
 		// Controller laser beams: physically in front of the menu board, so
 		// composited over it (and under the cursor ring, which sits ON it).
 		if(vr.beamRes && vr.beamRes.right && vr.beamRes.right.inLayers){ layers.push(vr.beamRes.right.quad); }
@@ -6136,12 +6352,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 	vr.menuUvToPixel=menuUvToPixel;
 	vr.cursorOverlayPoint=cursorOverlayPoint;
 	vr.beamPoseFor=beamPoseFor;
-	// Text-input bridge test hooks (scripts/smoke-vrmenu.mjs): expose the
-	// hidden-input machinery so a headless test can drive focus/typing
-	// without a headset or a real system keyboard.
-	vr.textBridgeEnsure=ensureTextInputEl;
-	vr.textBridgeUpdate=updateTextInputBridge;
-	vr.textBridgeState=function(){ return textInputState(); };
+	// VR-keyboard test hooks (scripts/smoke-vrmenu.mjs): expose the pure
+	// layout/dispatch machinery and the visibility driver so a headless
+	// test can type without a headset.
+	vr.kbdHitKey=kbdHitKey;
+	vr.kbdKeyRects=kbdKeyRects;
+	vr.kbdDispatchKey=kbdDispatchKey;
+	vr.kbdUpdate=updateKbdLayer;
+	vr.kbdState=function(){ return kbdState(); };
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read

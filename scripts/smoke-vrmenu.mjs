@@ -374,54 +374,65 @@ check('menu ray: an active left drag cannot be stolen by right', handTests.dragK
 check('menu ray: moving the left hand transfers hover ownership', handTests.leftMovementClaimsHover === 'left', JSON.stringify(handTests));
 check('menu ray: moving the right hand transfers hover ownership', handTests.rightMovementClaimsHover === 'right', JSON.stringify(handTests));
 
-// ---- Text-input bridge (system-keyboard summon machinery) -----------------
-// Drives the hidden-input bridge without a headset: the summon gate
-// (menuData[6] + a recent menu click), the soft-keyboard event forwarding
-// (insertText/deleteContentBackward as 'input' events, Enter as a keydown),
-// and the put-away path (flag drop -> blur).  Engine-side delivery is the
-// same FsPushKey/FsPushChar pair flat typing uses (FsPushTextEdit), counted
-// here via the bridge's stats.
-const textBridge = await page.evaluate(() => {
+// ---- VR keyboard quad (text input without the DOM) ------------------------
+// Round 1 summoned the system keyboard by focusing a hidden DOM <input> --
+// which crashed the Quest browser on device -- so text input is now a
+// port-drawn keyboard quad typed on with the controller ray.  Headlessly we
+// drive the pure machinery: the grid layout/hit-test, the dispatch path
+// into the engine (FsPushTextEdit -- counted via the state's stats), the
+// shift toggle, and the menuData[6]-driven visibility timer.
+const kbd = await page.evaluate(() => {
   const M = globalThis.Module;
   const vr = M.ysfwVr;
-  const el = vr.textBridgeEnsure();
-  const st = vr.textBridgeState();
+  const st = vr.kbdState();
+  const rects = vr.kbdKeyRects();
   const out = {};
 
-  // Summon gate: focus flag up + recent click -> input takes focus.
-  vr.pokeMenuData(6, 1);
-  st.lastMenuClickAt = performance.now();
-  vr.textBridgeUpdate(true);
-  out.focusedOnClick = (document.activeElement === el);
+  // Layout sanity: every row spans the full canvas width, keys are disjoint
+  // (hit-test at each key centre returns that key).
+  out.keyCount = rects.length;
+  out.centersResolve = rects.every((k, i) => vr.kbdHitKey(k.x + k.w / 2, k.y + k.h / 2) === i);
+  out.missResolves = (vr.kbdHitKey(-5, -5) === -1);
+  const label = (i) => rects[i].def.label || rects[i].def.ch;
+  out.hasCoreKeys = ['\u232b', 'OK', '\u21e7', 'space', 'q', '1']
+    .every((want) => rects.some((k) => (k.def.label || k.def.ch) === want));
 
-  // No fresh click -> no re-summon after a dismissal.
-  el.blur();
-  vr.textBridgeUpdate(true);
-  out.noResummonWithoutClick = (document.activeElement !== el);
-
-  // Typing: soft-keyboard-style events while focused.
-  st.lastMenuClickAt = performance.now();
-  vr.textBridgeUpdate(true);
+  // Dispatch: a letter increments chars, backspace/enter increment edits,
+  // shift only flips local state (no engine push).
+  const qIdx = rects.findIndex((k) => k.def.ch === 'q');
+  const bsIdx = rects.findIndex((k) => k.def.act === 'bs');
+  const okIdx = rects.findIndex((k) => k.def.act === 'enter');
+  const shIdx = rects.findIndex((k) => k.def.act === 'shift');
   const chars0 = st.stats.chars, edits0 = st.stats.edits;
-  el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: 'ab' }));
-  out.charsForwarded = (st.stats.chars - chars0);
-  el.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward' }));
-  el.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
+  vr.kbdDispatchKey(qIdx);
+  out.charForwarded = (st.stats.chars - chars0);
+  vr.kbdDispatchKey(bsIdx);
+  vr.kbdDispatchKey(okIdx);
   out.editsForwarded = (st.stats.edits - edits0);
-  out.sentinelRefilled = (el.value.length > 0);
+  const shiftBefore = st.shift;
+  vr.kbdDispatchKey(shIdx);
+  out.shiftToggled = (st.shift !== shiftBefore);
+  vr.kbdDispatchKey(shIdx); // restore
 
-  // Put-away: engine focus flag drops -> input blurs (keyboard dismissed).
+  // Visibility driver: the engine's menuData[6] focus flag arms the
+  // keyboard (idleFrames pinned to 0); dropping it lets the hide-grace
+  // timer run the keyboard out.
+  vr.pokeMenuData(6, 1);
+  vr.kbdUpdate(null, true);
+  out.armedOnFlag = (st.idleFrames === 0);
   vr.pokeMenuData(6, 0);
-  vr.textBridgeUpdate(true);
-  out.blurredOnFlagDrop = (document.activeElement !== el);
+  for (let i = 0; i < 12; ++i) { vr.kbdUpdate(null, true); }
+  out.disarmedOnFlagDrop = (st.idleFrames > 8);
   return out;
 });
-check('text bridge: click + focus flag summons (focuses) the hidden input', textBridge.focusedOnClick === true, JSON.stringify(textBridge));
-check('text bridge: a dismissed keyboard is not re-summoned without a fresh click', textBridge.noResummonWithoutClick === true, JSON.stringify(textBridge));
-check('text bridge: insertText forwards each character to the engine', textBridge.charsForwarded === 2, JSON.stringify(textBridge));
-check('text bridge: backspace + Enter forward as edit actions', textBridge.editsForwarded === 2, JSON.stringify(textBridge));
-check('text bridge: sentinel text is refilled so backspace always has a target', textBridge.sentinelRefilled === true, JSON.stringify(textBridge));
-check('text bridge: focus-flag drop puts the keyboard away (input blurred)', textBridge.blurredOnFlagDrop === true, JSON.stringify(textBridge));
+check('kbd: every key centre hit-tests back to its own key', kbd.centersResolve === true, JSON.stringify(kbd));
+check('kbd: out-of-canvas point resolves to no key', kbd.missResolves === true, JSON.stringify(kbd));
+check('kbd: core keys present (backspace/OK/shift/space/letters/digits)', kbd.hasCoreKeys === true, JSON.stringify(kbd));
+check('kbd: letter key forwards one character to the engine', kbd.charForwarded === 1, JSON.stringify(kbd));
+check('kbd: backspace + OK forward as edit actions', kbd.editsForwarded === 2, JSON.stringify(kbd));
+check('kbd: shift toggles local state', kbd.shiftToggled === true, JSON.stringify(kbd));
+check('kbd: menuData[6] focus flag arms the keyboard timer', kbd.armedOnFlag === true, JSON.stringify(kbd));
+check('kbd: flag drop runs the hide-grace timer out', kbd.disarmedOnFlagDrop === true, JSON.stringify(kbd));
 
 // ---- teardownMenu: menuData cleared on session teardown -------------------
 // Run the REAL teardown (vr.teardownMenuForTest wraps teardownMenu): it must

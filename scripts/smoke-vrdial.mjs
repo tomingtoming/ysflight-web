@@ -295,7 +295,7 @@ await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0,
 keys = await readKeys();
 check('left dial sector 5 (トリム): KeyT keyup on trigger release (hold mode)', keys.includes('up:KeyT'), 'keys=' + JSON.stringify(keys));
 
-// ---- Group 9c: left dial sector 6 (~309deg at N=7) = ESC (Escape, tap) ---
+// ---- Group 9c: left dial sector 6 (~309deg at N=7) = 終了 (Escape, tap) --
 // The in-flight exit path (2026-07 Quest feedback: no way to leave a
 // flight in VR): each trigger pull on this sector is one truthful ESC
 // press; the ENGINE terminates the flight on the second consecutive press
