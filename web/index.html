@@ -1261,6 +1261,11 @@
       // three stick axes (default 1.0 = off, see DEFAULT_STICK_EXPO).
       if (q.get('vryawdz') !== null && q.get('vryawdz') !== '') o.yawDeadzoneDeg = parseFloat(q.get('vryawdz'));
       if (q.get('vrexpo') !== null && q.get('vrexpo') !== '') o.stickExpo = parseFloat(q.get('vrexpo'));
+      // ?vrkbd=sys: experimental SYSTEM-keyboard text input -- requests the
+      // dom-overlay session feature (the supported way to summon the Quest
+      // system keyboard mid-session) and suppresses the port-drawn keyboard
+      // quad. Default stays the quad keyboard (see fswebxr.cpp's kbd*).
+      if (q.get('vrkbd') === 'sys') o.kbdSys = true;
       Module.ysfwVrOptions = o;
     })();
     var vrBtn = document.createElement('button');

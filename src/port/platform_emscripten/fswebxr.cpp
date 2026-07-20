@@ -2006,6 +2006,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			vr.kbd={res:undefined,anchor:null,anchorFrom:null,idleFrames:1e9,shift:false,
 				hover:{right:-1,left:-1},prevTrig:{right:false,left:false},
+				cursor:{right:null,left:null},
+				sysEl:null,sysFocused:false,
 				drawnKey:null,keys:null,stats:{chars:0,edits:0}};
 		}
 		return vr.kbd;
@@ -2106,6 +2108,26 @@ EM_JS(void,YsfwInstallWebXR,(),
 			ctx.font=(1<label.length ? '16px' : '21px')+' system-ui,sans-serif';
 			ctx.fillText(label,k.x+k.w/2,k.y+k.h/2+1);
 		}
+		// Aim cursors: a ring at each hand's exact ray hit, same affordance
+		// as the menu board's cursor overlay -- the key highlight alone read
+		// as "can't tell where I'm pointing" on device.
+		var hands=['right','left'];
+		for(var c2=0; c2<hands.length; ++c2)
+		{
+			var cur=st.cursor[hands[c2]];
+			if(cur)
+			{
+				ctx.beginPath();
+				ctx.arc(cur.x,cur.y,7,0,2*Math.PI);
+				ctx.lineWidth=3;
+				ctx.strokeStyle=('right'===hands[c2] ? 'rgba(255,214,64,0.95)' : 'rgba(102,204,255,0.95)');
+				ctx.stroke();
+				ctx.beginPath();
+				ctx.arc(cur.x,cur.y,1.5,0,2*Math.PI);
+				ctx.fillStyle='#ffffff';
+				ctx.fill();
+			}
+		}
 	}
 	function kbdQuadSize()
 	{
@@ -2170,15 +2192,91 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		var menuH=vr.menuRes.quadH||0.7;
 		var sz=kbdQuadSize();
-		// The menu anchor is yaw-only, so its local -Y is world down: hang the
-		// keyboard just under the board's bottom edge, coplanar with it.
-		var pos={x:vr.menuAnchor.pos.x,y:vr.menuAnchor.pos.y-(menuH/2+sz.h/2+0.04),z:vr.menuAnchor.pos.z};
-		st.anchor={pos:pos,quat:vr.menuAnchor.quat,w:sz.w,h:sz.h};
+		// The menu anchor is yaw-only, so its local -Y is world down.  Hang
+		// the keyboard under the board's bottom edge, pulled 0.35 m toward
+		// the viewer and tilted back 30 deg like a lectern -- the coplanar
+		// round-1 placement put a vertical slab low in the view, which read
+		// as hard to aim at on device.  The ray hit-test uses this same
+		// pose (st.anchor), so typing and visuals cannot drift.
+		var fwd=rotateVecByQuat({x:0,y:0,z:1},vr.menuAnchor.quat); // local +Z = toward the viewer
+		var tilt=quatMultiply(vr.menuAnchor.quat,quatFromAxisAngle({x:1,y:0,z:0},-30*Math.PI/180));
+		var pos={
+			x:vr.menuAnchor.pos.x+fwd.x*0.35,
+			y:vr.menuAnchor.pos.y-(menuH/2+sz.h/2),
+			z:vr.menuAnchor.pos.z+fwd.z*0.35
+		};
+		st.anchor={pos:pos,quat:tilt,w:sz.w,h:sz.h};
 		st.anchorFrom=vr.menuAnchor;
 		if(st.res.quad)
 		{
-			try{ st.res.quad.transform=new XRRigidTransform(pos,vr.menuAnchor.quat); }catch(e){}
+			try{ st.res.quad.transform=new XRRigidTransform(pos,tilt); }catch(e){}
 		}
+	}
+	// ?vrkbd=sys experiment: use the QUEST SYSTEM KEYBOARD instead of the
+	// port-drawn quad.  Only honoured when the session actually granted
+	// dom-overlay -- the supported precondition for the system keyboard;
+	// focusing an input withOUT it is what crashed the browser in round 1.
+	function sysKbdActive()
+	{
+		return !!(vrOpt('kbdSys',false)&&vr.session&&vr.session.domOverlayState);
+	}
+	function ensureSysKbdInput()
+	{
+		var st=kbdState();
+		if(st.sysEl)
+		{
+			return st.sysEl;
+		}
+		var el=document.createElement('input');
+		el.type='text';
+		el.setAttribute('autocomplete','off');
+		el.setAttribute('autocapitalize','off');
+		el.setAttribute('autocorrect','off');
+		el.spellcheck=false;
+		el.style.cssText='position:fixed;left:8px;bottom:8px;width:120px;height:24px;opacity:0.01;border:0;background:transparent;color:transparent;caret-color:transparent;';
+		// Sentinel text so backspace always has something to delete (soft
+		// keyboards report deletions only as actual content mutations).
+		var SENT='................';
+		var refill=function(){ el.value=SENT; try{ el.setSelectionRange(SENT.length,SENT.length); }catch(e){} };
+		el.addEventListener('focus',refill);
+		el.addEventListener('input',function(ev){
+			var t=ev.inputType||'insertText';
+			if('insertText'===t||'insertCompositionText'===t||'insertFromPaste'===t)
+			{
+				var d=ev.data||'';
+				for(var i=0; i<d.length; ++i)
+				{
+					var c=d.charCodeAt(i);
+					if(32<=c&&c<127)
+					{
+						_FsPushTextEdit(0,c);
+						++st.stats.chars;
+					}
+				}
+			}
+			else if('deleteContentBackward'===t)
+			{
+				_FsPushTextEdit(1,0);
+				++st.stats.edits;
+			}
+			else if('insertLineBreak'===t)
+			{
+				_FsPushTextEdit(2,0);
+				++st.stats.edits;
+			}
+			refill();
+		});
+		el.addEventListener('keydown',function(ev){
+			if('Enter'===ev.code||'NumpadEnter'===ev.code)
+			{
+				_FsPushTextEdit(2,0);
+				++st.stats.edits;
+				ev.preventDefault();
+			}
+		});
+		(document.getElementById('ysfw-vr-overlay')||document.body).appendChild(el);
+		st.sysEl=el;
+		return el;
 	}
 	// Per-frame keyboard maintenance, called from updateMenuLayer (so it
 	// only runs in menu contexts).  Returns true when the layers list
@@ -2187,6 +2285,31 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var st=kbdState();
 		var p=_YsfwVrMenuDataPointer()>>2;
+		if(sysKbdActive())
+		{
+			// System-keyboard mode: focus the hidden input on the focus
+			// flag's rising edge, blur on drop; the quad keyboard stays out
+			// of the layers entirely.  focus() is deferred out of the XR
+			// frame callback (setTimeout 0) to keep browser UI work off the
+			// compositor's critical path.
+			var wantSys=(menuVisible&&0!==HEAPF32[p+6]);
+			if(wantSys&&!st.sysFocused)
+			{
+				st.sysFocused=true;
+				setTimeout(function(){ try{ ensureSysKbdInput().focus({preventScroll:true}); }catch(e){} },0);
+			}
+			else if(!wantSys&&st.sysFocused)
+			{
+				st.sysFocused=false;
+				setTimeout(function(){ try{ if(st.sysEl){ st.sysEl.blur(); } }catch(e){} },0);
+			}
+			if(st.res&&st.res.inLayers)
+			{
+				st.res.inLayers=false;
+				return true;
+			}
+			return false;
+		}
 		if(menuVisible&&0!==HEAPF32[p+6])
 		{
 			st.idleFrames=0;
@@ -2218,7 +2341,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(visible)
 		{
 			anchorKbdQuad();
-			var key=st.hover.right+'|'+st.hover.left+'|'+(st.shift?1:0);
+			// Quantize the cursor rings to 3px so aim feedback repaints
+			// smoothly without repainting on sub-pixel jitter every frame.
+			var cq=function(c){ return (c ? Math.round(c.x/3)+','+Math.round(c.y/3) : '-'); };
+			var key=st.hover.right+'|'+st.hover.left+'|'+(st.shift?1:0)+'|'+cq(st.cursor.right)+'|'+cq(st.cursor.left);
 			if(key!==st.drawnKey&&res.ctx)
 			{
 				try
@@ -2253,6 +2379,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			st.hover.right=-1;
 			st.hover.left=-1;
+			st.cursor.right=null;
+			st.cursor.left=null;
 			return;
 		}
 		var sources=frame.session.inputSources;
@@ -2274,7 +2402,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 				continue;
 			}
 			seen[hand]=true;
-			var hover=-1,trig=false;
+			var hover=-1,trig=false,cursor=null;
 			if(!menuHits[hand])
 			{
 				var rayPose=frame.getPose(src.targetRaySpace,vr.refSpace);
@@ -2285,19 +2413,35 @@ EM_JS(void,YsfwInstallWebXR,(),
 						st.anchor.pos,st.anchor.quat,st.anchor.w,st.anchor.h);
 					if(hit)
 					{
-						hover=kbdHitKey(hit.u*KBD_CANVAS_W,hit.v*KBD_CANVAS_H);
+						var px=hit.u*KBD_CANVAS_W,py=hit.v*KBD_CANVAS_H;
+						hover=kbdHitKey(px,py);
+						cursor={x:px,y:py};
 						var gp=src.gamepad;
 						trig=!!(gp&&gp.buttons[0]&&gp.buttons[0].value>0.5);
 					}
 				}
 			}
 			st.hover[hand]=hover;
+			st.cursor[hand]=cursor;
 			if(trig&&!st.prevTrig[hand]&&0<=hover)
 			{
 				kbdDispatchKey(hover);
 				vrHapticPulse(src);
 			}
 			st.prevTrig[hand]=trig;
+		}
+		// A controller that dropped out of inputSources (tracking loss,
+		// sleep) never reaches the loop above: clear its remembered hover/
+		// cursor so a stale highlight cannot survive (device symptom: a key
+		// stuck yellow while neither beam pointed at the board).
+		var allHands=['right','left'];
+		for(var h3=0; h3<allHands.length; ++h3)
+		{
+			if(!seen[allHands[h3]])
+			{
+				st.hover[allHands[h3]]=-1;
+				st.cursor[allHands[h3]]=null;
+			}
 		}
 	}
 	function teardownKbd()
@@ -2310,6 +2454,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(res&&res.quad)
 		{
 			try{ res.quad.destroy(); }catch(e){}
+		}
+		if(vr.kbd.sysEl)
+		{
+			try{ vr.kbd.sysEl.blur(); }catch(e){}
+			try{ vr.kbd.sysEl.remove(); }catch(e){}
 		}
 		vr.kbd=null;
 	}
@@ -2937,6 +3086,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		// Unit quaternion: conjugate == inverse.
 		return {x:-q.x,y:-q.y,z:-q.z,w:q.w};
+	}
+	function quatFromAxisAngle(axis,rad)
+	{
+		var s=Math.sin(rad/2);
+		return {x:axis.x*s,y:axis.y*s,z:axis.z*s,w:Math.cos(rad/2)};
 	}
 	function rotateVecByQuat(v,q)
 	{
@@ -5903,7 +6057,29 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.unsupportedVrFrames=0;
 		vr.jsPerfWindow=0;
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
-		return navigator.xr.requestSession('immersive-vr',{requiredFeatures:['local'],optionalFeatures:['layers']}).then(function(session)
+		var sessionInit={requiredFeatures:['local'],optionalFeatures:['layers']};
+		if(opts.kbdSys)
+		{
+			// ?vrkbd=sys experiment: dom-overlay is the SUPPORTED way to
+			// summon the Quest system keyboard mid-session -- round 1 focused
+			// a hidden input WITHOUT it and the browser crashed outright.
+			// The overlay root is an empty, transparent, pointer-events:none
+			// div, so nothing visibly composites; it exists purely so the
+			// session is dom-overlay-capable and the hidden input (see
+			// ensureSysKbdInput) lives inside the overlay tree.  Optional
+			// feature: denial costs nothing (quad keyboard takes over).
+			var ovRoot=document.getElementById('ysfw-vr-overlay');
+			if(!ovRoot)
+			{
+				ovRoot=document.createElement('div');
+				ovRoot.id='ysfw-vr-overlay';
+				ovRoot.style.cssText='position:fixed;inset:0;pointer-events:none;background:transparent;';
+				(document.body||document.documentElement).appendChild(ovRoot);
+			}
+			sessionInit.optionalFeatures=['layers','dom-overlay'];
+			sessionInit.domOverlay={root:ovRoot};
+		}
+		return navigator.xr.requestSession('immersive-vr',sessionInit).then(function(session)
 		{
 			vr.session=session;
 			return GLctx.makeXRCompatible().then(function()
