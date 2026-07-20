@@ -374,6 +374,55 @@ check('menu ray: an active left drag cannot be stolen by right', handTests.dragK
 check('menu ray: moving the left hand transfers hover ownership', handTests.leftMovementClaimsHover === 'left', JSON.stringify(handTests));
 check('menu ray: moving the right hand transfers hover ownership', handTests.rightMovementClaimsHover === 'right', JSON.stringify(handTests));
 
+// ---- Text-input bridge (system-keyboard summon machinery) -----------------
+// Drives the hidden-input bridge without a headset: the summon gate
+// (menuData[6] + a recent menu click), the soft-keyboard event forwarding
+// (insertText/deleteContentBackward as 'input' events, Enter as a keydown),
+// and the put-away path (flag drop -> blur).  Engine-side delivery is the
+// same FsPushKey/FsPushChar pair flat typing uses (FsPushTextEdit), counted
+// here via the bridge's stats.
+const textBridge = await page.evaluate(() => {
+  const M = globalThis.Module;
+  const vr = M.ysfwVr;
+  const el = vr.textBridgeEnsure();
+  const st = vr.textBridgeState();
+  const out = {};
+
+  // Summon gate: focus flag up + recent click -> input takes focus.
+  vr.pokeMenuData(6, 1);
+  st.lastMenuClickAt = performance.now();
+  vr.textBridgeUpdate(true);
+  out.focusedOnClick = (document.activeElement === el);
+
+  // No fresh click -> no re-summon after a dismissal.
+  el.blur();
+  vr.textBridgeUpdate(true);
+  out.noResummonWithoutClick = (document.activeElement !== el);
+
+  // Typing: soft-keyboard-style events while focused.
+  st.lastMenuClickAt = performance.now();
+  vr.textBridgeUpdate(true);
+  const chars0 = st.stats.chars, edits0 = st.stats.edits;
+  el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: 'ab' }));
+  out.charsForwarded = (st.stats.chars - chars0);
+  el.dispatchEvent(new InputEvent('input', { inputType: 'deleteContentBackward' }));
+  el.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' }));
+  out.editsForwarded = (st.stats.edits - edits0);
+  out.sentinelRefilled = (el.value.length > 0);
+
+  // Put-away: engine focus flag drops -> input blurs (keyboard dismissed).
+  vr.pokeMenuData(6, 0);
+  vr.textBridgeUpdate(true);
+  out.blurredOnFlagDrop = (document.activeElement !== el);
+  return out;
+});
+check('text bridge: click + focus flag summons (focuses) the hidden input', textBridge.focusedOnClick === true, JSON.stringify(textBridge));
+check('text bridge: a dismissed keyboard is not re-summoned without a fresh click', textBridge.noResummonWithoutClick === true, JSON.stringify(textBridge));
+check('text bridge: insertText forwards each character to the engine', textBridge.charsForwarded === 2, JSON.stringify(textBridge));
+check('text bridge: backspace + Enter forward as edit actions', textBridge.editsForwarded === 2, JSON.stringify(textBridge));
+check('text bridge: sentinel text is refilled so backspace always has a target', textBridge.sentinelRefilled === true, JSON.stringify(textBridge));
+check('text bridge: focus-flag drop puts the keyboard away (input blurred)', textBridge.blurredOnFlagDrop === true, JSON.stringify(textBridge));
+
 // ---- teardownMenu: menuData cleared on session teardown -------------------
 // Run the REAL teardown (vr.teardownMenuForTest wraps teardownMenu): it must
 // zero the whole data block and free the GL resources -- the same code a real

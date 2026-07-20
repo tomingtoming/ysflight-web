@@ -235,7 +235,7 @@ function installKeyListener(page) {
 async function openApViaLeftDial(page, triggerValue) {
   const t = (undefined !== triggerValue) ? triggerValue : 1;
   await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
-  await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: thumbFor(240), buttons: {} }]); // select AP sector (LEFT_DIAL[4], 240deg)
+  await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: thumbFor(4 * 360 / 7), buttons: {} }]); // select AP sector (LEFT_DIAL[4], ~206deg since the N=7 ESC-sector addition)
   await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
   await poke(page, [{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: t, thumb: [0, 0], buttons: {} }]); // trigger edge 0->t: Backspace tap dispatched THROUGH the dial
   // The running (non-XR) render loop keeps ticking the engine on its own

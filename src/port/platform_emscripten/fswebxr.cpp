@@ -689,11 +689,23 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// hand well since that hand's grip already owns the continuous
 		// throttle control and its trigger is otherwise idle.
 		{label:'AP',     code:'Backspace',mode:'tap'},
-		// [5] 300deg. FSBTF_AUTOTRIM (KeyT): a level-sensed virtual button
-		// (same fscontrol.cpp switch as FIREWEAPON/DISPENSEFLARE) -- fires
-		// while held, so 'hold' (holding it trims continuously; releasing
-		// stops).
-		{label:'トリム',  code:'KeyT',     mode:'hold'}
+		// [5] ~257deg (N=7). FSBTF_AUTOTRIM (KeyT): a level-sensed virtual
+		// button (same fscontrol.cpp switch as FIREWEAPON/DISPENSEFLARE) --
+		// fires while held, so 'hold' (holding it trims continuously;
+		// releasing stops).
+		{label:'トリム',  code:'KeyT',     mode:'hold'},
+		// [6] ~309deg (N=7). FSKEY_ESC: in-sim the engine closes any open
+		// submenu on the first ESC and TERMINATES the flight (back to the
+		// menu) on the second consecutive press (fssimulation.cpp's
+		// escKeyCount>=2 -> SetTerminate) -- flat play's "press ESC twice
+		// to leave". 'tap' so each trigger pull is one truthful ESC press:
+		// select this sector, pull the trigger twice, and you are back on
+		// the menu quad. Lives on the calm left hand next to the other
+		// occasional actions (radio/AP), added because a VR pilot had no
+		// way to leave a flight at all (2026-07 Quest feedback); dial
+		// sector count is table-driven (updateDialStick/drawDial), so the
+		// odd N=7 needs no other change.
+		{label:'ESC',    code:'Escape',   mode:'tap'}
 	];
 
 	// GUI-dialog stick mapping (see SimDrawVrGui's doc comment / fsvr.h's
@@ -1230,10 +1242,25 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GLctx.bindTexture(GLctx.TEXTURE_2D,null);
 		GLctx.activeTexture(prevActive);
 
+		// Depth-stencil renderbuffer: the menu is mostly 2D, but the
+		// aircraft-select dialog renders a real 3D aircraft preview into
+		// this FBO.  With a color-only FBO the depth test is a no-op, so
+		// later-drawn geometry always painted over nearer geometry --
+		// under-wing stores showed through the wing (Quest report: "the
+		// preview looks like its normals are flipped").  DEPTH24_STENCIL8
+		// is the WebGL2 name; 0x84F9 is WebGL1's DEPTH_STENCIL for the
+		// headless test path, whose context can be WebGL1 (SwiftShader).
+		var depthRb=GLctx.createRenderbuffer();
+		var prevRb=GLctx.getParameter(GLctx.RENDERBUFFER_BINDING);
+		GLctx.bindRenderbuffer(GLctx.RENDERBUFFER,depthRb);
+		GLctx.renderbufferStorage(GLctx.RENDERBUFFER,(GLctx.DEPTH24_STENCIL8||0x84F9),W,H);
+		GLctx.bindRenderbuffer(GLctx.RENDERBUFFER,prevRb);
+
 		var fb=GLctx.createFramebuffer();
 		var prevFb=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
 		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,fb);
 		GLctx.framebufferTexture2D(GLctx.FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,GLctx.TEXTURE_2D,tex,0);
+		GLctx.framebufferRenderbuffer(GLctx.FRAMEBUFFER,GLctx.DEPTH_STENCIL_ATTACHMENT,GLctx.RENDERBUFFER,depthRb);
 		var st=GLctx.checkFramebufferStatus(GLctx.FRAMEBUFFER);
 		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prevFb);
 		if(st!==GLctx.FRAMEBUFFER_COMPLETE)
@@ -1241,6 +1268,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			console.warn('[vr] menu FBO incomplete 0x'+st.toString(16));
 			GLctx.deleteFramebuffer(fb);
 			GLctx.deleteTexture(tex);
+			GLctx.deleteRenderbuffer(depthRb);
 			return;
 		}
 
@@ -1271,6 +1299,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				console.warn('[vr] menu quad layer failed: '+(e&&e.message?e.message:e));
 				GLctx.deleteFramebuffer(fb); GLctx.deleteTexture(tex);
+				GLctx.deleteRenderbuffer(depthRb);
 				GL.framebuffers[fbId]=null; GL.textures[texId]=null;
 				return;
 			}
@@ -1281,7 +1310,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		HEAPF32[p+3]=W; HEAPF32[p+4]=H;
 		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
 
-		vr.menuRes={fb:fb,tex:tex,fbId:fbId,texId:texId,w:W,h:H,
+		vr.menuRes={fb:fb,tex:tex,depthRb:depthRb,fbId:fbId,texId:texId,w:W,h:H,
 			quadW:quadSize.w,quadH:quadSize.h,quad:quad,inLayers:false};
 		console.log('[vr] menu '+W+'x'+H+' (fbId='+fbId+' texId='+texId+(inTestMode?' testMode':'')+')');
 	}
@@ -1296,7 +1325,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		try{ GLctx.deleteFramebuffer(vr.menuRes.fb); }catch(e){}
 		try{ GLctx.deleteTexture(vr.menuRes.tex); }catch(e){}
+		try{ if(vr.menuRes.depthRb){ GLctx.deleteRenderbuffer(vr.menuRes.depthRb); } }catch(e){}
 		try{ if(vr.menuRes.quad){ vr.menuRes.quad.destroy(); } }catch(e){}
+		// Put the system keyboard away with the menu (blur also drops the
+		// window-handler stand-down via the input's blur listener).
+		if(vr.textInput&&vr.textInput.el&&document.activeElement===vr.textInput.el)
+		{
+			try{ vr.textInput.el.blur(); }catch(e){}
+		}
 		GL.framebuffers[vr.menuRes.fbId]=null;
 		GL.textures[vr.menuRes.texId]=null;
 		vr.menuAnchor=null;
@@ -1932,6 +1968,142 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// per the swapchain-freshness discipline).  8 frames = ~110ms at 72Hz:
 	// long enough to ride out a hiccup, short enough that the quad is gone
 	// before the flight scene fades in after a menu->flight transition.
+	// ---- Text-input bridge (system-keyboard summon) ------------------------
+	// menuData[6] (see fsvr.h) reports that the menu frame the engine just
+	// rendered contains a keyboard-focused text box (the aircraft-select
+	// search box, the lobby user-name box, ...).  A web page can only summon
+	// the headset's system keyboard by focusing a real editable DOM element,
+	// so the bridge keeps a hidden 1px <input> and focuses it while that
+	// flag is up -- gated on a recent menu-quad ray click (the click that
+	// focused the box, or a fresh click back into it), so a keyboard the
+	// user deliberately dismissed is never re-summoned against their will.
+	// While the input is focused, fssimplewindow's window-level key handlers
+	// stand down (FsSetDomTextCapture) and every edit reaches the engine
+	// through FsPushTextEdit instead:
+	//   - printable text arrives as 'input' events (insertText -- the only
+	//     channel soft keyboards reliably deliver characters on; their
+	//     keydowns are 'Unidentified', exactly like Android IMEs),
+	//   - backspace arrives as deleteContentBackward (the input holds a
+	//     sentinel string so there is always something to delete),
+	//   - Enter/arrows/Del/Home/End/Tab/Escape arrive as real keydowns on
+	//     the input (no default insertion -> no input event -> no doubling;
+	//     Escape also dismisses the keyboard).
+	// A physical Bluetooth keyboard takes the same path: its letter
+	// keydowns default-insert into the input and come back out as
+	// insertText, everything else via the keydown listener -- one source of
+	// truth for text, soft or physical.  Engine-side the pushes are the
+	// same FsPushKey/FsPushChar pairs the flat keydown path produces, so
+	// FsGuiTextBox sees no difference from desktop typing.
+	var TEXT_SENTINEL='................'; // 16 deletable chars for backspace
+	function textInputState()
+	{
+		if(!vr.textInput)
+		{
+			vr.textInput={el:null,lastMenuClickAt:0,stats:{chars:0,edits:0}};
+		}
+		return vr.textInput;
+	}
+	function resetTextSentinel()
+	{
+		var ti=textInputState();
+		if(ti.el)
+		{
+			ti.el.value=TEXT_SENTINEL;
+			try{ ti.el.setSelectionRange(TEXT_SENTINEL.length,TEXT_SENTINEL.length); }catch(e){}
+		}
+	}
+	function ensureTextInputEl()
+	{
+		var ti=textInputState();
+		if(ti.el)
+		{
+			return ti.el;
+		}
+		var el=document.createElement('input');
+		el.type='text';
+		el.setAttribute('autocomplete','off');
+		el.setAttribute('autocapitalize','off');
+		el.setAttribute('autocorrect','off');
+		el.spellcheck=false;
+		// Focusable but invisible: display:none/visibility:hidden elements
+		// refuse focus, so park a transparent 1px field in the corner.
+		el.style.cssText='position:fixed;left:0;top:0;width:1px;height:1px;opacity:0.01;border:0;padding:0;background:transparent;color:transparent;caret-color:transparent;outline:none;';
+		el.addEventListener('focus',function(){ _FsSetDomTextCapture(1); resetTextSentinel(); });
+		el.addEventListener('blur',function(){ _FsSetDomTextCapture(0); });
+		el.addEventListener('input',function(ev){
+			var t=ev.inputType||'insertText';
+			if('insertText'===t||'insertCompositionText'===t||'insertFromPaste'===t)
+			{
+				var data=ev.data;
+				if(data)
+				{
+					for(var i=0; i<data.length; ++i)
+					{
+						var c=data.charCodeAt(i);
+						// Engine text boxes are byte-charset (user names,
+						// aircraft names): printable ASCII only.
+						if(32<=c&&c<127)
+						{
+							_FsPushTextEdit(0,c);
+							++ti.stats.chars;
+						}
+					}
+				}
+			}
+			else if('deleteContentBackward'===t)
+			{
+				_FsPushTextEdit(1,0);
+				++ti.stats.edits;
+			}
+			else if('insertLineBreak'===t)
+			{
+				_FsPushTextEdit(2,0);
+				++ti.stats.edits;
+			}
+			resetTextSentinel();
+		});
+		el.addEventListener('keydown',function(ev){
+			var ACT={Enter:2,NumpadEnter:2,Escape:3,ArrowLeft:4,ArrowRight:5,Delete:6,Home:7,End:8,Tab:9};
+			var a=ACT[ev.code];
+			if(undefined!==a)
+			{
+				_FsPushTextEdit(a,0);
+				++ti.stats.edits;
+				ev.preventDefault();
+				if('Escape'===ev.code)
+				{
+					el.blur();
+				}
+			}
+			// Letter/backspace keydowns: no push here -- their default
+			// mutates the input and comes back as an 'input' event above.
+		});
+		(document.body||document.documentElement).appendChild(el);
+		ti.el=el;
+		return el;
+	}
+	function updateTextInputBridge(menuVisible)
+	{
+		var ti=textInputState();
+		var p=_YsfwVrMenuDataPointer()>>2;
+		var wantText=(menuVisible&&0!==HEAPF32[p+6]);
+		if(wantText)
+		{
+			var now=(typeof performance!=='undefined' ? performance.now() : Date.now());
+			if(ti.lastMenuClickAt&&(now-ti.lastMenuClickAt)<600&&document.activeElement!==ti.el)
+			{
+				try{ ensureTextInputEl().focus({preventScroll:true}); }catch(e){}
+				ti.lastMenuClickAt=0; // one summon per click
+			}
+		}
+		else if(ti.el&&document.activeElement===ti.el)
+		{
+			// Engine-side focus left the text box (dialog closed, another
+			// widget clicked): put the keyboard away.
+			try{ ti.el.blur(); }catch(e){}
+		}
+	}
+
 	var MENU_HIDE_GRACE=8;
 	var UNSUPPORTED_VR_GRACE=45; // ~0.63s at 72Hz: enough for menu/flight transitions.
 	function updateMenuLayer(frame)
@@ -1964,6 +2136,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// only appear after the engine has actually rendered the menu once --
 		// never as an uninitialized-FBO square at session start mid-flight.
 		var menuVisible=(vr.menuIdleFrames<=MENU_HIDE_GRACE);
+
+		updateTextInputBridge(menuVisible);
 
 		var layersChanged=false;
 
@@ -2074,6 +2248,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var out=[];
 		for(var i=0; i<8; ++i){ out.push(HEAPF32[p+i]); }
 		return out;
+	};
+	// Test-only write access (scripts/smoke-vrmenu.mjs's text-bridge group
+	// fakes the engine's menuData[6] focus flag): page contexts cannot reach
+	// HEAPF32 directly (not in EXPORTED_RUNTIME_METHODS).
+	vr.pokeMenuData=function(i,v)
+	{
+		HEAPF32[(_YsfwVrMenuDataPointer()>>2)+i]=v;
 	};
 
 	// One visual cursor per hand plus one arbitrated engine-mouse owner.
@@ -2326,6 +2507,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 				evtType=1; // move
 			}
 			_YsfwInjectMouseEvent(evtType,lb,0,0,selected.mx,selected.my);
+			if(3===evtType)
+			{
+				// Completed menu click: arms the text-input bridge's summon
+				// window (see updateTextInputBridge) -- if this click landed
+				// on (or keeps focus in) a text box, the engine's focus flag
+				// plus this timestamp bring up the system keyboard.
+				textInputState().lastMenuClickAt=(typeof performance!=='undefined' ? performance.now() : Date.now());
+			}
 			menuRayState.prevMx=selected.mx;
 			menuRayState.prevMy=selected.my;
 			menuRayState.prevTrig=selected.trig;
@@ -5947,6 +6136,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 	vr.menuUvToPixel=menuUvToPixel;
 	vr.cursorOverlayPoint=cursorOverlayPoint;
 	vr.beamPoseFor=beamPoseFor;
+	// Text-input bridge test hooks (scripts/smoke-vrmenu.mjs): expose the
+	// hidden-input machinery so a headless test can drive focus/typing
+	// without a headset or a real system keyboard.
+	vr.textBridgeEnsure=ensureTextInputEl;
+	vr.textBridgeUpdate=updateTextInputBridge;
+	vr.textBridgeState=function(){ return textInputState(); };
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read

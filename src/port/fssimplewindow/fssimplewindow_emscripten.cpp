@@ -184,11 +184,81 @@ void FsPushChar(int c)
 	}
 }
 
+// ---- VR text-input bridge (fswebxr.cpp) ------------------------------------
+// While the bridge's hidden DOM <input> owns keyboard input (a text box is
+// focused on the VR menu quad and the headset's system keyboard is up), the
+// window-level callbacks below must stand down: skip the engine push AND
+// return EM_FALSE so the browser keeps the default action -- soft keyboards
+// deliver their text only through those defaults (the input events on the
+// element), which the bridge forwards through FsPushTextEdit instead.
+// Guarding here (not unregistering) keeps the flip per-keystroke cheap and
+// re-entrant.
+static int fsDomTextCapture=0;
+
+extern "C" EMSCRIPTEN_KEEPALIVE void FsSetDomTextCapture(int active)
+{
+	fsDomTextCapture=(0!=active ? 1 : 0);
+}
+
+// One text-editing action from the bridge, mirrored onto the same
+// FsPushKey/FsPushChar pair the flat keydown path produces for the physical
+// key (so FsGuiTextBox sees no difference).  action: 0=plain character
+// (chr), 1=backspace, 2=enter, 3=escape, 4=caret left, 5=caret right,
+// 6=delete, 7=home, 8=end, 9=tab.  Numeric actions rather than DOM code
+// strings keep the JS->wasm call free of string marshalling.
+extern "C" EMSCRIPTEN_KEEPALIVE void FsPushTextEdit(int action,int chr)
+{
+	switch(action)
+	{
+	case 0:
+		if(0!=chr)
+		{
+			FsPushChar(chr);
+		}
+		break;
+	case 1:
+		FsPushKey(FSKEY_BS);
+		FsPushChar(0x08);
+		break;
+	case 2:
+		FsPushKey(FSKEY_ENTER);
+		FsPushChar('\n');
+		break;
+	case 3:
+		FsPushKey(FSKEY_ESC);
+		break;
+	case 4:
+		FsPushKey(FSKEY_LEFT);
+		break;
+	case 5:
+		FsPushKey(FSKEY_RIGHT);
+		break;
+	case 6:
+		FsPushKey(FSKEY_DEL);
+		break;
+	case 7:
+		FsPushKey(FSKEY_HOME);
+		break;
+	case 8:
+		FsPushKey(FSKEY_END);
+		break;
+	case 9:
+		FsPushKey(FSKEY_TAB);
+		break;
+	}
+}
+
 // ----------------------------------------------------------------------------
 // HTML5 event callbacks
 
 static EM_BOOL FsKeyDownCallback(int,const EmscriptenKeyboardEvent *e,void *)
 {
+	if(0!=fsDomTextCapture)
+	{
+		// See fsDomTextCapture's doc comment: the VR text-input bridge's
+		// hidden <input> owns this keystroke.
+		return EM_FALSE;
+	}
 	const int fskey=FsKeyCodeFromDomCode(e->code);
 	if(FSKEY_NULL!=fskey)
 	{
@@ -233,6 +303,12 @@ static EM_BOOL FsKeyDownCallback(int,const EmscriptenKeyboardEvent *e,void *)
 
 static EM_BOOL FsKeyUpCallback(int,const EmscriptenKeyboardEvent *e,void *)
 {
+	if(0!=fsDomTextCapture)
+	{
+		// Mirror FsKeyDownCallback's stand-down so keyState never latches a
+		// key whose keydown the bridge consumed.
+		return EM_FALSE;
+	}
 	const int fskey=FsKeyCodeFromDomCode(e->code);
 	if(FSKEY_NULL!=fskey)
 	{
