@@ -1865,6 +1865,31 @@ EM_JS(void,YsfwInstallWebXR,(),
 						len=Math.min(t,BEAM_MAX_LEN_M);
 					}
 				}
+				// The lectern keyboard floats 0.35 m in FRONT of the board
+				// plane (anchorKbdQuad): when the ray lands ON its quad the
+				// beam must stop there, not run through the keys to the
+				// board plane behind (round-5 device report: the beam
+				// overshooting what the hand points at reads as "the ray
+				// doesn't land where I aim").  BOUNDED hit only -- the
+				// tilted keyboard PLANE crosses the board region, so an
+				// unbounded cut would truncate beams aimed at the board.
+				if(vr.kbd&&vr.kbd.res&&vr.kbd.res.inLayers&&vr.kbd.anchor)
+				{
+					var ka=vr.kbd.anchor;
+					var kQi=quatConjugate(ka.quat);
+					var kroL=rotateVecByQuat({x:rp.x-ka.pos.x,y:rp.y-ka.pos.y,z:rp.z-ka.pos.z},kQi);
+					var krdL=rotateVecByQuat(dir,kQi);
+					if(kroL.z>0&&krdL.z<-1e-6)
+					{
+						var kt=-kroL.z/krdL.z;
+						var khx=kroL.x+kt*krdL.x;
+						var khy=kroL.y+kt*krdL.y;
+						if(0.02<kt&&kt<len&&Math.abs(khx)<=ka.w/2&&Math.abs(khy)<=ka.h/2)
+						{
+							len=kt;
+						}
+					}
+				}
 				// The quad keeps its FIXED BEAM_MAX_LEN_M span along the ray;
 				// only the texture's lit fraction encodes the length (see
 				// drawBeamCanvas).
@@ -2007,7 +2032,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			vr.kbd={res:undefined,anchor:null,anchorFrom:null,idleFrames:1e9,shift:false,
 				hover:{right:-1,left:-1},prevTrig:{right:false,left:false},
 				cursor:{right:null,left:null},
-				sysEl:null,sysFocused:false,
 				drawnKey:null,keys:null,stats:{chars:0,edits:0}};
 		}
 		return vr.kbd;
@@ -2212,72 +2236,15 @@ EM_JS(void,YsfwInstallWebXR,(),
 			try{ st.res.quad.transform=new XRRigidTransform(pos,tilt); }catch(e){}
 		}
 	}
-	// ?vrkbd=sys experiment: use the QUEST SYSTEM KEYBOARD instead of the
-	// port-drawn quad.  Only honoured when the session actually granted
-	// dom-overlay -- the supported precondition for the system keyboard;
-	// focusing an input withOUT it is what crashed the browser in round 1.
-	function sysKbdActive()
-	{
-		return !!(vrOpt('kbdSys',false)&&vr.session&&vr.session.domOverlayState);
-	}
-	function ensureSysKbdInput()
-	{
-		var st=kbdState();
-		if(st.sysEl)
-		{
-			return st.sysEl;
-		}
-		var el=document.createElement('input');
-		el.type='text';
-		el.setAttribute('autocomplete','off');
-		el.setAttribute('autocapitalize','off');
-		el.setAttribute('autocorrect','off');
-		el.spellcheck=false;
-		el.style.cssText='position:fixed;left:8px;bottom:8px;width:120px;height:24px;opacity:0.01;border:0;background:transparent;color:transparent;caret-color:transparent;';
-		// Sentinel text so backspace always has something to delete (soft
-		// keyboards report deletions only as actual content mutations).
-		var SENT='................';
-		var refill=function(){ el.value=SENT; try{ el.setSelectionRange(SENT.length,SENT.length); }catch(e){} };
-		el.addEventListener('focus',refill);
-		el.addEventListener('input',function(ev){
-			var t=ev.inputType||'insertText';
-			if('insertText'===t||'insertCompositionText'===t||'insertFromPaste'===t)
-			{
-				var d=ev.data||'';
-				for(var i=0; i<d.length; ++i)
-				{
-					var c=d.charCodeAt(i);
-					if(32<=c&&c<127)
-					{
-						_FsPushTextEdit(0,c);
-						++st.stats.chars;
-					}
-				}
-			}
-			else if('deleteContentBackward'===t)
-			{
-				_FsPushTextEdit(1,0);
-				++st.stats.edits;
-			}
-			else if('insertLineBreak'===t)
-			{
-				_FsPushTextEdit(2,0);
-				++st.stats.edits;
-			}
-			refill();
-		});
-		el.addEventListener('keydown',function(ev){
-			if('Enter'===ev.code||'NumpadEnter'===ev.code)
-			{
-				_FsPushTextEdit(2,0);
-				++st.stats.edits;
-				ev.preventDefault();
-			}
-		});
-		(document.getElementById('ysfw-vr-overlay')||document.body).appendChild(el);
-		st.sysEl=el;
-		return el;
-	}
+	// System-keyboard route: RETIRED after the round-5 device test.  The
+	// ?vrkbd=sys experiment requested the dom-overlay session feature (the
+	// supported precondition for summoning the Quest system keyboard -- DOM
+	// focus withOUT it is what crashed the browser outright in round 1),
+	// but the Quest Browser never granted it for this immersive-vr layers
+	// session: session.domOverlayState stayed null and the port-drawn quad
+	// took over every time (round-5 device report).  The quad keyboard
+	// below is therefore THE text-input path, not a fallback.
+	//
 	// Per-frame keyboard maintenance, called from updateMenuLayer (so it
 	// only runs in menu contexts).  Returns true when the layers list
 	// changed so the caller folds it into its own syncRenderStateLayers.
@@ -2285,31 +2252,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var st=kbdState();
 		var p=_YsfwVrMenuDataPointer()>>2;
-		if(sysKbdActive())
-		{
-			// System-keyboard mode: focus the hidden input on the focus
-			// flag's rising edge, blur on drop; the quad keyboard stays out
-			// of the layers entirely.  focus() is deferred out of the XR
-			// frame callback (setTimeout 0) to keep browser UI work off the
-			// compositor's critical path.
-			var wantSys=(menuVisible&&0!==HEAPF32[p+6]);
-			if(wantSys&&!st.sysFocused)
-			{
-				st.sysFocused=true;
-				setTimeout(function(){ try{ ensureSysKbdInput().focus({preventScroll:true}); }catch(e){} },0);
-			}
-			else if(!wantSys&&st.sysFocused)
-			{
-				st.sysFocused=false;
-				setTimeout(function(){ try{ if(st.sysEl){ st.sysEl.blur(); } }catch(e){} },0);
-			}
-			if(st.res&&st.res.inLayers)
-			{
-				st.res.inLayers=false;
-				return true;
-			}
-			return false;
-		}
 		if(menuVisible&&0!==HEAPF32[p+6])
 		{
 			st.idleFrames=0;
@@ -2368,9 +2310,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 		return layersChanged;
 	}
-	// Ray hover + trigger typing, called from processMenuRayInput with the
-	// menu's own per-hand hits (a hand pointing at the menu board cannot
-	// simultaneously type -- the quads are coplanar and disjoint).
+	// Ray hover + trigger typing, called unconditionally from
+	// processMenuRayInput once the per-hand menu hits are known (a hand
+	// pointing at the menu board cannot simultaneously type -- the board
+	// wins that hand; since the lectern pose the two quads are no longer
+	// coplanar, but the board hangs entirely above the keyboard so a ray
+	// still lands on at most one of them).
 	function processKbdRayInput(frame,menuHits)
 	{
 		var st=kbdState();
@@ -2454,11 +2399,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(res&&res.quad)
 		{
 			try{ res.quad.destroy(); }catch(e){}
-		}
-		if(vr.kbd.sysEl)
-		{
-			try{ vr.kbd.sysEl.blur(); }catch(e){}
-			try{ vr.kbd.sysEl.remove(); }catch(e){}
 		}
 		vr.kbd=null;
 	}
@@ -2825,6 +2765,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			menuRayState.activeHand=null;
 		}
 
+		// Feed the keyboard BEFORE the menu decides whether any hand owns
+		// the mouse: this call used to sit at the TAIL of this function,
+		// after an early return taken whenever NO hand was on the board --
+		// which is exactly the normal typing posture (both rays down on the
+		// lectern keys), so on device the keys never hovered, never
+		// clicked, and a stale highlight could freeze (round-5 report:
+		// "aim still broken").  Hands currently over the menu are excluded
+		// inside (the board wins a hand that is on it).
+		processKbdRayInput(frame,hits);
+
 		var previousTriggers={
 			right:menuRayState.hands.right.prevTrig,
 			left:menuRayState.hands.left.prevTrig
@@ -2878,11 +2828,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var hh2=hands[h2];
 			menuRayState.hands[hh2].prevTrig=!!(hits[hh2]&&hits[hh2].trig);
 		}
-
-		// The VR keyboard hangs just under this board and is typed on with
-		// the same rays; hands currently over the menu are excluded (the
-		// quads are coplanar and disjoint, so a ray reaches at most one).
-		processKbdRayInput(frame,hits);
 	}
 
 	// Reads back [dialogVisible,apMenu] from the GUI state block -- cheap,
@@ -6058,27 +6003,6 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.jsPerfWindow=0;
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
 		var sessionInit={requiredFeatures:['local'],optionalFeatures:['layers']};
-		if(opts.kbdSys)
-		{
-			// ?vrkbd=sys experiment: dom-overlay is the SUPPORTED way to
-			// summon the Quest system keyboard mid-session -- round 1 focused
-			// a hidden input WITHOUT it and the browser crashed outright.
-			// The overlay root is an empty, transparent, pointer-events:none
-			// div, so nothing visibly composites; it exists purely so the
-			// session is dom-overlay-capable and the hidden input (see
-			// ensureSysKbdInput) lives inside the overlay tree.  Optional
-			// feature: denial costs nothing (quad keyboard takes over).
-			var ovRoot=document.getElementById('ysfw-vr-overlay');
-			if(!ovRoot)
-			{
-				ovRoot=document.createElement('div');
-				ovRoot.id='ysfw-vr-overlay';
-				ovRoot.style.cssText='position:fixed;inset:0;pointer-events:none;background:transparent;';
-				(document.body||document.documentElement).appendChild(ovRoot);
-			}
-			sessionInit.optionalFeatures=['layers','dom-overlay'];
-			sessionInit.domOverlay={root:ovRoot};
-		}
 		return navigator.xr.requestSession('immersive-vr',sessionInit).then(function(session)
 		{
 			vr.session=session;
