@@ -28,6 +28,7 @@
      postmortems -- see web/diag.js. -->
 <script src="diag.js"></script>
 <script src="deeplink.js"></script>
+<script src="yfs.js"></script>
 <script type="module" src="packs-ui.js"></script>
 <script type="module" src="pack-net.js"></script>
 <script type="module" src="replays-ui.js"></script>
@@ -461,6 +462,7 @@
           var freeflight = q.get('freeflight');
           var replay = q.get('replay');
           var directBoot = globalThis.ysfwDeepLink.isDirectBoot(q);
+          var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
           // v1 スコープ: ホスト→joiner の「追加パック配信(同期)」は一旦スコープ外。
           // 同期パス(Option A/B・メタ束・必須ゲート・Retry/Soloパネル)は既定で無効化し、
           // joiner は -client のまま即ブートして base＋自分のローカル取り込みパックだけで
@@ -499,6 +501,21 @@
               FS.mkdirTree(cfgDir);
               if (!FS.analyzePath(cfgDir + '/flight.cfg').exists) {
                 FS.writeFile(cfgDir + '/flight.cfg', 'JSWARNING FALSE\n');
+              }
+              // Create-Flight: the page stored a spec in sessionStorage and
+              // navigated here with ?createflight=1; -flyyfs points at
+              // __createflight.yfs.  Generate that file now (before main reads
+              // it) from the spec.  A bad/absent spec leaves no file, so the
+              // engine's -flyyfs simply finds nothing and the -autoexit path
+              // returns to the shell rather than hanging.
+              if (kind === 'createflight') {
+                try {
+                  var raw = sessionStorage.getItem('ysfwCreateFlight');
+                  if (raw) {
+                    var yfs = globalThis.ysfwYfs.buildYfs(JSON.parse(raw));
+                    FS.writeFile(Module.__ysfwUserDir + '/__createflight.yfs', yfs);
+                  }
+                } catch (e) { console.error('[createflight] ' + (e && e.message ? e.message : e)); }
               }
             } catch (e) {}
           }
@@ -1120,8 +1137,8 @@
   (function () {
     var q = new URLSearchParams(location.search);
     var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
-    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept') return;  // flight deep-links only
-    var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html'];
+    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight') return;  // flight deep-links only
+    var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html', 'studio-flight.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;
       if (/[/\\:]|\.\./.test(raw)) return null;  // defence-in-depth character check

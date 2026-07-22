@@ -17,11 +17,16 @@
 //                                             endurance mission (wave defense)
 //   ?intercept=AIRPLANE[,FIELD[,STEALTH,AIRCOVER,HEAVY,BOMB,ATTACKERS,WINGMEN]]
 //                                             intercept mission (stop the raid)
+//   ?createflight=1                           fly the Create-Flight page's spec
+//                                             (spec in sessionStorage, -> .yfs)
 //   ?replay=<file>                            play a saved recording
 globalThis.ysfwDeepLink = (function () {
   'use strict';
 
   var USER_DIR = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
+  // Where the Create-Flight page's generated .yfs is written (index.html preRun,
+  // from the sessionStorage spec) and where -flyyfs reads it.
+  var CREATEFLIGHT_YFS = USER_DIR + '/__createflight.yfs';
 
   // Clamp helper for numeric mission parameters: non-numeric input falls back
   // to def, numeric input is bounded to [lo, hi].  The engine clamps again
@@ -89,6 +94,13 @@ globalThis.ysfwDeepLink = (function () {
       var rf = String(rp).replace(/[^A-Za-z0-9._-]/g, '');
       if (rf) a.push('-replayrecord', USER_DIR + '/replays/' + rf);
     }
+    // ?createflight=1 boots a flight authored by the Create-Flight page: the
+    // page wrote a spec to sessionStorage and index.html's preRun turns it into
+    // the .yfs at CREATEFLIGHT_YFS before main() reads it (yfs.js).  The URL
+    // carries no spec (it can be large) — only the trigger.
+    if (q.get('createflight')) {
+      a.push('-flyyfs', CREATEFLIGHT_YFS);
+    }
     // Every deep link also gets -autoexit: when the engine returns to its menu
     // (flight/replay over, or the deep link failed to resolve) it TERMINATES
     // instead, the port fires 'ysfw-terminated', and the shell navigates away —
@@ -96,7 +108,8 @@ globalThis.ysfwDeepLink = (function () {
     // All three modes start their flight synchronously inside the init state
     // machine (fsmain.cpp case 7), so autoexit cannot fire before takeoff.
     if (a.indexOf('-freeflight') >= 0 || a.indexOf('-endurance') >= 0 ||
-        a.indexOf('-intercept') >= 0 || a.indexOf('-replayrecord') >= 0) {
+        a.indexOf('-intercept') >= 0 || a.indexOf('-replayrecord') >= 0 ||
+        a.indexOf('-flyyfs') >= 0) {
       a.push('-autoexit');
     }
     return a;
@@ -112,6 +125,7 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('freeflight')) return 'freeflight';
     if (q.get('endurance')) return 'endurance';
     if (q.get('intercept')) return 'intercept';
+    if (q.get('createflight')) return 'createflight';
     if (q.get('replay')) return 'replay';
     return null;
   }

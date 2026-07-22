@@ -36,8 +36,8 @@
 | Net > Client/Server | `?join=` → `-client`＋シグナリングWorker | ✅ 稼働中 |
 | Sim > Endurance | `?endurance=` → `-endurance` | ✅ 増分1（本ドキュメントと同PR） |
 | Sim > Intercept | `?intercept=` → `-intercept`（fork の絶対index修正込み） | ✅ 増分3 |
-| Sim > Create Flight（本格作成・昼夜・地上砲火・CAS/地対空/レーシング） | web UIで `.yfs` を生成 → IDBFSに書く → `-flyyfs` | 増分4（本丸） |
-| Sim > 着陸練習 Lv1-15 | 定型 `.yfs` または生成 | 増分4に含む |
+| Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4（地上物・CAS/地対空/レーシングは今後） |
+| Sim > 着陸練習 Lv1-15 | 定型 `.yfs` または生成 | 今後（yfs.js基盤を再利用） |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
 | File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
 | Option > Config / Option / キー割当 | IDBFS上の設定ファイルをwebエディタで直接編集 | 増分5 |
@@ -70,10 +70,16 @@
    ブリーフィング（`fsguisiminfodialog.cpp`）が出る。これは飛行画面の
    ミッション内容としてエンジン側に残す（enduranceの CONTINUE? と同じ扱い）。
    OKボタンのクリックで離陸（Enterでは閉じない）。
-4. **`.yfs` ジェネレータ（本丸）** ── フライト定義をJSで組み立てて
-   `-flyyfs` で起動。Create Flight 相当のweb UI（機体複数・僚機・地上物・
-   昼夜・ミッション種別）。ミッション拡張は ident 経由で `.yfs` から復元
-   される（`fsworld.cpp:1966`）ため、CAS/地対空/レーシングもこの経路。
+4. **`.yfs` ジェネレータ（実装済み）** ── `web/yfs.js` の `buildYfs(spec)`
+   がフライト定義（機体・マップ・昼夜・兵装・IFF）をJSで組み立て、
+   Create-Flightページ（`studio-flight.html`）がspecを sessionStorage に置いて
+   `?createflight=1` へ遷移→ index.html preRun が `.yfs` を生成→`-flyyfs`。
+   文法は `FsSimulation::Save`（`fssimulationfileio.cpp`）のサブセット
+   （YFSVERSI/FIELDNAM/ENVIRONM/ALLOW*/AIRPLANE/STARTPOS/IDENTIFY）。
+   検証: `test/yfs.test.mjs`（生成文字列）＋ `scripts/smoke-createflight.mjs`
+   （ページ→生成→飛行到達をヘッドレス実機）。**残**: 地上物（GROUNDOB）・
+   ミッション拡張（identで `.yfs` から復元＝`fsworld.cpp:1966`。CAS/地対空/
+   レーシング）・着陸練習。
 5. **設定エディタ** ── config / option / キー割当のwebエディタ
    （IDBFS直編集）。ジョイスティック較正UIのweb移管。
 
