@@ -292,12 +292,10 @@
       },
       touch: { fire: '発射', gear: 'ギア', thr: '推力', wsel: '武器切替', view: '視点', rudder: 'ラダー', flap: 'フラップ', radar: 'レーダー', ap: '自動操縦', nudge: 'お試し版 — PC / タブレットだと全機能で快適です' },
       host: {
-        toggle: '友達と対戦したい？（ホストの始め方）',
-        steps: [
-          '「▶ プレイ開始」を押してゲームを起動',
-          'ゲーム内メニューで Network → Start Server を選ぶ',
-          'ホストで飛び始めると画面右下に「Room: 番号 📋」が出ます。クリックで招待リンクをコピーし、友達に送って参加してもらいましょう',
-        ],
+        toggle: '友達と対戦したい？（ホストを立てる）',
+        namePlaceholder: '名前（任意）',
+        btn: 'ホスト開始',
+        hint: 'ホストが立つと画面右下に「Room: 番号 📋」が出ます。クリックで招待リンクをコピーし、友達に送って参加してもらいましょう。',
         note: '※ カスタム機体・マップで対戦するときは、参加者全員が同じアドオンを各自で事前に取り込んでください（v1では自動配信されません）。',
       },
     },
@@ -364,12 +362,10 @@
       },
       touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust', wsel: 'Weapon', view: 'View', rudder: 'Rudder', flap: 'Flaps', radar: 'Radar', ap: 'A/P', nudge: 'Taster — best with all controls on PC / tablet' },
       host: {
-        toggle: 'Want to play with friends? (How to host)',
-        steps: [
-          'Press “▶ Play” to launch the game',
-          'In the engine menu, open Network → Start Server',
-          'Once you’re flying as host, a “Room: <id> 📋” chip appears bottom-right — click it to copy the invite link and send it to your friends',
-        ],
+        toggle: 'Want to play with friends? (Host a room)',
+        namePlaceholder: 'Name (optional)',
+        btn: 'Start hosting',
+        hint: 'Once the room is up, a “Room: <id> 📋” chip appears bottom-right — click it to copy the invite link and send it to your friends.',
         note: '* For custom aircraft or maps, every player must import the same add-ons beforehand (v1 does not auto-distribute them).',
       },
     },
@@ -389,6 +385,7 @@
     //   ?signal=wss://host/path  overrides the signaling endpoint
     //   ?room=12345678           fixes the host's room code (8-digit numeric)
     //   ?join=12345678           pre-fills the Room ID to join (invite links)
+    //   ?host=1&name=X           hosts a room directly (deeplink.js -> -server)
     ysfwSignalUrl: new URLSearchParams(location.search).get('signal') ||
       ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal'),
     ysfwRoomCode: new URLSearchParams(location.search).get('room') || undefined,
@@ -1154,7 +1151,7 @@
   (function () {
     var q = new URLSearchParams(location.search);
     var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
-    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight') return;  // flight deep-links only
+    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host') return;  // flight deep-links only ('host': server mode counts as in-flight)
     var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html', 'studio-flight.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;
@@ -1737,8 +1734,6 @@
     var q = new URLSearchParams(location.search);
     var joinRoom = q.get('join');
     var presetName = q.get('name');
-    var freeflight = q.get('freeflight');
-    var replay = q.get('replay');
 
     function startJoin(name) {
       var nm = (name && name.trim()) || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
@@ -1816,42 +1811,59 @@
       overlay.appendChild(wrap);
     }
 
-    // Host how-to: a collapsed "Play with friends" disclosure for the bare manual
-    // launch.  Hosting runs through the engine's native Network menu (unchangeable
-    // C++), so this only TEACHES the path and points at the existing Room-chip copy
-    // control — no new boot logic, no Module.arguments touch.  Self-collapses so it
-    // stays fold-safe on its own.
-    function renderHostHowto() {
-      if (document.getElementById('ysfw-host-howto')) return;
+    // Host form: a collapsed "Play with friends" disclosure for the bare manual
+    // launch.  Hosting is a real web entry now (web-shell increment 6): submitting
+    // navigates to /?host=1&name=<name>, so the whole tested deep-link path runs
+    // verbatim — deeplink.js emits -server and the engine boots STRAIGHT into
+    // server mode (no engine menu).  Same navigate-don't-mutate pattern as the
+    // manual join form above.  Pack choices survive the navigation (enabled packs
+    // live in the pack registry and re-materialize on every boot).
+    function renderHostForm() {
+      if (document.getElementById('ysfw-host-form')) return;
       var H = TXT.host;
       var wrap = document.createElement('div');
-      wrap.id = 'ysfw-host-howto';
+      wrap.id = 'ysfw-host-form';
       wrap.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;align-items:center;gap:8px';
       var card = document.createElement('div');
-      card.style.cssText = 'display:none;flex-direction:column;gap:6px;width:min(420px,86vw);background:#0b121b;border:1px solid #1d2633;border-radius:10px;padding:14px 16px;text-align:left;box-sizing:border-box';
-      H.steps.forEach(function (s, i) {
-        var row = document.createElement('div');
-        row.style.cssText = 'color:#9fb2c8;font-size:12.5px;line-height:1.55';
-        row.textContent = (i + 1) + '. ' + s;
-        card.appendChild(row);
-      });
-      if (H.note) {
-        var noteRow = document.createElement('div');
-        noteRow.style.cssText = 'color:#7d93b0;font-size:11.5px;line-height:1.5;margin-top:4px';
-        noteRow.textContent = H.note;
-        card.appendChild(noteRow);
-      }
+      card.style.cssText = 'display:none;flex-direction:column;align-items:center;gap:8px;width:min(420px,86vw);background:#0b121b;border:1px solid #1d2633;border-radius:10px;padding:14px 16px;box-sizing:border-box';
+      var nameIn = document.createElement('input');
+      nameIn.type = 'text';
+      nameIn.maxLength = 200;
+      nameIn.placeholder = H.namePlaceholder;
+      nameIn.style.cssText = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
+      var btn = document.createElement('button');
+      btn.textContent = H.btn;
+      btn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
+      var go = function () {
+        var name = (nameIn.value || '').trim() || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
+        location.href = location.origin + '/?host=1&name=' + encodeURIComponent(name);
+      };
+      btn.addEventListener('click', go);
+      nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+      var hintRow = document.createElement('div');
+      hintRow.style.cssText = 'color:#9fb2c8;font-size:12.5px;line-height:1.55;text-align:left';
+      hintRow.textContent = H.hint;
+      var noteRow = document.createElement('div');
+      noteRow.style.cssText = 'color:#7d93b0;font-size:11.5px;line-height:1.5;text-align:left';
+      noteRow.textContent = H.note;
+      card.appendChild(nameIn);
+      card.appendChild(btn);
+      card.appendChild(hintRow);
+      card.appendChild(noteRow);
       var toggle = document.createElement('button');
       toggle.textContent = H.toggle;
       toggle.style.cssText = 'background:none;border:0;color:#8fa3bb;font-size:13px;cursor:pointer;padding:4px;text-decoration:underline';
       toggle.addEventListener('click', function () {
-        card.style.display = (card.style.display === 'none') ? 'flex' : 'none';
+        var open = card.style.display !== 'none';
+        card.style.display = open ? 'none' : 'flex';
+        if (!open) setTimeout(function () { nameIn.focus(); }, 30);
       });
       wrap.appendChild(toggle);
       wrap.appendChild(card);
       overlay.appendChild(wrap);
-      // ?host=1 deep-link auto-expands (a deliberate "I want to host" entry).
-      try { if (new URLSearchParams(location.search).get('host') === '1') card.style.display = 'flex'; } catch (e) {}
+      // A bare ?host= (no &name= -> manual-launch path, incl. legacy ?host=1
+      // links) auto-expands: the visitor already said "I want to host".
+      try { if (new URLSearchParams(location.search).get('host')) { card.style.display = 'flex'; setTimeout(function () { nameIn.focus(); }, 30); } } catch (e) {}
     }
 
     if (joinRoom && !presetName) {
@@ -1878,13 +1890,16 @@
     } else {
       if (joinRoom && presetName) {
         Module.arguments = Module.arguments.concat(['-client', presetName, joinRoom]);
-      } else if (!freeflight && !replay) {
-        // No invite link, not a freeflight, not a replay deep-link: a deliberate
-        // manual launch.  Offer "join by Room ID" next to the pack panel; the engine
-        // still loads (for solo / hosting), but submitting the form navigates away to
-        // the invite-link join flow before main() matters.
+      } else if (!globalThis.ysfwDeepLink.isDirectBoot(q)) {
+        // No invite link and no deep-link boot (?freeflight / ?endurance / ... /
+        // ?host with a name): a deliberate manual launch.  Offer "join by Room ID"
+        // and "host a room" next to the pack panel; the engine still loads (for
+        // solo), but submitting either form navigates away to its deep-link flow
+        // before main() matters.  (A bare ?host= lands here and auto-expands the
+        // host form.)  Direct boots skip both forms — they'd only flash over the
+        // loading overlay of an already-decided launch.
         renderManualJoinForm();
-        renderHostHowto();
+        renderHostForm();
       }
       loadEngine();
     }

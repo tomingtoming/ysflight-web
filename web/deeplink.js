@@ -20,6 +20,8 @@
 //   ?createflight=1                           fly the Create-Flight page's spec
 //                                             (spec in sessionStorage, -> .yfs)
 //   ?replay=<file>                            play a saved recording
+//   ?host=1&name=NAME[&field=FIELD]           host a multiplayer room (server
+//                                             mode; ?room= fixes the room code)
 globalThis.ysfwDeepLink = (function () {
   'use strict';
 
@@ -94,6 +96,26 @@ globalThis.ysfwDeepLink = (function () {
       var rf = String(rp).replace(/[^A-Za-z0-9._-]/g, '');
       if (rf) a.push('-replayrecord', USER_DIR + '/replays/' + rf);
     }
+    // ?host=1&name=NAME[&field=FIELD] hosts a multiplayer room directly: the
+    // engine's -server (fscmdparaminfo.cpp, EXEMODE_SERVER) boots straight into
+    // server mode (StartNetServerMode), and the web port's yssocket layer claims
+    // a signaling room (?room= fixes the code, else an 8-digit one is drawn) —
+    // the shell's Room chip then offers the invite link.  &name= carries the
+    // pilot name (separate param like ?join=&name=, NOT comma-packed: the value
+    // of ?host itself is only a trigger, so legacy ?host=1 links keep working).
+    // FIELD is optional; the engine falls back to its net-config default field.
+    // No name -> no args: index.html shows the host form instead (manual-launch
+    // path), which navigates back here with &name= filled in.  ?join= wins over
+    // ?host= — the join flow appends -client later and the engine acts on the
+    // LAST execution mode parsed, so keep the loser out of the argv entirely.
+    if (q.get('host') && !q.get('join')) {
+      var hn = (q.get('name') || '').trim();
+      if (hn) {
+        a.push('-server', hn);
+        var hf = (q.get('field') || '').trim();
+        if (hf) a.push(hf);
+      }
+    }
     // ?createflight=1 boots a flight authored by the Create-Flight page: the
     // page wrote a spec to sessionStorage and index.html's preRun turns it into
     // the .yfs at CREATEFLIGHT_YFS before main() reads it (yfs.js).  The URL
@@ -105,19 +127,21 @@ globalThis.ysfwDeepLink = (function () {
     // (flight/replay over, or the deep link failed to resolve) it TERMINATES
     // instead, the port fires 'ysfw-terminated', and the shell navigates away —
     // the engine menu is never presented (instant handover, docs/web-shell.md).
-    // All three modes start their flight synchronously inside the init state
+    // All these modes start their flight synchronously inside the init state
     // machine (fsmain.cpp case 7), so autoexit cannot fire before takeoff.
+    // -server included: quitting the hosted session returns to the engine menu,
+    // which -autoexit turns into a terminate -> the shell takes over.
     if (a.indexOf('-freeflight') >= 0 || a.indexOf('-endurance') >= 0 ||
         a.indexOf('-intercept') >= 0 || a.indexOf('-replayrecord') >= 0 ||
-        a.indexOf('-flyyfs') >= 0) {
+        a.indexOf('-flyyfs') >= 0 || a.indexOf('-server') >= 0) {
       a.push('-autoexit');
     }
     return a;
   }
 
   // Which deep link (if any) owns this boot.  'flight' kinds (freeflight,
-  // endurance) arm the flight-end return watcher; 'replay' arms the replay-end
-  // watcher; null means a manual launch (pack panel).  Mirrors buildEngineArgs's
+  // endurance, ..., host) arm the flight-end return watcher; 'replay' arms the
+  // replay-end watcher; null means a manual launch (pack panel).  Mirrors buildEngineArgs's
   // precedence: when several are present the engine acts on the LAST parsed
   // execution mode, but for arming watchers any flight kind counts.
   function deepLinkKind(search) {
@@ -127,6 +151,10 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('intercept')) return 'intercept';
     if (q.get('createflight')) return 'createflight';
     if (q.get('replay')) return 'replay';
+    // 'host' only when buildEngineArgs would actually emit -server (name given,
+    // no ?join=): a bare ?host=1 stays a manual launch so index.html can show
+    // the host form instead of booting an argv-less engine into its own menu.
+    if (q.get('host') && !q.get('join') && (q.get('name') || '').trim()) return 'host';
     return null;
   }
 
