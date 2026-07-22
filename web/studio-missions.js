@@ -124,7 +124,10 @@ function render(root) {
 
   // ---- 着陸訓練: all 15 native levels + aircraft + field --------------------
   {
-    const lv = makeSelect(LDG_LEVELS.map((d, i) => ({ value: i + 1, label: (i + 1) + ': ' + d })), 1, 'ysfw-ldg-level');
+    // Level labels exactly as the native menu shows them (ja.uitxt: レベル N /
+    // en.uitxt: LEVEL N, then the shared English condition string).
+    const lvPrefix = LANG === 'ja' ? 'レベル ' : 'LEVEL ';
+    const lv = makeSelect(LDG_LEVELS.map((d, i) => ({ value: i + 1, label: lvPrefix + (i + 1) + ': ' + d })), 1, 'ysfw-ldg-level');
     lv.style.maxWidth = '340px';
     const air = aircraftSelect('F-18C_HORNET', 'ysfw-ldg-air');
     const fld = fieldSelect('AOMORI', 'ysfw-ldg-field');
