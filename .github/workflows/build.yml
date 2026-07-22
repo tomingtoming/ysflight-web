@@ -82,6 +82,16 @@ jobs:
         if: github.event_name == 'pull_request'
         run: scripts/smoke-mp-scenery.sh
 
+      # Mission deep-link smoke (PR only): boots ?endurance= and asserts the
+      # engine reaches in-flight with zero interaction — guards the web-shell
+      # entry contract (web/deeplink.js -> -endurance -> EXEMODE_ENDURANCE).
+      - name: Mission smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          node "${{ github.workspace }}/scripts/serve.mjs" 8924 "${{ github.workspace }}/dist" &
+          sleep 2
+          node scripts/smoke-mission.mjs "http://localhost:8924/index.html"
+
       # VR menu smoke (PR only): verifies that the engine renders the 2D main
       # menu into the VR off-screen FBO (setupMenu/DrawMenu/updateMenuLayer),
       # that the menuDrawn flag is set, and that the watchdog stays disarmed.
