@@ -21,6 +21,9 @@
 //                                             (spec in sessionStorage, -> .yfs)
 //   ?replay=<file>                            play a saved recording
 //   ?landing=LEVEL[,AIRCRAFT[,FIELD]]         landing practice (Lv 1-15)
+//   ?mission=racing|cas[,AIRCRAFT[,FIELD]]    extension missions (lap race /
+//                                             close air support) via a
+//                                             generated .yfs
 //   ?demo=1                                   auto demo, looping forever
 //                                             (screensaver mode; leave via
 //                                             browser navigation)
@@ -147,6 +150,14 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('createflight')) {
       a.push('-flyyfs', CREATEFLIGHT_YFS);
     }
+    // ?mission=racing|cas boots a BUILT-IN extension-mission .yfs: index.html's
+    // preRun turns ysfwYfs.missionSpec(?mission=) into the same generated file
+    // the Create-Flight page uses, and -flyyfs reads it.  The extension lines
+    // (EXTENSIO RACINGMODE / CLOSEAIRSUPPORT) restore the mission through the
+    // engine's extension registry (fsworld.cpp case 52).
+    if (q.get('mission') && !q.get('createflight')) {
+      a.push('-flyyfs', CREATEFLIGHT_YFS);
+    }
     // Every deep link also gets -autoexit: when the engine returns to its menu
     // (flight/replay over, or the deep link failed to resolve) it TERMINATES
     // instead, the port fires 'ysfw-terminated', and the shell navigates away —
@@ -175,6 +186,7 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('endurance')) return 'endurance';
     if (q.get('intercept')) return 'intercept';
     if (q.get('createflight')) return 'createflight';
+    if (q.get('mission')) return 'mission';
     if (q.get('replay')) return 'replay';
     if (q.get('landing')) return 'landing';
     if (q.get('demo')) return 'demo';

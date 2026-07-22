@@ -153,3 +153,15 @@ test('auto demo: -demoforever with NO autoexit (the mode never returns to menu)'
   assert.equal(deepLinkKind('?demo=1'), 'demo');
   assert.equal(isDirectBoot('?demo=1'), true);
 });
+
+test('extension missions: ?mission= boots the generated .yfs via -flyyfs', () => {
+  assert.deepEqual(
+    buildEngineArgs('?mission=racing'),
+    ['-flyyfs', USER_DIR + '/__createflight.yfs', '-autoexit']);
+  assert.equal(deepLinkKind('?mission=racing'), 'mission');
+  assert.equal(isDirectBoot('?mission=cas'), true);
+  // createflight wins when both are present (no double -flyyfs).
+  const both = buildEngineArgs('?createflight=1&mission=racing');
+  assert.equal(both.filter((t) => t === '-flyyfs').length, 1);
+  assert.equal(deepLinkKind('?createflight=1&mission=racing'), 'createflight');
+});

@@ -37,7 +37,8 @@
 | Net > Server | `?host=1&name=` → `-server`（トップのホストフォームから発射） | ✅ 増分6 |
 | Sim > Endurance | `?endurance=` → `-endurance` | ✅ 増分1（本ドキュメントと同PR） |
 | Sim > Intercept | `?intercept=` → `-intercept`（fork の絶対index修正込み） | ✅ 増分3 |
-| Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4＋地上物プリセット=増分8（CAS/地対空/レーシングは今後） |
+| Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4＋地上物プリセット=増分8 |
+| Sim > レーシング / CAS（拡張ミッション） | `?mission=racing\|cas` → 組み込みspec→`EXTENSIO`行入り`.yfs`→`-flyyfs` | ✅ 増分12（地対空はプレイヤー=地上物のためfork待ち） |
 | Sim > 着陸練習 Lv1-15 | `?landing=` → fork `-landingpractice`（`.yfs`では採点HUD/進入生成が再現できないためCLI新設が正道） | ✅ 増分10 |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
 | File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
@@ -161,6 +162,22 @@
     🎬 リンク。検証: `test/deeplink.test.mjs`＋`scripts/smoke-mission.mjs`
     第4レッグ（ブート＋パネル非表示＋数秒の安定）。これで置き換え地図の
     未対応行は **Option > キー割当/較正（=ジョイスティック領域）だけ**。
+12. **拡張ミッション: レーシング＋CAS（実装済み・エンジン無改変）** ──
+    `?mission=racing|cas[,機体[,フィールド]]` → 組み込みspec
+    （`yfs.js` `missionSpec`）→ `EXTENSIO` 行入り `.yfs` → 既存 `-flyyfs`。
+    エンジンの拡張レジストリ（`fsworld.cpp` case 52 → `fssimextension.cpp`）
+    がミッションを復元する。調査で確定した構造:
+    **レーシング**＝ゲートはフィールドscenery側の `RACECHKP` 地上物で、拡張は
+    ラップ計時＋武装剥がしのみ→ RACING_VALLEY（開始位置は単一の `START`）で
+    完全成立。**CAS**＝拡張は状態ゼロ（Serialize=ヘッダのみ）で、戦車は
+    `StartSimulation`/`OnInterval` が毎回生成→ TOHOKU 空中スタートで成立。
+    **ミッションゴールは .yfs 文法に無い**（本家の prevflight 再開と同じ
+    オープンエンド挙動）。**地対空はプレイヤー=地上物**で `-flyyfs` の
+    `PlayerPlaneIsReady()` ゲートに弾かれるため fork 小改変（ゲート緩和 or
+    `-groundtoair`）待ち＝次スタック。トップに 🏁/🛡️ カード各1。検証:
+    `test/yfs.test.mjs`（EXTENSIO 行・whitelist・preset）＋
+    `scripts/smoke-mission.mjs` 第5・6レッグ（racing/cas とも in-flight 到達＋
+    生成 .yfs の EXTENSIO 行確認）。
 
 ## 検証面
 
