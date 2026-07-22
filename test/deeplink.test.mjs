@@ -24,26 +24,26 @@ test('lang alone -> -language only', () => {
 test('freeflight full triple', () => {
   assert.deepEqual(
     buildEngineArgs('?freeflight=F-18C_HORNET,ATSUGI_AIRBASE,RW01_01'),
-    ['-freeflight', 'F-18C_HORNET', 'ATSUGI_AIRBASE', 'RW01_01']);
+    ['-freeflight', 'F-18C_HORNET', 'ATSUGI_AIRBASE', 'RW01_01', '-autoexit']);
   assert.equal(deepLinkKind('?freeflight=X'), 'freeflight');
 });
 
 test('freeflight defaults: bare aircraft gets Atsugi + airborne start', () => {
   assert.deepEqual(
     buildEngineArgs('?freeflight=CESSNA_172R'),
-    ['-freeflight', 'CESSNA_172R', 'ATSUGI_AIRBASE', 'NORTH10000_01']);
+    ['-freeflight', 'CESSNA_172R', 'ATSUGI_AIRBASE', 'NORTH10000_01', '-autoexit']);
 });
 
 test('lang + freeflight compose in order (language first)', () => {
   assert.deepEqual(
     buildEngineArgs('?freeflight=B747,HEATHROW,RW27R&lang=en'),
-    ['-language', 'en', '-freeflight', 'B747', 'HEATHROW', 'RW27R']);
+    ['-language', 'en', '-freeflight', 'B747', 'HEATHROW', 'RW27R', '-autoexit']);
 });
 
 test('endurance full: aircraft,field,wingmen,level,aam', () => {
   assert.deepEqual(
     buildEngineArgs('?endurance=F-15J_EAGLE,SMALL_MAP,1,4,0'),
-    ['-endurance', 'F-15J_EAGLE', 'SMALL_MAP', '1', '4', '0']);
+    ['-endurance', 'F-15J_EAGLE', 'SMALL_MAP', '1', '4', '0', '-autoexit']);
   assert.equal(deepLinkKind('?endurance=F-15J_EAGLE'), 'endurance');
   assert.equal(isDirectBoot('?endurance=F-15J_EAGLE'), true);
 });
@@ -51,24 +51,24 @@ test('endurance full: aircraft,field,wingmen,level,aam', () => {
 test('endurance defaults: bare aircraft -> Atsugi, 2 wingmen, level 3, AAM on', () => {
   assert.deepEqual(
     buildEngineArgs('?endurance=F-15J_EAGLE'),
-    ['-endurance', 'F-15J_EAGLE', 'ATSUGI_AIRBASE', '2', '3', '1']);
+    ['-endurance', 'F-15J_EAGLE', 'ATSUGI_AIRBASE', '2', '3', '1', '-autoexit']);
 });
 
 test('endurance numeric params are clamped and junk-proofed', () => {
   // wingmen 9 -> 2 (max), level 0 -> 1 (min), aam junk -> default 1
   assert.deepEqual(
     buildEngineArgs('?endurance=A,F,9,0,junk'),
-    ['-endurance', 'A', 'F', '2', '1', '1']);
+    ['-endurance', 'A', 'F', '2', '1', '1', '-autoexit']);
 });
 
 test('replay name is sanitized to a bare file name under replays/', () => {
   assert.deepEqual(
     buildEngineArgs('?replay=rec1.yfs'),
-    ['-replayrecord', USER_DIR + '/replays/rec1.yfs']);
+    ['-replayrecord', USER_DIR + '/replays/rec1.yfs', '-autoexit']);
   // Path-escape attempts collapse to a safe bare name.
   assert.deepEqual(
     buildEngineArgs('?replay=' + encodeURIComponent('../../etc/passwd')),
-    ['-replayrecord', USER_DIR + '/replays/....etcpasswd']);
+    ['-replayrecord', USER_DIR + '/replays/....etcpasswd', '-autoexit']);
 });
 
 test('replay that sanitizes to nothing adds no args', () => {
@@ -78,5 +78,5 @@ test('replay that sanitizes to nothing adds no args', () => {
 test('URLSearchParams input is accepted as well as strings', () => {
   assert.deepEqual(
     buildEngineArgs(new URLSearchParams('?endurance=A')),
-    ['-endurance', 'A', 'ATSUGI_AIRBASE', '2', '3', '1']);
+    ['-endurance', 'A', 'ATSUGI_AIRBASE', '2', '3', '1', '-autoexit']);
 });

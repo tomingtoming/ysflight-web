@@ -70,6 +70,16 @@ globalThis.ysfwDeepLink = (function () {
       var rf = String(rp).replace(/[^A-Za-z0-9._-]/g, '');
       if (rf) a.push('-replayrecord', USER_DIR + '/replays/' + rf);
     }
+    // Every deep link also gets -autoexit: when the engine returns to its menu
+    // (flight/replay over, or the deep link failed to resolve) it TERMINATES
+    // instead, the port fires 'ysfw-terminated', and the shell navigates away —
+    // the engine menu is never presented (instant handover, docs/web-shell.md).
+    // All three modes start their flight synchronously inside the init state
+    // machine (fsmain.cpp case 7), so autoexit cannot fire before takeoff.
+    if (a.indexOf('-freeflight') >= 0 || a.indexOf('-endurance') >= 0 ||
+        a.indexOf('-replayrecord') >= 0) {
+      a.push('-autoexit');
+    }
     return a;
   }
 

@@ -55,5 +55,31 @@ await page
 
 if (fatal.length) die('fatal console/page errors during boot');
 
+// Instant handover: deep links carry -autoexit, so ending the flight (Esc)
+// terminates the engine, the port fires 'ysfw-terminated', and the shell
+// navigates back to the clean top page — without ever presenting the engine
+// menu.  Give the sim a moment to settle, dismiss the one-shot controls
+// legend if it is up (it swallows clicks, not keys — closing is just hygiene),
+// then press Esc and expect the URL to lose the ?endurance deep link.
+await page.waitForTimeout(4000);
+await page.evaluate(() => { try { window.__ysfwHelpToggle && window.__ysfwHelpToggle(false); } catch (e) {} });
+// The flight opens behind the "CENTER JOYSTICK / PRESS SPACE TO GO" gate,
+// which consumes the first key (Space, Esc, or trigger — fsrunloop.cpp:198).
+// Release it with Space, then end the flight with TWO Esc presses
+// (fssimulation.cpp escKeyCount>=2; the first shows the "press again" prompt).
+await page.keyboard.press('Space');
+await page.waitForTimeout(800);
+await page.keyboard.press('Escape');
+await page.waitForTimeout(400);
+await page.keyboard.press('Escape');
+// Endurance then asks "CONTINUE FLIGHT?" (an engine dialog on the flight
+// screen); 終了(ESC) declines it and returns to the menu — where -autoexit
+// takes over.
+await page.waitForTimeout(1200);
+await page.keyboard.press('Escape');
+await page
+  .waitForURL((u) => !u.searchParams.get('endurance'), { timeout: 20000 })
+  .catch(() => die('flight end did not hand back to the shell (still on the deep link URL)'));
+
 await browser.close();
-console.log('SMOKE-MISSION PASSED (endurance deep link reached in-flight)');
+console.log('SMOKE-MISSION PASSED (endurance deep link reached in-flight; Esc handed back to the shell)');
