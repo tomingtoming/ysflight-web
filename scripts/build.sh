@@ -175,6 +175,8 @@ cat > "$DIST_DIR/_headers" <<EOF
   Cache-Control: no-cache
 /sw.js
   Cache-Control: no-cache
+/deeplink.js
+  Cache-Control: no-cache
 /packs.js
   Cache-Control: no-cache
 /packs-ui.js
