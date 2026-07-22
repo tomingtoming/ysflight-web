@@ -142,6 +142,30 @@ await page3.goto(base + '?landing=1');
   if (!flying) die('landing practice never reached in-flight (?landing=1 -> -landingpractice)');
 }
 if (fatal.length) die('fatal console/page errors during the landing leg');
+await page3.close();
+
+// ---- Auto-demo leg: ?demo=1 boots the kiosk demo loop (-demoforever) --------
+// (web-shell increment 11).  No in-flight flag to wait on (FLY_DEMOMODE is not
+// an in-flight run mode) and the loop never exits by design — assert the boot
+// itself: no pack panel, engine boots (overlay hidden), and it survives a few
+// seconds without fatals.
+const page4 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page4.on('console', (m) => {
+  const t = m.text();
+  logs.push(t);
+  if (FATAL.some((re) => re.test(t))) fatal.push('[console4] ' + t);
+});
+page4.on('pageerror', (e) => fatal.push('[pageerror4] ' + e.message));
+await page4.goto(base + '?demo=1');
+await page4.waitForTimeout(3000);
+if (await page4.evaluate(() => !!document.getElementById('ysfw-pack-panel'))) {
+  die('pack panel appeared on a ?demo=1 deep link (should boot straight in)');
+}
+await page4
+  .waitForFunction(() => { const ov = document.getElementById('overlay'); return ov && ov.classList.contains('hidden'); }, { timeout: 90000 })
+  .catch(() => die('auto demo never booted (overlay still visible)'));
+await page4.waitForTimeout(6000);
+if (fatal.length) die('fatal console/page errors during the demo leg');
 
 await browser.close();
-console.log('SMOKE-MISSION PASSED (endurance: in-flight + Esc handover; intercept: in-flight; landing practice: in-flight)');
+console.log('SMOKE-MISSION PASSED (endurance: in-flight + Esc handover; intercept: in-flight; landing practice: in-flight; auto demo: boots + stable)');

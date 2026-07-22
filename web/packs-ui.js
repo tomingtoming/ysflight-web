@@ -83,6 +83,8 @@ const S = ({
     createFlightTitle: '専用ページで機体・マップ・時間帯・AI機を組んで離陸（Create Flight のweb版）',
     settingsLink: '⚙️ 設定（影・雲・HUD など）',
     settingsTitle: '見た目と表示の設定（Option メニューのweb版）',
+    demoLink: '🎬 オートデモ（デモ飛行を眺める）',
+    demoTitle: 'AIのデモ飛行をループ再生（戻るときはブラウザの「戻る」）',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -181,6 +183,8 @@ const S = ({
     createFlightTitle: 'Compose aircraft / map / time / AI on a dedicated page, then take off (web Create Flight)',
     settingsLink: '⚙️ Settings (shadows, clouds, HUD…)',
     settingsTitle: 'Look & display options (web Option menu)',
+    demoLink: '🎬 Auto demo (watch AI demo flights)',
+    demoTitle: 'Loop the AI demo flights (use browser Back to leave)',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -1112,6 +1116,16 @@ function renderPanel() {
   settingsLink.href = 'studio-settings.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
   settingsLink.style.cssText = 'display:block;margin-top:8px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
   quickWrap.appendChild(settingsLink);
+
+  // Auto demo: the engine's kiosk demo loop (?demo=1 -> -demoforever).  A quiet
+  // link — it is a "watch" mode that never returns on its own (leave via
+  // browser back), so it must not compete with the flying entries.
+  const demoLink = document.createElement('a');
+  demoLink.textContent = S.demoLink;
+  demoLink.title = S.demoTitle;
+  demoLink.href = '?demo=1' + (curLang ? '&lang=' + encodeURIComponent(curLang) : '');
+  demoLink.style.cssText = 'display:block;margin-top:2px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
+  quickWrap.appendChild(demoLink);
 
   panel.appendChild(quickWrap);
 
