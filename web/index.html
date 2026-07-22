@@ -1151,7 +1151,7 @@
   (function () {
     var q = new URLSearchParams(location.search);
     var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
-    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host') return;  // flight deep-links only ('host': server mode counts as in-flight)
+    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host' && kind !== 'landing') return;  // flight deep-links only ('host': server mode counts as in-flight)
     var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html', 'studio-flight.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;

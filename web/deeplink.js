@@ -20,6 +20,7 @@
 //   ?createflight=1                           fly the Create-Flight page's spec
 //                                             (spec in sessionStorage, -> .yfs)
 //   ?replay=<file>                            play a saved recording
+//   ?landing=LEVEL[,AIRCRAFT[,FIELD]]         landing practice (Lv 1-15)
 //   ?host=1&name=NAME[&field=FIELD]           host a multiplayer room (server
 //                                             mode; ?room= fixes the room code)
 globalThis.ysfwDeepLink = (function () {
@@ -96,6 +97,18 @@ globalThis.ysfwDeepLink = (function () {
       var rf = String(rp).replace(/[^A-Za-z0-9._-]/g, '');
       if (rf) a.push('-replayrecord', USER_DIR + '/replays/' + rf);
     }
+    // ?landing=LEVEL[,AIRCRAFT[,FIELD]] — Sim > Landing Practice (fork
+    // -landingpractice, EXEMODE_LANDINGPRACTICE): the engine maps the level
+    // (1-15) to its leg/cross-wind/weather table and shows the traffic-pattern
+    // info screen, which takes off on Space/click (a flight-screen dialog —
+    // stays engine-side per the web-shell boundary).  Defaults: the classic
+    // trainer pairing — F/A-18 into AOMORI (the engine's own default field).
+    var ldg = q.get('landing');
+    if (ldg) {
+      var l = ldg.split(',');
+      a.push('-landingpractice', intParam(l[0], 1, 1, 15),
+        l[1] || 'F-18C_HORNET', l[2] || 'AOMORI');
+    }
     // ?host=1&name=NAME[&field=FIELD] hosts a multiplayer room directly: the
     // engine's -server (fscmdparaminfo.cpp, EXEMODE_SERVER) boots straight into
     // server mode (StartNetServerMode), and the web port's yssocket layer claims
@@ -133,7 +146,8 @@ globalThis.ysfwDeepLink = (function () {
     // which -autoexit turns into a terminate -> the shell takes over.
     if (a.indexOf('-freeflight') >= 0 || a.indexOf('-endurance') >= 0 ||
         a.indexOf('-intercept') >= 0 || a.indexOf('-replayrecord') >= 0 ||
-        a.indexOf('-flyyfs') >= 0 || a.indexOf('-server') >= 0) {
+        a.indexOf('-flyyfs') >= 0 || a.indexOf('-server') >= 0 ||
+        a.indexOf('-landingpractice') >= 0) {
       a.push('-autoexit');
     }
     return a;
@@ -151,6 +165,7 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('intercept')) return 'intercept';
     if (q.get('createflight')) return 'createflight';
     if (q.get('replay')) return 'replay';
+    if (q.get('landing')) return 'landing';
     // 'host' only when buildEngineArgs would actually emit -server (name given,
     // no ?join=): a bare ?host=1 stays a manual launch so index.html can show
     // the host form instead of booting an argv-less engine into its own menu.

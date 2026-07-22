@@ -131,3 +131,19 @@ test('join wins over host: no -server in the argv', () => {
   assert.deepEqual(buildEngineArgs('?host=1&name=Pilot&join=12345678'), []);
   assert.equal(deepLinkKind('?host=1&name=Pilot&join=12345678'), null);
 });
+
+test('landing practice: level clamped, aircraft/field default to F-18 at Aomori', () => {
+  assert.deepEqual(
+    buildEngineArgs('?landing=1'),
+    ['-landingpractice', '1', 'F-18C_HORNET', 'AOMORI', '-autoexit']);
+  assert.deepEqual(
+    buildEngineArgs('?landing=12,F-15J_EAGLE,ATSUGI_AIRBASE'),
+    ['-landingpractice', '12', 'F-15J_EAGLE', 'ATSUGI_AIRBASE', '-autoexit']);
+  // Level junk/overflow clamps into 1-15.
+  assert.deepEqual(
+    buildEngineArgs('?landing=99')[1], '15');
+  assert.deepEqual(
+    buildEngineArgs('?landing=junk')[1], '1');
+  assert.equal(deepLinkKind('?landing=1'), 'landing');
+  assert.equal(isDirectBoot('?landing=1'), true);
+});
