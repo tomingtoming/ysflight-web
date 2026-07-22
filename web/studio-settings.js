@@ -16,6 +16,9 @@ const S = ({
     back: '← 戻る', reset: '既定に戻す',
     DRWSHADOW: '影を描画', DRAWCLOUD: '雲を描画', HRIZNGRAD: '地平線グラデーション',
     ANTIALIAS: 'アンチエイリアス', SMKPARTCL: '煙をパーティクルで描画', SIMPLEHUD: 'シンプルHUD',
+    VISIBILIT: '視程', AIRLVODTL: '機体の描画品質',
+    AIRLVODTL_OPTS: ['自動', '常に高品質', '常に簡易'],
+    km: (v) => (v / 1000).toFixed(1) + ' km',
     saved: '保存しました',
   },
   en: {
@@ -24,6 +27,9 @@ const S = ({
     back: '← Back', reset: 'Reset to defaults',
     DRWSHADOW: 'Draw shadows', DRAWCLOUD: 'Draw clouds', HRIZNGRAD: 'Horizon gradation',
     ANTIALIAS: 'Anti-aliasing', SMKPARTCL: 'Smoke as particles', SIMPLEHUD: 'Simple HUD',
+    VISIBILIT: 'Visibility', AIRLVODTL: 'Airplane graphics',
+    AIRLVODTL_OPTS: ['Automatic', 'Always high quality', 'Always coarse'],
+    km: (v) => (v / 1000).toFixed(1) + ' km',
     saved: 'Saved',
   },
 })[LANG] || {};
@@ -58,22 +64,63 @@ function render(root) {
   const values = load();
   const savedTag = el('div', 'color:#6ee7a8;font-size:12px;min-height:16px;margin-bottom:8px');
 
+  const flash = () => {
+    savedTag.textContent = S.saved;
+    setTimeout(() => { savedTag.textContent = ''; }, 1200);
+  };
+  const set = (key, v) => { values[key] = v; save(values); flash(); };
+
   const list = el('div', 'display:flex;flex-direction:column;gap:2px');
   wrap.appendChild(list);
-  for (const m of MANAGED) {
-    const row = el('label', 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid #243244;border-radius:8px;background:#0d141d;cursor:pointer');
-    row.appendChild(el('span', 'font-size:14px', S[m.key] || m.key));
-    const cb = el('input'); cb.type = 'checkbox'; cb.checked = values[m.key];
-    cb.style.cssText = 'width:18px;height:18px;cursor:pointer';
-    cb.addEventListener('change', () => {
-      values[m.key] = cb.checked;
-      save(values);
-      savedTag.textContent = S.saved;
-      setTimeout(() => { savedTag.textContent = ''; }, 1200);
-    });
-    row.appendChild(cb);
-    list.appendChild(row);
+  const rowCss = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid #243244;border-radius:8px;background:#0d141d';
+  // Rebuildable so Reset can redraw every control from the defaults.
+  function buildRows() {
+    list.textContent = '';
+    for (const m of MANAGED) {
+      if (m.type === 'bool') {
+        const row = el('label', rowCss + ';cursor:pointer');
+        row.appendChild(el('span', 'font-size:14px', S[m.key] || m.key));
+        const cb = el('input'); cb.type = 'checkbox'; cb.checked = values[m.key];
+        cb.style.cssText = 'width:18px;height:18px;cursor:pointer';
+        cb.addEventListener('change', () => set(m.key, cb.checked));
+        row.appendChild(cb);
+        list.appendChild(row);
+      } else if (m.type === 'length') {
+        // Slider in engine bounds; live km readout.
+        const row = el('label', rowCss + ';cursor:pointer');
+        row.appendChild(el('span', 'font-size:14px;white-space:nowrap', S[m.key] || m.key));
+        const box = el('div', 'display:flex;align-items:center;gap:10px;flex:1;justify-content:flex-end');
+        const out = el('span', 'font-size:13px;color:#8fa3bb;min-width:56px;text-align:right', S.km(values[m.key]));
+        const sl = el('input'); sl.type = 'range';
+        sl.min = String(m.min); sl.max = String(m.max); sl.step = '100';
+        sl.value = String(values[m.key]);
+        sl.style.cssText = 'flex:1;max-width:220px;accent-color:' + ACCENT;
+        sl.addEventListener('input', () => {
+          out.textContent = S.km(Number(sl.value));
+          set(m.key, Number(sl.value));
+        });
+        box.appendChild(sl); box.appendChild(out);
+        row.appendChild(box);
+        list.appendChild(row);
+      } else { // enum
+        const row = el('label', rowCss);
+        row.appendChild(el('span', 'font-size:14px', S[m.key] || m.key));
+        const sel = el('select');
+        sel.style.cssText = 'font-size:13px;padding:6px 8px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;cursor:pointer';
+        const labels = S[m.key + '_OPTS'] || [];
+        for (let i = 0; i < m.count; i++) {
+          const o = el('option', null, labels[i] || String(i));
+          o.value = String(i);
+          sel.appendChild(o);
+        }
+        sel.value = String(values[m.key]);
+        sel.addEventListener('change', () => set(m.key, Number(sel.value)));
+        row.appendChild(sel);
+        list.appendChild(row);
+      }
+    }
   }
+  buildRows();
   wrap.appendChild(el('div', 'height:8px'));
   wrap.appendChild(savedTag);
 
@@ -82,11 +129,8 @@ function render(root) {
     const def = normalize({});
     save(def);
     for (const k of Object.keys(def)) values[k] = def[k];
-    // Re-render checkboxes.
-    const boxes = list.querySelectorAll('input[type=checkbox]');
-    MANAGED.forEach((m, i) => { if (boxes[i]) boxes[i].checked = def[m.key]; });
-    savedTag.textContent = S.saved;
-    setTimeout(() => { savedTag.textContent = ''; }, 1200);
+    buildRows();
+    flash();
   });
   wrap.appendChild(reset);
 }

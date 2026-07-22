@@ -33,14 +33,19 @@ function die(msg) {
   process.exit(1);
 }
 
-// ---- Settings page: turn shadows OFF ---------------------------------------
+// ---- Settings page: shadows OFF, visibility to min, airplane LOD to coarse --
 await page.goto(setUrl.toString());
 await page.waitForFunction(() => window.ysfwSettingsReady === true, { timeout: 30000 }).catch(() => die('Settings page never became ready'));
-// Directly drive localStorage the way the page does, then also flip the DRWSHADOW
-// checkbox to prove the UI path writes it too.
+// Drive the real UI for each control type: checkbox click, slider keyboard
+// (Home -> engine min 800m), select option (2 = Always Coarse).
 await page.getByText(/Draw shadows|影を描画/).click();
+await page.locator('input[type=range]').focus();
+await page.keyboard.press('Home');
+await page.locator('select').selectOption('2');
 const stored = await page.evaluate(() => localStorage.getItem('ysfwSettings'));
 if (!stored || !/"DRWSHADOW":false/.test(stored)) die('toggling shadows did not persist DRWSHADOW:false to localStorage (' + stored + ')');
+if (!/"VISIBILIT":800/.test(stored)) die('slider Home did not persist VISIBILIT:800 to localStorage (' + stored + ')');
+if (!/"AIRLVODTL":2/.test(stored)) die('selecting Always Coarse did not persist AIRLVODTL:2 to localStorage (' + stored + ')');
 
 // ---- index.html: boot a freeflight; flight.cfg must carry DRWSHADOW FALSE ---
 const flyUrl = new URL(base);
@@ -53,9 +58,12 @@ const cfg = await page.evaluate(() => {
   catch (e) { return '<<no flight.cfg: ' + e.message + '>>'; }
 });
 if (!/DRWSHADOW FALSE/.test(cfg)) die('engine flight.cfg does not carry DRWSHADOW FALSE:\n' + cfg);
+// Numeric + enum options must land in the engine's own save formats.
+if (!/VISIBILIT 800\.00m/.test(cfg)) die('engine flight.cfg does not carry VISIBILIT 800.00m:\n' + cfg);
+if (!/AIRLVODTL 2/.test(cfg)) die('engine flight.cfg does not carry AIRLVODTL 2:\n' + cfg);
 // The deep-link JSWARNING seed is a non-managed line; it must survive the merge.
 if (!/JSWARNING FALSE/.test(cfg)) die('the merge dropped the non-managed JSWARNING line:\n' + cfg);
 if (fatal.length) die('fatal console/page errors');
 
 await browser.close();
-console.log('SMOKE-SETTINGS PASSED (Settings page -> flight.cfg DRWSHADOW FALSE, JSWARNING preserved)');
+console.log('SMOKE-SETTINGS PASSED (Settings page -> flight.cfg DRWSHADOW FALSE + VISIBILIT 800.00m + AIRLVODTL 2, JSWARNING preserved)');

@@ -1,4 +1,5 @@
-// Settings core — merge web-owned option toggles into the engine's flight.cfg.
+// Settings core — merge web-owned options (toggles + numerics) into the
+// engine's flight.cfg.
 //
 // The engine reads its options from flight.cfg (FsFlightConfig::Load,
 // fsconfig.cpp): one "KEY value" line per option.  The web-shell direction
@@ -12,24 +13,44 @@
 globalThis.ysfwSettings = (function () {
   'use strict';
 
-  // The options the web Settings page owns.  Each is a boolean flight.cfg key
-  // written as "KEY TRUE|FALSE" (fsconfig.cpp uses FsTrueFalseString for these).
-  // key: flight.cfg token; def: engine default (so "unset" matches the engine).
+  // The options the web Settings page owns.  key: flight.cfg token; def: engine
+  // default (so an untouched web Settings page reproduces engine behavior);
+  // type: how the value is validated and written —
+  //   bool    "KEY TRUE|FALSE"      (fsconfig.cpp FsTrueFalseString)
+  //   length  "KEY <v>.00m" meters  (fsconfig.cpp "%.2lfm" / FsGetLength),
+  //           clamped to [min,max]
+  //   enum    "KEY <n>" integer     (fsconfig.cpp atoi), 0 <= n < count
   var MANAGED = [
-    { key: 'DRWSHADOW', def: true },   // aircraft/ground shadows
-    { key: 'DRAWCLOUD', def: true },   // clouds
-    { key: 'HRIZNGRAD', def: true },   // horizon gradation (sky band)
-    { key: 'ANTIALIAS', def: false },  // OpenGL anti-aliasing
-    { key: 'SMKPARTCL', def: true },   // smoke as particles
-    { key: 'SIMPLEHUD', def: false },  // simplified HUD
+    { key: 'DRWSHADOW', type: 'bool', def: true },   // aircraft/ground shadows
+    { key: 'DRAWCLOUD', type: 'bool', def: true },   // clouds
+    { key: 'HRIZNGRAD', type: 'bool', def: true },   // horizon gradation (sky band)
+    { key: 'ANTIALIAS', type: 'bool', def: false },  // OpenGL anti-aliasing
+    { key: 'SMKPARTCL', type: 'bool', def: true },   // smoke as particles
+    { key: 'SIMPLEHUD', type: 'bool', def: false },  // simplified HUD
+    // Numeric/enum options (web-shell increment 7).  Bounds mirror the engine:
+    // fog visibility FS_FOG_VISIBILITY_MIN..MAX (fsdef.h 800..20000, default
+    // max); airplane LOD is the native "Airplane Graphics" drop list
+    // (fsguiconfigdlg.cpp: 0 Automatic / 1 Always High Quality / 2 Always
+    // Coarse, default 0).
+    { key: 'VISIBILIT', type: 'length', def: 20000, min: 800, max: 20000 }, // fog visibility [m]
+    { key: 'AIRLVODTL', type: 'enum', def: 0, count: 3 },                   // airplane LOD
   ];
   var MANAGED_KEYS = MANAGED.map(function (m) { return m.key; });
+  var BY_KEY = {};
+  MANAGED.forEach(function (m) { BY_KEY[m.key] = m; });
 
-  function boolStr(v) { return v ? 'TRUE' : 'FALSE'; }
+  // Write a validated value in the exact format FsFlightConfig::Save uses, so
+  // a web-written line is byte-identical to an engine-written one.
+  function fmtValue(m, v) {
+    if (m.type === 'bool') return v ? 'TRUE' : 'FALSE';
+    if (m.type === 'length') return v.toFixed(2) + 'm';
+    return String(v);
+  }
 
   // Merge the web-owned values into an existing flight.cfg.
   //   existing: current flight.cfg text (may be '' or null on first run)
-  //   values:   { KEY: boolean } for any subset of MANAGED_KEYS
+  //   values:   { KEY: value } for any subset of MANAGED_KEYS (validated —
+  //             pass through normalize() first; fmtValue assumes clean input)
   // Returns the new flight.cfg text.  Managed keys already present are rewritten
   // IN PLACE (order preserved); managed keys absent are appended; every
   // non-managed line is passed through verbatim.  Idempotent.
@@ -41,9 +62,9 @@ globalThis.ysfwSettings = (function () {
 
     var out = lines.map(function (line) {
       var key = line.split(/\s+/)[0];
-      if (MANAGED_KEYS.indexOf(key) !== -1 && Object.prototype.hasOwnProperty.call(values, key)) {
+      if (BY_KEY[key] && Object.prototype.hasOwnProperty.call(values, key)) {
         written[key] = true;
-        return key + ' ' + boolStr(values[key]);
+        return key + ' ' + fmtValue(BY_KEY[key], values[key]);
       }
       return line;
     });
@@ -54,21 +75,31 @@ globalThis.ysfwSettings = (function () {
 
     MANAGED.forEach(function (m) {
       if (Object.prototype.hasOwnProperty.call(values, m.key) && !written[m.key]) {
-        out.push(m.key + ' ' + boolStr(values[m.key]));
+        out.push(m.key + ' ' + fmtValue(m, values[m.key]));
       }
     });
 
     return out.length ? out.join('\n') + '\n' : '';
   }
 
-  // Normalize an arbitrary object (e.g. from localStorage) to { KEY: bool } over
-  // just the managed keys, filling defaults for anything missing/invalid.  Used
-  // by the page (to render) and by index.html (to apply).
+  // Normalize an arbitrary object (e.g. from localStorage) to { KEY: value }
+  // over just the managed keys, filling defaults for anything missing/invalid
+  // and clamping numerics to their engine bounds.  Used by the page (to render)
+  // and by index.html (to apply).
   function normalize(raw) {
     var o = (raw && typeof raw === 'object') ? raw : {};
     var out = {};
     MANAGED.forEach(function (m) {
-      out[m.key] = (typeof o[m.key] === 'boolean') ? o[m.key] : m.def;
+      var v = o[m.key];
+      if (m.type === 'bool') {
+        out[m.key] = (typeof v === 'boolean') ? v : m.def;
+      } else if (m.type === 'length') {
+        var n = Number(v);
+        out[m.key] = isFinite(n) ? Math.min(m.max, Math.max(m.min, Math.round(n))) : m.def;
+      } else { // enum
+        var e = Number(v);
+        out[m.key] = (isFinite(e) && e === Math.round(e) && e >= 0 && e < m.count) ? e : m.def;
+      }
     });
     return out;
   }

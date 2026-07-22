@@ -41,7 +41,7 @@
 | Sim > 着陸練習 Lv1-15 | 定型 `.yfs` または生成 | 今後（yfs.js基盤を再利用） |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
 | File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
-| Option > Option（見た目・表示） | Settingsページ（`studio-settings.html`）→ localStorage → index.htmlが `flight.cfg` にマージ | ✅ 増分5（曲率の高いbool群。キー割当・Config詳細は今後） |
+| Option > Option（見た目・表示） | Settingsページ（`studio-settings.html`）→ localStorage → index.htmlが `flight.cfg` にマージ | ✅ 増分5（bool群）＋増分7（数値/enum: 視程・機体LOD。キー割当・Config詳細は今後） |
 | Option > キー割当 / Config詳細 | 同経路を拡張（`settings.js` のMANAGED拡張） | 今後 |
 | Option > ジョイスティック較正 | 入力はweb port層（Gamepad API）の管轄＝webが本来の持ち主 | 今後 |
 | Option > オートデモ | 収録済み飛行データ → `-flyyfs` / `-demoforever` | 低優先 |
@@ -106,6 +106,15 @@
    CIは `scripts/smoke-host.sh`）。**残**: マルチロビー体験の本格化
    （ルーム一覧・フィールド選択UI等）は需要駆動で。ホスト中の機体選択・
    終了確認等のダイアログはエンジン側に残す（飛行画面の一部＝方針どおり）。
+7. **設定エディタ第二段: 数値/enum（実装済み）** ── `settings.js` の MANAGED を
+   型付き（bool/length/enum）に一般化し、書式はエンジンの
+   `FsFlightConfig::Save` と byte 一致（length は `%.2lfm`、enum は整数）。
+   第一弾は **視程**（`VISIBILIT`、fsdef.h の 800–20000m にクランプ、
+   スライダー）と**機体の描画品質**（`AIRLVODTL`、本家 "Airplane Graphics"
+   ドロップリスト相当の 0 自動/1 高品質/2 簡易、セレクト）。検証:
+   `test/settings.test.mjs`（クランプ・書式・冪等）＋`scripts/smoke-settings.mjs`
+   （チェックボックス/スライダー/セレクトの3型を実UIで操作→flight.cfg 反映）。
+   **残**: キー割当（TRG/AXS行）・Config詳細・ジョイスティック較正UI。
 
 ## 検証面
 
