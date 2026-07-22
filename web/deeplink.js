@@ -24,6 +24,11 @@
 //   ?mission=racing|cas[,AIRCRAFT[,FIELD]]    extension missions (lap race /
 //                                             close air support) via a
 //                                             generated .yfs
+//   ?retry=1                                  Retry Previous Flight
+//                                             (engine-saved prevflight.dat)
+//   ?openyfs=1                                fly a user-supplied .yfs (the
+//                                             top page put it in
+//                                             sessionStorage; File > Open)
 //   ?demo=1                                   auto demo, looping forever
 //                                             (screensaver mode; leave via
 //                                             browser navigation)
@@ -158,6 +163,20 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('mission') && !q.get('createflight')) {
       a.push('-flyyfs', CREATEFLIGHT_YFS);
     }
+    // ?retry=1 — the native Sim > Retry Previous Flight: the engine saves a
+    // start snapshot of every launched flight to prevflight.dat (.yfs format,
+    // FsGetPrevFlightFile); -flyyfs re-flies it.  No previous flight -> the
+    // load finds nothing and -autoexit returns to the shell.
+    // ?openyfs=1 — the native File > Open: the top page put the user's .yfs
+    // text in sessionStorage and index.html's preRun writes it to
+    // __openflight.yfs before main() reads it.
+    if (a.indexOf('-flyyfs') === -1) {
+      if (q.get('retry')) {
+        a.push('-flyyfs', USER_DIR + '/prevflight.dat');
+      } else if (q.get('openyfs')) {
+        a.push('-flyyfs', USER_DIR + '/__openflight.yfs');
+      }
+    }
     // Every deep link also gets -autoexit: when the engine returns to its menu
     // (flight/replay over, or the deep link failed to resolve) it TERMINATES
     // instead, the port fires 'ysfw-terminated', and the shell navigates away —
@@ -187,6 +206,8 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('intercept')) return 'intercept';
     if (q.get('createflight')) return 'createflight';
     if (q.get('mission')) return 'mission';
+    if (q.get('retry')) return 'retry';
+    if (q.get('openyfs')) return 'openyfs';
     if (q.get('replay')) return 'replay';
     if (q.get('landing')) return 'landing';
     if (q.get('demo')) return 'demo';

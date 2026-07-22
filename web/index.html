@@ -525,6 +525,14 @@
                     FS.writeFile(Module.__ysfwUserDir + '/__createflight.yfs', globalThis.ysfwYfs.buildYfs(mspec));
                   }
                 } catch (e) { console.error('[mission] ' + (e && e.message ? e.message : e)); }
+              } else if (kind === 'openyfs') {
+                // ?openyfs=1: the top page stored a user-picked .yfs; write it
+                // for -flyyfs.  A bad/absent file leaves nothing to fly and
+                // -autoexit hands back to the shell.
+                try {
+                  var yraw = sessionStorage.getItem('ysfwOpenYfs');
+                  if (yraw) FS.writeFile(Module.__ysfwUserDir + '/__openflight.yfs', yraw);
+                } catch (e) { console.error('[openyfs] ' + (e && e.message ? e.message : e)); }
               }
             } catch (e) {}
           }
@@ -1177,7 +1185,7 @@
   (function () {
     var q = new URLSearchParams(location.search);
     var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
-    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host' && kind !== 'landing' && kind !== 'mission') return;  // flight deep-links only ('host': server mode counts as in-flight)
+    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host' && kind !== 'landing' && kind !== 'mission' && kind !== 'retry' && kind !== 'openyfs') return;  // flight deep-links only ('host': server mode counts as in-flight)
     var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html', 'studio-flight.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;

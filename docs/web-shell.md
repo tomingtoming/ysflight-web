@@ -196,6 +196,23 @@
     正規化・プリセット）＋`scripts/smoke-controls.mjs`（プリセット＋DZ実UI→
     エンジンFSの ctlassign.cfg にパッド行と **キーボード既定の温存** を確認、
     CI追加）。**残**: キーボード再割当UI・キャプチャの実機確認（要実パッド）。
+14. **古参可読性＋本家粒度のミッション設定（実装済み）** ── toming指摘
+    「メニュー項目との一致度が低い・選択項目は本家と同じレベルで」への応答。
+    ①**語彙を本家UI訳（`runtime/language/*.uitxt`）に統一**: 基地防空
+    ミッション（←邀撃）・着陸訓練（←着陸練習）・近接支援ミッション・
+    15分間耐久空中戦・レーシングモード。カードは**ミッション名が主・機体/
+    条件が従**（本家Simulationメニュー順）。②**`studio-missions.html` 新設**＝
+    本家ダイアログと同じ選択肢: 着陸訓練は**全15レベル**（uitxtの説明文
+    そのまま）＋機体＋マップ、耐久は僚機0-2/敵レベル1-5/AAM、基地防空は
+    ステルス/護衛/重爆/爆弾/敵機数1-5/僚機0-2、CAS/レーシングは機体＋
+    マップ/コース。機体=stock index・マップ=`fields.json` の同梱18種
+    （本家リストボックスと同じく識別名表示）。③**Sim > 前回のフライトに
+    再挑戦**＝`?retry=1`→`-flyyfs prevflight.dat`。④**File > Open**＝
+    「.yfsを開いて飛ぶ」（file picker→sessionStorage→`?openyfs=1`→preRun書き
+    出し→`-flyyfs`、4MB上限・不正ファイルはautoexitでシェルへ帰還）。検証:
+    unit（retry/openyfs写像・-flyyfs二重回避）＋`smoke-mission` 第7・8レッグ
+    （open-.yfs実文字列→in-flight／ミッションページ実UI→パラメータ付き
+    ディープリンク→in-flight・レベル15個の存在assert）。
 
 ## 検証面
 

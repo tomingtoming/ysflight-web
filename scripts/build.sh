@@ -105,7 +105,7 @@ H_DATA=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.data")
 # Include the shell JS/HTML in the build id so changes to packs-ui.js / opfs-store.js
 # / sw.js etc. bust the service-worker precache -- these are NOT part of the wasm
 # hash, so without this a JS-only change keeps the same id and the SW serves stale.
-H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/deeplink.js" "$ROOT/web/yfs.js" "$ROOT/web/settings.js" "$ROOT/web/controls.js" "$ROOT/web/studio-flight.js" "$ROOT/web/studio-settings.js" "$ROOT/web/studio-controls.js" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" \
+H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/deeplink.js" "$ROOT/web/yfs.js" "$ROOT/web/settings.js" "$ROOT/web/controls.js" "$ROOT/web/studio-flight.js" "$ROOT/web/studio-settings.js" "$ROOT/web/studio-controls.js" "$ROOT/web/studio-missions.js" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" \
   "$ROOT/web/pack-net.js" "$ROOT/web/pack-update.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" \
   "$ROOT/web/workbench.js" "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" \
   "$ROOT/web/staging.js" \
@@ -150,6 +150,7 @@ cp "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" "$ROOT/web/dnm-previ
    "$ROOT/web/studio-flight.html" "$ROOT/web/studio-flight.js" \
    "$ROOT/web/studio-settings.html" "$ROOT/web/studio-settings.js" \
    "$ROOT/web/studio-controls.html" "$ROOT/web/studio-controls.js" \
+   "$ROOT/web/studio-missions.html" "$ROOT/web/studio-missions.js" \
    "$ROOT/web/viewpoint-tools.js" "$DIST_DIR/"
 # Blender bridge: the from-scratch aircraft template plus the compiled
 # B747-8I sample (download links in the aircraft studio's Blender section).
@@ -162,7 +163,7 @@ sed "s|^.*// __ASSET_LINE__\$|  var ASSET = {js:'$JS_FILE',wasm:'$WASM_FILE',dat
     "$ROOT/web/index.html" > "$DIST_DIR/index.html"
 
 # Service worker: build id + precache list.
-PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"deeplink.js\",\"yfs.js\",\"settings.js\",\"controls.js\",\"studio-flight.html\",\"studio-flight.js\",\"studio-settings.html\",\"studio-settings.js\",\"studio-controls.html\",\"studio-controls.js\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"pack-update.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"dnm-parse.js\",\"dnm-lint.js\",\"dnm-lint-ui.js\",\"aircraft-starter.glb\",\"b747-8i.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-paint.js\",\"studio-movables.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"scenery-edit.js\",\"studio-pack.html\",\"studio-pack.js\",\"studio-pack-core.js\",\"studio-dat.js\",\"dat-schema.js\",\"viewpoint-tools.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
+PRECACHE="[\"./\",\"index.html\",\"$JS_FILE\",\"$WASM_FILE\",\"$DATA_FILE\",\"deeplink.js\",\"yfs.js\",\"settings.js\",\"controls.js\",\"studio-flight.html\",\"studio-flight.js\",\"studio-settings.html\",\"studio-settings.js\",\"studio-controls.html\",\"studio-controls.js\",\"studio-missions.html\",\"studio-missions.js\",\"packs.js\",\"packs-ui.js\",\"pack-net.js\",\"pack-update.js\",\"opfs-store.js\",\"memfs-lru.js\",\"replays-ui.js\",\"workbench.js\",\"workbench.html\",\"workbench-page.js\",\"staging.js\",\"dnm-preview.js\",\"studio-shared.js\",\"dnm-gltf.js\",\"dnm-parse.js\",\"dnm-lint.js\",\"dnm-lint-ui.js\",\"aircraft-starter.glb\",\"b747-8i.glb\",\"studio-aircraft.html\",\"studio-aircraft.js\",\"studio-paint.js\",\"studio-movables.js\",\"studio-scenery.html\",\"studio-scenery.js\",\"scenery-edit.js\",\"studio-pack.html\",\"studio-pack.js\",\"studio-pack-core.js\",\"studio-dat.js\",\"dat-schema.js\",\"viewpoint-tools.js\",\"vendor/fflate.js\",\"vendor/three.module.js\",\"manifest.webmanifest\",\"icons/icon-192.png\",\"icons/icon-512.png\"]"
 sed -e "s|__BUILD_ID__|$BUILD_ID|" -e "s|__PRECACHE__|$PRECACHE|" \
     "$ROOT/web/sw.js" > "$DIST_DIR/sw.js"
 
