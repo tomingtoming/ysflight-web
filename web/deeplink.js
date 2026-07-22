@@ -29,6 +29,9 @@
 //   ?openyfs=1                                fly a user-supplied .yfs (the
 //                                             top page put it in
 //                                             sessionStorage; File > Open)
+//   ?openreplay=1                             replay a user-supplied RECORDED
+//                                             .yfs (NUMRECOR present — the
+//                                             top page auto-routes)
 //   ?demo=1                                   auto demo, looping forever
 //                                             (screensaver mode; leave via
 //                                             browser navigation)
@@ -175,6 +178,10 @@ globalThis.ysfwDeepLink = (function () {
         a.push('-flyyfs', USER_DIR + '/prevflight.dat');
       } else if (q.get('openyfs')) {
         a.push('-flyyfs', USER_DIR + '/__openflight.yfs');
+      } else if (q.get('openreplay')) {
+        // A record-carrying .yfs: -flyyfs would reject it (PlayerPlaneIsReady
+        // needs a record-free player), -replayrecord plays it back.
+        a.push('-replayrecord', USER_DIR + '/__openflight.yfs');
       }
     }
     // Every deep link also gets -autoexit: when the engine returns to its menu
@@ -208,6 +215,7 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('mission')) return 'mission';
     if (q.get('retry')) return 'retry';
     if (q.get('openyfs')) return 'openyfs';
+    if (q.get('openreplay')) return 'openreplay';
     if (q.get('replay')) return 'replay';
     if (q.get('landing')) return 'landing';
     if (q.get('demo')) return 'demo';

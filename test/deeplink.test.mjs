@@ -181,3 +181,11 @@ test('retry / openyfs: native Sim>Retry and File>Open as -flyyfs boots', () => {
   assert.equal(both.filter((t) => t === '-flyyfs').length, 1);
   assert.match(both[1], /__createflight\.yfs$/);
 });
+
+test('openreplay: a recorded .yfs plays back via -replayrecord', () => {
+  assert.deepEqual(
+    buildEngineArgs('?openreplay=1'),
+    ['-replayrecord', USER_DIR + '/__openflight.yfs', '-autoexit']);
+  assert.equal(deepLinkKind('?openreplay=1'), 'openreplay');
+  assert.equal(isDirectBoot('?openreplay=1'), true);
+});

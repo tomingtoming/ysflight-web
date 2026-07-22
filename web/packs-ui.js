@@ -1181,7 +1181,12 @@ function renderPanel() {
     try {
       const text = await f.text();
       sessionStorage.setItem('ysfwOpenYfs', text);
-      location.assign(location.origin + location.pathname + '?openyfs=1' + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
+      // A .yfs WITH flight records (NUMRECOR) is a recording — veterans'
+      // airshow files.  -flyyfs rejects those (PlayerPlaneIsReady needs a
+      // record-free player), so route them to replay playback instead;
+      // record-free files fly.  Same auto-routing the native File > Open does.
+      const kind = text.indexOf('NUMRECOR ') !== -1 ? 'openreplay' : 'openyfs';
+      location.assign(location.origin + location.pathname + '?' + kind + '=1' + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
     } catch (e) { alert(S.openYfsBad); }
   });
   openYfs.appendChild(yfsInput);
