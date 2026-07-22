@@ -8,8 +8,8 @@
 //
 // The grammar mirrors what the engine itself writes (fssimulationfileio.cpp
 // FsSimulation::Save): YFSVERSI, FIELDNAM, ENVIRONM, ALLOW*, then per aircraft
-// AIRPLANE / STARTPOS / IDENTIFY.  We keep to that subset — no flight records,
-// no ground objects yet (a later increment).
+// AIRPLANE / STARTPOS / IDENTIFY, then per ground object GROUNDOB / IDENTIFY /
+// GNDPOSIT / GNDATTIT.  We keep to that subset — no flight records.
 //
 // Classic script (loaded before Module like deeplink.js), publishes on
 // globalThis; test/yfs.test.mjs imports it for the side effect.
@@ -51,6 +51,9 @@ globalThis.ysfwYfs = (function () {
   //   env:      'DAY' | 'NIGHT' (default DAY)
   //   weapons:  { gun, aam, agm, bomb, rocket } booleans (default all true)
   //   aircraft: [ { id, player, iff, startPos } ... ]  (>=1, exactly one player)
+  //   ground:   [ { id, x, y, z, h, iff } ... ]  (optional; CONCRETE placements
+  //             in meters/degrees — the page computes coordinates around a
+  //             ground start position, this stays a dumb writer)
   //
   // Returns the .yfs file text (LF-terminated).  Throws on a spec that could
   // not boot (no field, no aircraft, no player) so the caller fails loudly
@@ -91,6 +94,29 @@ globalThis.ysfwYfs = (function () {
       lines.push('IDENTIFY ' + clampIff(isPlayer ? 0 : (ac.iff == null ? 1 : ac.iff)));
     }
     if (players !== 1) throw new Error('yfs: exactly one player aircraft is required (got ' + players + ')');
+
+    // Ground objects (web-shell increment 8).  Grammar mirrors the engine's
+    // save block: GROUNDOB <identify> <isPlayer>, IDENTIFY <iff>, GNDPOSIT
+    // (absolute meters — the engine does NOT snap to terrain, so callers must
+    // anchor at known ground coordinates), GNDATTIT (heading; .stp-style
+    // degrees, the loader's angle parser accepts the unit suffix).
+    var round2 = function (v) { return String(Math.round(v * 100) / 100); };
+    var ground = Array.isArray(spec.ground) ? spec.ground : [];
+    for (var g = 0; g < ground.length; g++) {
+      var go = ground[g] || {};
+      var gid = sanitizeIdent(go.id);
+      if (!gid) throw new Error('yfs: ground[' + g + '] has no id');
+      var gx = Number(go.x), gy = Number(go.y), gz = Number(go.z);
+      if (!isFinite(gx) || !isFinite(gy) || !isFinite(gz)) {
+        throw new Error('yfs: ground[' + g + '] has a non-numeric position');
+      }
+      var gh = Number(go.h);
+      if (!isFinite(gh)) gh = 0;
+      lines.push('GROUNDOB ' + gid + ' FALSE');
+      lines.push('IDENTIFY ' + clampIff(go.iff == null ? 1 : go.iff));
+      lines.push('GNDPOSIT ' + round2(gx) + 'm ' + round2(gy) + 'm ' + round2(gz) + 'm');
+      lines.push('GNDATTIT ' + round2(gh) + 'deg 0deg 0deg');
+    }
 
     return lines.join('\n') + '\n';
   }

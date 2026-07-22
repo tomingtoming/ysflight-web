@@ -37,7 +37,7 @@
 | Net > Server | `?host=1&name=` → `-server`（トップのホストフォームから発射） | ✅ 増分6 |
 | Sim > Endurance | `?endurance=` → `-endurance` | ✅ 増分1（本ドキュメントと同PR） |
 | Sim > Intercept | `?intercept=` → `-intercept`（fork の絶対index修正込み） | ✅ 増分3 |
-| Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4（地上物・CAS/地対空/レーシングは今後） |
+| Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4＋地上物プリセット=増分8（CAS/地対空/レーシングは今後） |
 | Sim > 着陸練習 Lv1-15 | 定型 `.yfs` または生成 | 今後（yfs.js基盤を再利用） |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
 | File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
@@ -115,6 +115,19 @@
    `test/settings.test.mjs`（クランプ・書式・冪等）＋`scripts/smoke-settings.mjs`
    （チェックボックス/スライダー/セレクトの3型を実UIで操作→flight.cfg 反映）。
    **残**: キー割当（TRG/AXS行）・Config詳細・ジョイスティック較正UI。
+8. **Create Flight 地上物プリセット（実装済み）** ── `spec.ground` を `yfs.js`
+   が GROUNDOB/IDENTIFY/GNDPOSIT/GNDATTIT ブロックに書く（エンジン保存文法
+   準拠）。**GNDPOSIT は絶対座標で地形スナップ無し**（`FsGround::Settle` 確認済み）
+   なので、ページは `stock/fields.json`（gen-stock-index.mjs が stock `.stp` から
+   生成: フィールド→開始位置の座標/方位）の**接地済み開始位置をアンカー**に
+   プリセット（対空砲陣地/SAM陣地/練習ターゲット）を散布する。フィールドの
+   scenery 定義済み地上物は FIELDNAM だけで自動配置される（`FsWorld::AddField`）
+   ため、ここで足すのは「フィールドに無い的」。検証: `test/yfs.test.mjs`
+   （文法・丸め・sanitize・後方互換）＋`scripts/smoke-createflight.mjs`
+   （プリセット選択→`.yfs` に GROUNDOB→飛行到達・"Cannot create a ground
+   object" を FATAL 監視）。**残**: 自由配置UI（座標指定）は需要駆動。
+   プレイヤー操縦の地上物（地対空ミッション）はミッション拡張側
+   （EXTENSIO=`fssimextension.cpp` のレジストリ、Racing/CAS/GroundToAir）で扱う。
 
 ## 検証面
 
