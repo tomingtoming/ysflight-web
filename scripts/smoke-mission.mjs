@@ -81,5 +81,36 @@ await page
   .waitForURL((u) => !u.searchParams.get('endurance'), { timeout: 20000 })
   .catch(() => die('flight end did not hand back to the shell (still on the deep link URL)'));
 
+console.log('endurance leg passed (in-flight + Esc handover)');
+// The handover navigated page1 to the TOP page, which boots ANOTHER engine
+// (held at the pack panel).  Close it so the intercept leg doesn't share the
+// software GPU with a second instance.
+await page.close();
+
+// ---- Intercept leg: ?intercept= must also reach in-flight untouched ---------
+// Lighter check than the endurance leg (no Esc loop): the deep link resolves,
+// the mission sets up (needs the fork's i-relative -intercept index fix), and
+// the engine takes off with zero interaction.
+const page2 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page2.on('console', (m) => {
+  const t = m.text();
+  logs.push(t);
+  if (FATAL.some((re) => re.test(t))) fatal.push('[console2] ' + t);
+});
+page2.on('pageerror', (e) => fatal.push('[pageerror2] ' + e.message));
+await page2.goto(base + '?intercept=F-15J_EAGLE,SMALL_MAP,0,0,1,1,1,0');
+// Intercept sets a victory condition, so the engine shows a "== Your Mission =="
+// briefing on the flight screen before takeoff (an in-flight dialog we keep on
+// the engine side, like endurance's CONTINUE?).  Reaching the briefing at all
+// already proves the fork's -intercept arg-index fix (a broken parse spawns the
+// wrong mission or none).  Dismiss it via its OK button (top-left; the dialog
+// does not respond to Enter) and confirm takeoff follows.
+await page2.waitForTimeout(8000);
+await page2.mouse.click(20, 57);
+await page2
+  .waitForFunction(() => globalThis.ysfwInFlight === true, { timeout: 30000 })
+  .catch(() => die('intercept deep link did not reach in-flight after the mission briefing'));
+if (fatal.length) die('fatal console/page errors during the intercept leg');
+
 await browser.close();
-console.log('SMOKE-MISSION PASSED (endurance deep link reached in-flight; Esc handed back to the shell)');
+console.log('SMOKE-MISSION PASSED (endurance: in-flight + Esc handover; intercept: in-flight)');

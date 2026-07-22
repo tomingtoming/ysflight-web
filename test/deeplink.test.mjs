@@ -80,3 +80,24 @@ test('URLSearchParams input is accepted as well as strings', () => {
     buildEngineArgs(new URLSearchParams('?endurance=A')),
     ['-endurance', 'A', 'ATSUGI_AIRBASE', '2', '3', '1', '-autoexit']);
 });
+
+test('intercept full: argv mirrors the engine flag order', () => {
+  assert.deepEqual(
+    buildEngineArgs('?intercept=F-15J_EAGLE,SMALL_MAP,1,0,0,1,5,0'),
+    ['-intercept', 'F-15J_EAGLE', 'SMALL_MAP', '1', '0', '0', '1', '5', '0', '-autoexit']);
+  assert.equal(deepLinkKind('?intercept=F-15J_EAGLE'), 'intercept');
+  assert.equal(isDirectBoot('?intercept=F-15J_EAGLE'), true);
+});
+
+test('intercept defaults: escorted heavy-bomber raid, 3 attackers, 2 wingmen', () => {
+  assert.deepEqual(
+    buildEngineArgs('?intercept=F-15J_EAGLE'),
+    ['-intercept', 'F-15J_EAGLE', 'ATSUGI_AIRBASE', '0', '1', '1', '1', '3', '2', '-autoexit']);
+});
+
+test('intercept numeric params are clamped and junk-proofed', () => {
+  // stealth 9 -> 1, attackers 0 -> 1, wingmen junk -> default 2
+  assert.deepEqual(
+    buildEngineArgs('?intercept=A,F,9,1,1,1,0,junk'),
+    ['-intercept', 'A', 'F', '1', '1', '1', '1', '1', '2', '-autoexit']);
+});
