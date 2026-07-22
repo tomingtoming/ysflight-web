@@ -20,6 +20,8 @@ globalThis.ysfwSettings = (function () {
   //   length  "KEY <v>.00m" meters  (fsconfig.cpp "%.2lfm" / FsGetLength),
   //           clamped to [min,max]
   //   enum    "KEY <n>" integer     (fsconfig.cpp atoi), 0 <= n < count
+  //   choice  "KEY <TOKEN>" string  (fsconfig.cpp keyword tables), token must
+  //           be one of `values`
   var MANAGED = [
     { key: 'DRWSHADOW', type: 'bool', def: true },   // aircraft/ground shadows
     { key: 'DRAWCLOUD', type: 'bool', def: true },   // clouds
@@ -34,6 +36,22 @@ globalThis.ysfwSettings = (function () {
     // Coarse, default 0).
     { key: 'VISIBILIT', type: 'length', def: 20000, min: 800, max: 20000 }, // fog visibility [m]
     { key: 'AIRLVODTL', type: 'enum', def: 0, count: 3 },                   // airplane LOD
+    // Config detail, second batch (web-shell increment 9) — the rest of the
+    // native Option dialog (fsguiconfigdlg.cpp).  Tokens/defaults mirror
+    // fsconfig.cpp: SMOKETYPE table (dialog exposes TOWEL/SOLID/NULL),
+    // CLOUDTYPE NONE/FLAT/SOLID, ZBUFFQUAL 0-3 (SetDefault 1); bool defaults
+    // from FsFlightConfig::SetDefault.
+    { key: 'SMOKETYPE', type: 'choice', def: 'SOLID', values: ['TOWEL', 'SOLID', 'NULL'] },
+    { key: 'CLOUDTYPE', type: 'choice', def: 'SOLID', values: ['NONE', 'FLAT', 'SOLID'] },
+    { key: 'ZBUFFQUAL', type: 'enum', def: 1, count: 4 },
+    { key: 'HUDALWAYS', type: 'bool', def: false },  // HUD even in cockpit views
+    { key: 'SHOWKIAS_', type: 'bool', def: true },   // airspeed as IAS
+    { key: 'FRMPERSEC', type: 'bool', def: false },  // FPS counter
+    { key: 'DRAWVJSTK', type: 'bool', def: true },   // on-screen virtual stick
+    { key: 'GBLACKOUT', type: 'bool', def: true },   // G blackout/redout
+    { key: 'MIDAIRCOL', type: 'bool', def: true },   // mid-air collision
+    { key: 'NOTAILSTK', type: 'bool', def: true },   // tail strike protection
+    { key: 'LANDANWHR', type: 'bool', def: true },   // land anywhere
   ];
   var MANAGED_KEYS = MANAGED.map(function (m) { return m.key; });
   var BY_KEY = {};
@@ -44,7 +62,7 @@ globalThis.ysfwSettings = (function () {
   function fmtValue(m, v) {
     if (m.type === 'bool') return v ? 'TRUE' : 'FALSE';
     if (m.type === 'length') return v.toFixed(2) + 'm';
-    return String(v);
+    return String(v);  // enum integer / choice token
   }
 
   // Merge the web-owned values into an existing flight.cfg.
@@ -96,6 +114,8 @@ globalThis.ysfwSettings = (function () {
       } else if (m.type === 'length') {
         var n = Number(v);
         out[m.key] = isFinite(n) ? Math.min(m.max, Math.max(m.min, Math.round(n))) : m.def;
+      } else if (m.type === 'choice') {
+        out[m.key] = (m.values.indexOf(v) !== -1) ? v : m.def;
       } else { // enum
         var e = Number(v);
         out[m.key] = (isFinite(e) && e === Math.round(e) && e >= 0 && e < m.count) ? e : m.def;

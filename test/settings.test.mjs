@@ -52,8 +52,9 @@ test('idempotent: merging the same values twice is stable', () => {
 });
 
 test('a value for a non-managed key is ignored (never written)', () => {
-  const out = mergeFlightCfg('', { HUDALWAYS: false, DRWSHADOW: true });
-  assert.doesNotMatch(out, /HUDALWAYS/);
+  // JSCALIBRA is a real flight.cfg key the web does not manage.
+  const out = mergeFlightCfg('', { JSCALIBRA: false, DRWSHADOW: true });
+  assert.doesNotMatch(out, /JSCALIBRA/);
   assert.match(out, /DRWSHADOW TRUE/);
 });
 
@@ -103,4 +104,29 @@ test('idempotent with numerics in the mix', () => {
   assert.equal(once, twice);
   assert.match(once, /VISIBILIT 5000\.00m/);
   assert.match(once, /AIRLVODTL 1/);
+});
+
+// ---- Config detail, second batch (web-shell increment 9) --------------------
+
+test('choice option writes its token verbatim, appended or in place', () => {
+  assert.equal(mergeFlightCfg('', { SMOKETYPE: 'NULL' }), 'SMOKETYPE NULL\n');
+  assert.equal(
+    mergeFlightCfg('SMOKETYPE SOLID\nJSWARNING FALSE\n', { SMOKETYPE: 'TOWEL' }),
+    'SMOKETYPE TOWEL\nJSWARNING FALSE\n');
+});
+
+test('normalize validates choice membership and fills defaults', () => {
+  assert.equal(normalize({ SMOKETYPE: 'TOWEL' }).SMOKETYPE, 'TOWEL');
+  assert.equal(normalize({ SMOKETYPE: 'NOODLE' }).SMOKETYPE, 'SOLID');  // parseable by the engine but not dialog-exposed -> default
+  assert.equal(normalize({ CLOUDTYPE: 'junk' }).CLOUDTYPE, 'SOLID');
+  assert.equal(normalize({}).ZBUFFQUAL, 1);       // engine SetDefault
+  assert.equal(normalize({}).GBLACKOUT, true);
+  assert.equal(normalize({}).FRMPERSEC, false);
+  assert.equal(normalize({ ZBUFFQUAL: 3 }).ZBUFFQUAL, 3);
+  assert.equal(normalize({ ZBUFFQUAL: 4 }).ZBUFFQUAL, 1); // out of range -> default
+});
+
+test('second-batch bools merge like the first batch', () => {
+  const out = mergeFlightCfg('GBLACKOUT TRUE\n', { GBLACKOUT: false, LANDANWHR: false });
+  assert.equal(out, 'GBLACKOUT FALSE\nLANDANWHR FALSE\n');
 });
