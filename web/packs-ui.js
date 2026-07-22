@@ -79,6 +79,8 @@ const S = ({
     missionInterceptSub: '邀撃: 爆撃編隊を阻止 / 僚機2機',
     createFlightLink: '✈️ フライトを作る（機体・敵機・時間帯を選ぶ）',
     createFlightTitle: '専用ページで機体・マップ・時間帯・AI機を組んで離陸（Create Flight のweb版）',
+    settingsLink: '⚙️ 設定（影・雲・HUD など）',
+    settingsTitle: '見た目と表示の設定（Option メニューのweb版）',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -173,6 +175,8 @@ const S = ({
     missionInterceptSub: 'Intercept: stop the bomber raid / 2 wingmen',
     createFlightLink: '✈️ Create a flight (aircraft, enemies, time of day)',
     createFlightTitle: 'Compose aircraft / map / time / AI on a dedicated page, then take off (web Create Flight)',
+    settingsLink: '⚙️ Settings (shadows, clouds, HUD…)',
+    settingsTitle: 'Look & display options (web Option menu)',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -1092,6 +1096,14 @@ function renderPanel() {
   createLink.href = 'studio-flight.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
   createLink.style.cssText = 'display:block;margin-top:12px;padding:9px 11px;border:1px dashed #345;border-radius:8px;color:' + ACCENT + ';font-size:13px;text-decoration:none;text-align:center';
   quickWrap.appendChild(createLink);
+
+  // Settings: the web replacement for the engine's Option menu.
+  const settingsLink = document.createElement('a');
+  settingsLink.textContent = S.settingsLink;
+  settingsLink.title = S.settingsTitle;
+  settingsLink.href = 'studio-settings.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
+  settingsLink.style.cssText = 'display:block;margin-top:8px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
+  quickWrap.appendChild(settingsLink);
 
   panel.appendChild(quickWrap);
 
