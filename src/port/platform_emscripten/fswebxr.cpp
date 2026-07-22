@@ -154,12 +154,13 @@ that owns the session and fills that state every frame:
     The OTHER hand is completely untouched --
     its dial, trigger, A/B/X/Y all keep their normal flight-control meaning,
     exactly as if no dialog were open, so the pilot never loses that hand's
-    functions to a dialog they didn't open. Discoverability: the owner hand's
-    quad is FORCED visible for as long as a dialog stays open (regardless of
+    functions to a dialog they didn't open. Discoverability: while a DRIVABLE
+    dialog stays open the owner hand's quad is FORCED visible (regardless of
     thumbstick engagement) and switches to a dialog-guide face -- N sectors
-    numbered 1..N labelled with the
-    dialog's REAL option text when drivable, or a uniform "ESC" face (with a
-    "see panel" hint once the panel is forced) otherwise -- see
+    numbered 1..N labelled with the dialog's REAL option text. A
+    non-drivable dialog's uniform "ESC" face (with a "see panel" hint once
+    the panel is forced) instead follows the NORMAL engagement-based
+    visibility rule (flick the stick to see it) -- see
     drawGuiDialGuide/rdial.guiMode/rdial.guiMenu (ldial.* symmetrically);
     falls back to the normal dial the instant the dialog closes. Grip-stick
     (aileron/elevator/rudder) and the throttle grip are NEVER affected, on
@@ -169,6 +170,12 @@ that owns the session and fills that state every frame:
     dialog's own N wedges instead of the fixed table's N -- see its doc
     comment), standing in for the visual feedback a pilot not looking at
     the guide quad would otherwise miss.
+    Forced visibility applies to the DRIVABLE face only: the uniform "ESC"
+    face is engagement-gated like the normal dial (flick the stick to see
+    it) -- non-drivable dialogs already force the on-quad panel for their
+    content, and parking a 4-spoke ESC cluster in view for e.g. the whole
+    parked-on-runway stationary dialog or a replay read as noise on
+    device (2026-07 Quest feedback).
   - Perf placard: Module.ysfwVrOptions.perf (?vrperf=1) already printed a
     '[vrperf]' phase-breakdown console line every 5s, but reading the
     browser console while wearing a headset is impractical. The same
@@ -334,6 +341,16 @@ extern "C" int EMSCRIPTEN_KEEPALIVE YsfwVrGuiMenuVersion(void)
 	return FsVrGuiMenuVersion();
 }
 
+// Forwards to the engine's VR main-menu state block (fsvr.h, 8 floats):
+// the JS runtime writes [enable,fbo,tex,texW,texH] here when the WebXR layers
+// session starts (setupMenu); the engine (DrawMenu in fsrunloop.cpp) reads
+// [0] to know when the FBO is ready and writes [5] menuDrawn=1 each frame it
+// rendered the menu into the FBO.
+extern "C" float * EMSCRIPTEN_KEEPALIVE YsfwVrMenuDataPointer(void)
+{
+	return FsVrMenuDataPointer();
+}
+
 // TEST-ONLY: forwards to the engine's blackout/redout override block
 // (fsvr.h's FsVrSetBlackoutOverride) so a headless test can exercise
 // FsVrDrawFullScreenTint (SimDrawAllScreen's VR G-load tint) without a real
@@ -372,6 +389,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 		xrFb:null,
 		origBind:null,
 		simSilentFrames:0,
+		// Menu-quad idle counter (see updateMenuLayer's grace window).  Starts
+		// huge so the quad cannot appear before the engine's first real menu
+		// render of a session.
+		menuIdleFrames:1e9,
+		menuAnchor:null, // {pos:{x,y,z},quat:{x,y,z,w}} in vr.refSpace; null = not anchored yet
+		// Frames spent in a state that is neither the main menu nor a flight.
+		// Such 2D-only screens cannot be presented correctly in immersive VR;
+		// on device their last projection texture otherwise freezes and follows
+		// the head.  A short grace covers menu->flight transitions.
+		unsupportedVrFrames:0,
+		// Why the last session ended, when the JS side knows better than the
+		// bare 'end' event.  null = normal end; 'menu-unsupported' = the
+		// watchdog fired while the menu was up because the menu quad could
+		// never be created (no WebXR layers support) -- index.html's onVrEnd
+		// turns that into a user-facing toast.  Reset on every vr.enter().
+		endReason:null,
 		// single-pass stereo (OVR_multiview2 / WebXR layers)
 		mvExt:null,
 		mvBinding:null,
@@ -444,6 +477,24 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// per-hand pair) and anchored to viewerSpace like the dial quads --
 		// see ensurePerfResources/updatePerfLayers.
 		perfRes:undefined,
+		// Main-menu-in-VR quad layer resource (WebXR layers path only).
+		// null = not yet allocated (or session ended).
+		// object = {fb,tex,fbId,texId,w,h,quad,inLayers} once setupMenu
+		// allocates the FBO + XRQuadLayer.
+		menuRes:null,
+		// Static equirect sky background for the menu (XREquirectLayer, layers
+		// path only). Rendered between the projection layer and the menu quad
+		// so it fills the black void while no 3D scene is drawing.
+		// null = not allocated, false = unavailable (createEquirectLayer threw),
+		// object = {layer,canvas,inLayers} once created.
+		skyRes:null,
+		// One transparent, full-menu cursor overlay quad.  Both hand cursors are
+		// painted into this ONE texture in menu UV coordinates, so their visual
+		// positions use exactly the same aspect/transform as the menu and cannot
+		// drift toward a central square.  Keeping both hands in one layer also
+		// avoids one cursor disappearing when a headset's composition-layer
+		// budget is tight. null = unavailable/not allocated.
+		cursorRes:null,
 		lastRawSrc:{right:null,left:null},
 		hapticPrev:null,
 		// Hand-controller state (virtual stick + throttle + button latches).
@@ -638,11 +689,26 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// hand well since that hand's grip already owns the continuous
 		// throttle control and its trigger is otherwise idle.
 		{label:'AP',     code:'Backspace',mode:'tap'},
-		// [5] 300deg. FSBTF_AUTOTRIM (KeyT): a level-sensed virtual button
-		// (same fscontrol.cpp switch as FIREWEAPON/DISPENSEFLARE) -- fires
-		// while held, so 'hold' (holding it trims continuously; releasing
-		// stops).
-		{label:'トリム',  code:'KeyT',     mode:'hold'}
+		// [5] ~257deg (N=7). FSBTF_AUTOTRIM (KeyT): a level-sensed virtual
+		// button (same fscontrol.cpp switch as FIREWEAPON/DISPENSEFLARE) --
+		// fires while held, so 'hold' (holding it trims continuously;
+		// releasing stops).
+		{label:'トリム',  code:'KeyT',     mode:'hold'},
+		// [6] ~309deg (N=7). FSKEY_ESC: in-sim the engine closes any open
+		// submenu on the first ESC and TERMINATES the flight (back to the
+		// menu) on the second consecutive press (fssimulation.cpp's
+		// escKeyCount>=2 -> SetTerminate) -- flat play's "press ESC twice
+		// to leave". 'tap' so each trigger pull is one truthful ESC press:
+		// select this sector, pull the trigger twice, and you are back on
+		// the menu quad. Lives on the calm left hand next to the other
+		// occasional actions (radio/AP), added because a VR pilot had no
+		// way to leave a flight at all (2026-07 Quest feedback); dial
+		// sector count is table-driven (updateDialStick/drawDial), so the
+		// odd N=7 needs no other change. Labelled by what it DOES (leave
+		// the flight), not the key it sends -- "ESC" alone read as
+		// meaningless on device (second Quest report); the "×2" state hint
+		// (dialEntryStateText) carries the press-twice grammar.
+		{label:'終了',   code:'Escape',   mode:'tap'}
 	];
 
 	// GUI-dialog stick mapping (see SimDrawVrGui's doc comment / fsvr.h's
@@ -1118,6 +1184,1652 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.gui=null;
 	}
 
+	// ---- VR main-menu off-screen FBO + world-anchored quad layer ------------
+	// Called at session start (setupMenu) and end (teardownMenu).  The menu FBO
+	// is a plain mono RGBA 2D texture (not multiview) the engine renders the
+	// 2D main menu into each tick; updateMenuLayer blits it into the XRQuadLayer
+	// swapchain every frame the engine wrote to it (menuDrawn flag).
+	// The quad is anchored in vr.refSpace (world-fixed) so it stays put when
+	// the player's head moves (anchorMenuQuad; see also vrRecenter hook).
+	var MENU_MAX_TEXTURE_PX=2048;
+	var MENU_QUAD_WIDTH_M=1.6;
+	function fitMenuTextureSize(srcW,srcH,maxPx)
+	{
+		srcW=Math.max(1,Math.round(srcW||1));
+		srcH=Math.max(1,Math.round(srcH||1));
+		maxPx=Math.max(1,Math.round(maxPx||MENU_MAX_TEXTURE_PX));
+		// Scale both axes by ONE factor.  Clamping them independently turns a
+		// high-DPI widescreen Quest canvas into an almost-square menu and makes
+		// the ray/cursor appear confined to a central square.
+		var scale=Math.min(1,maxPx/Math.max(srcW,srcH));
+		return {w:Math.max(1,Math.round(srcW*scale)),h:Math.max(1,Math.round(srcH*scale))};
+	}
+	function menuQuadMetricSize(texW,texH)
+	{
+		var w=MENU_QUAD_WIDTH_M;
+		return {w:w,h:w*Math.max(1,texH)/Math.max(1,texW)};
+	}
+	function setupMenu()
+	{
+		if(vr.menuRes)
+		{
+			return;
+		}
+		// In headless test mode (vr.testMode, forceMultiview) there is no real
+		// XRWebGLBinding, but we still allocate the FBO so the engine can render
+		// into it and the smoke test can read it back.
+		var inTestMode=(vr.testMode && !vr.mvBinding);
+		if(!inTestMode && (!vr.mvBinding||!vr.refSpace))
+		{
+			return;
+		}
+
+		var canvas=Module.canvas||document.getElementById('canvas');
+		var fitted=fitMenuTextureSize(canvas ? canvas.width : 800,canvas ? canvas.height : 600,MENU_MAX_TEXTURE_PX);
+		var W=fitted.w;
+		var H=fitted.h;
+		if(W<=0||H<=0)
+		{
+			return;
+		}
+
+		var prevActive=GLctx.getParameter(GLctx.ACTIVE_TEXTURE);
+		GLctx.activeTexture(GLctx.TEXTURE14);
+		var tex=GLctx.createTexture();
+		GLctx.bindTexture(GLctx.TEXTURE_2D,tex);
+		GLctx.texImage2D(GLctx.TEXTURE_2D,0,GLctx.RGBA,W,H,0,GLctx.RGBA,GLctx.UNSIGNED_BYTE,null);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_MIN_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_MAG_FILTER,GLctx.LINEAR);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_WRAP_S,GLctx.CLAMP_TO_EDGE);
+		GLctx.texParameteri(GLctx.TEXTURE_2D,GLctx.TEXTURE_WRAP_T,GLctx.CLAMP_TO_EDGE);
+		GLctx.bindTexture(GLctx.TEXTURE_2D,null);
+		GLctx.activeTexture(prevActive);
+
+		// Depth-stencil renderbuffer: the menu is mostly 2D, but the
+		// aircraft-select dialog renders a real 3D aircraft preview into
+		// this FBO.  With a color-only FBO the depth test is a no-op, so
+		// later-drawn geometry always painted over nearer geometry --
+		// under-wing stores showed through the wing (Quest report: "the
+		// preview looks like its normals are flipped").  DEPTH24_STENCIL8
+		// is the WebGL2 name; 0x84F9 is WebGL1's DEPTH_STENCIL for the
+		// headless test path, whose context can be WebGL1 (SwiftShader).
+		var depthRb=GLctx.createRenderbuffer();
+		var prevRb=GLctx.getParameter(GLctx.RENDERBUFFER_BINDING);
+		GLctx.bindRenderbuffer(GLctx.RENDERBUFFER,depthRb);
+		GLctx.renderbufferStorage(GLctx.RENDERBUFFER,(GLctx.DEPTH24_STENCIL8||0x84F9),W,H);
+		GLctx.bindRenderbuffer(GLctx.RENDERBUFFER,prevRb);
+
+		var fb=GLctx.createFramebuffer();
+		var prevFb=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,fb);
+		GLctx.framebufferTexture2D(GLctx.FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,GLctx.TEXTURE_2D,tex,0);
+		GLctx.framebufferRenderbuffer(GLctx.FRAMEBUFFER,GLctx.DEPTH_STENCIL_ATTACHMENT,GLctx.RENDERBUFFER,depthRb);
+		var st=GLctx.checkFramebufferStatus(GLctx.FRAMEBUFFER);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prevFb);
+		if(st!==GLctx.FRAMEBUFFER_COMPLETE)
+		{
+			console.warn('[vr] menu FBO incomplete 0x'+st.toString(16));
+			GLctx.deleteFramebuffer(fb);
+			GLctx.deleteTexture(tex);
+			GLctx.deleteRenderbuffer(depthRb);
+			return;
+		}
+
+		var fbId=GL.getNewId(GL.framebuffers);
+		GL.framebuffers[fbId]=fb; fb.name=fbId;
+		var texId=GL.getNewId(GL.textures);
+		GL.textures[texId]=tex; tex.name=texId;
+
+		var quad=null;
+		var quadSize=menuQuadMetricSize(W,H);
+		if(!inTestMode)
+		{
+			try
+			{
+				quad=vr.mvBinding.createQuadLayer({
+					space:vr.refSpace,
+					viewPixelWidth:W,
+					viewPixelHeight:H,
+					layout:'mono',
+					width:quadSize.w,
+					height:quadSize.h
+				});
+				// Placeholder; overwritten by anchorMenuQuad before the quad
+				// ever enters the layers list.
+				quad.transform=new XRRigidTransform({x:0,y:0,z:0},{x:0,y:0,z:0,w:1});
+			}
+			catch(e)
+			{
+				console.warn('[vr] menu quad layer failed: '+(e&&e.message?e.message:e));
+				GLctx.deleteFramebuffer(fb); GLctx.deleteTexture(tex);
+				GLctx.deleteRenderbuffer(depthRb);
+				GL.framebuffers[fbId]=null; GL.textures[texId]=null;
+				return;
+			}
+		}
+
+		var p=_YsfwVrMenuDataPointer()>>2;
+		HEAPF32[p+0]=1; HEAPF32[p+1]=fbId; HEAPF32[p+2]=texId;
+		HEAPF32[p+3]=W; HEAPF32[p+4]=H;
+		HEAPF32[p+5]=0; HEAPF32[p+6]=0; HEAPF32[p+7]=0;
+
+		vr.menuRes={fb:fb,tex:tex,depthRb:depthRb,fbId:fbId,texId:texId,w:W,h:H,
+			quadW:quadSize.w,quadH:quadSize.h,quad:quad,inLayers:false};
+		console.log('[vr] menu '+W+'x'+H+' (fbId='+fbId+' texId='+texId+(inTestMode?' testMode':'')+')');
+	}
+
+	function teardownMenu()
+	{
+		var p=_YsfwVrMenuDataPointer()>>2;
+		for(var i=0; i<8; ++i){ HEAPF32[p+i]=0; }
+		if(!vr.menuRes)
+		{
+			return;
+		}
+		try{ GLctx.deleteFramebuffer(vr.menuRes.fb); }catch(e){}
+		try{ GLctx.deleteTexture(vr.menuRes.tex); }catch(e){}
+		try{ if(vr.menuRes.depthRb){ GLctx.deleteRenderbuffer(vr.menuRes.depthRb); } }catch(e){}
+		try{ if(vr.menuRes.quad){ vr.menuRes.quad.destroy(); } }catch(e){}
+		// The VR keyboard lives and dies with the menu boards.
+		teardownKbd();
+		GL.framebuffers[vr.menuRes.fbId]=null;
+		GL.textures[vr.menuRes.texId]=null;
+		vr.menuAnchor=null;
+		vr.menuRes=null;
+		vr.menuIdleFrames=1e9;
+	}
+
+	// Locks the menu quad to world space at the moment the menu becomes
+	// visible (or re-anchors on vrRecenter while visible).
+	// viewerPose: plain-object {position:{x,y,z},orientation:{x,y,z,w}} in
+	// vr.refSpace (same shape as vr.lastViewerPose).
+	// Places the quad 1.8 m ahead of the viewer's yaw-only forward direction,
+	// 0.1 m below head height, facing the viewer.
+	function anchorMenuQuad(viewerPose)
+	{
+		if(!viewerPose||!vr.menuRes||!vr.menuRes.quad)
+		{
+			return;
+		}
+		var pos=viewerPose.position;
+		var yawQ=yawOnlyQuatFromOrientation(viewerPose.orientation);
+		var fwd=rotateVecByQuat({x:0,y:0,z:-1},yawQ);
+		var menuPos={x:pos.x+fwd.x*1.8,y:pos.y-0.1,z:pos.z+fwd.z*1.8};
+		vr.menuAnchor={pos:menuPos,quat:yawQ};
+		try
+		{
+			var menuTransform=new XRRigidTransform(menuPos,yawQ);
+			vr.menuRes.quad.transform=menuTransform;
+			// The cursor overlay has the exact same physical extent and transform
+			// as the menu.  Layer ordering (cursor after menu) puts its transparent
+			// pixels on top without a world-space offset/parallax error.
+			if(vr.cursorRes && vr.cursorRes.quad)
+			{
+				vr.cursorRes.quad.transform=menuTransform;
+			}
+		}
+		catch(e){}
+	}
+
+	// ---- Static equirect sky background for the VR menu --------------------
+	// Procedurally generated pre-dawn sky on a 2048x1024 canvas using a seeded
+	// PRNG (mulberry32 with a fixed seed) for star placement.  Uploaded to the
+	// XREquirectLayer every presented frame following the "every-frame upload"
+	// discipline the help placards established (see uploadCanvasToSubImage's
+	// comment: compositor-side buffer loss requires freshness on every frame,
+	// so upload-once is NOT safe even for static content).
+	//
+	// Layer order (back-to-front): the equirect sits between the projection
+	// layer and the menu quad so it fills the black void the inactive 3D scene
+	// leaves while the menu is showing.  Array order:
+	//   [mvLayer (proj), ... dial/help/perf ..., equirect, menuQuad]
+	//
+	// Graceful degrade: createEquirectLayer may not exist on all WebXR
+	// implementations; failure sets skyRes=false and the menu keeps working
+	// on a black background.
+
+	// Seeded PRNG: mulberry32 (simple, fast, deterministic).
+	// See https://github.com/bryc/code/blob/master/jshash/PRNGs.md
+	function mulberry32(seed)
+	{
+		return function()
+		{
+			seed=(seed+0x6D2B79F5)|0;
+			var t=Math.imul(seed^(seed>>>15),1|seed);
+			t=t+Math.imul(t^(t>>>7),61|t)^t;
+			return ((t^(t>>>14))>>>0)/4294967296;
+		};
+	}
+
+	function buildSkyCanvas()
+	{
+		var W=2048, H=1024;
+		var canvas=document.createElement('canvas');
+		canvas.width=W; canvas.height=H;
+		var ctx=canvas.getContext('2d');
+		if(!ctx){ return null; }
+
+		// ---- Sky gradient (top -> horizon -> ground) -----------------------
+		var grad=ctx.createLinearGradient(0,0,0,H);
+		grad.addColorStop(0,   '#000005'); // zenith: almost black
+		grad.addColorStop(0.35,'#050a1a'); // upper sky: deep navy
+		grad.addColorStop(0.52,'#0c1830'); // mid sky
+		grad.addColorStop(0.60,'#1a2a48'); // approaching horizon
+		grad.addColorStop(0.65,'#2d3c5a'); // pre-dawn horizon glow
+		grad.addColorStop(0.70,'#4a4a58'); // ground horizon
+		grad.addColorStop(0.75,'#1a1a1e'); // near ground
+		grad.addColorStop(1,   '#0a0a0c'); // nadir
+		ctx.fillStyle=grad;
+		ctx.fillRect(0,0,W,H);
+
+		// ---- Subtle horizon glow -------------------------------------------
+		var hGrad=ctx.createRadialGradient(W/2,H*0.65,0,W/2,H*0.65,W*0.45);
+		hGrad.addColorStop(0,'rgba(100,120,160,0.18)');
+		hGrad.addColorStop(0.4,'rgba(70,90,130,0.08)');
+		hGrad.addColorStop(1,'rgba(0,0,0,0)');
+		ctx.fillStyle=hGrad;
+		ctx.fillRect(0,0,W,H);
+
+		// ---- Stars (upper sky only, seeded PRNG) ---------------------------
+		// Horizon is at y = H*0.65; stars only appear above that.
+		var rng=mulberry32(0x42a7f91c); // fixed seed
+		var starCount=1800;
+		for(var i=0; i<starCount; ++i)
+		{
+			var sx=rng()*W;
+			var sy=rng()*H*0.62; // confined to upper 62% (clear of horizon glow)
+			var ssize=0.3+rng()*1.1;
+			// Twinkle: slightly varied alpha so not all stars are the same brightness
+			var salpha=0.35+rng()*0.65;
+			ctx.beginPath();
+			ctx.arc(sx,sy,ssize,0,Math.PI*2);
+			// Mix of white-blue colours for realism
+			var hue=Math.floor(rng()*40); // 0-40 range: white to slightly warm
+			ctx.fillStyle='hsla('+hue+',20%,90%,'+salpha.toFixed(2)+')';
+			ctx.fill();
+		}
+
+		return canvas;
+	}
+
+	function setupSky()
+	{
+		// skyRes===false means we already tried and failed (createEquirectLayer
+		// not available); don't retry.
+		if(vr.skyRes===false || vr.skyRes)
+		{
+			return;
+		}
+		if(!vr.mvBinding || !vr.refSpace)
+		{
+			return; // Not available in test mode.
+		}
+
+		var canvas=buildSkyCanvas();
+		if(!canvas)
+		{
+			vr.skyRes=false;
+			return;
+		}
+
+		var layer;
+		try
+		{
+			layer=vr.mvBinding.createEquirectLayer({
+				// WebXR Layers requires equirect/cube layers to use a
+				// non-viewer XRReferenceSpace.  Quest rejects viewerSpace here,
+				// which was why the intended pre-dawn background degraded to black.
+				space:vr.refSpace,
+				viewPixelWidth:2048,
+				viewPixelHeight:1024,
+				layout:'mono',
+				isStatic:false // we upload each frame (see header comment)
+			});
+		}
+		catch(e)
+		{
+			console.warn('[vr] equirect sky unavailable: '+(e&&e.message?e.message:e));
+			vr.skyRes=false;
+			return;
+		}
+
+		vr.skyRes={layer:layer,canvas:canvas,inLayers:false};
+		console.log('[vr] equirect sky 2048x1024 allocated');
+	}
+
+	function teardownSky()
+	{
+		if(!vr.skyRes || vr.skyRes===false)
+		{
+			vr.skyRes=null;
+			return;
+		}
+		try{ if(vr.skyRes.layer){ vr.skyRes.layer.destroy(); } }catch(e){}
+		vr.skyRes=null;
+	}
+
+	// Upload the sky canvas to the equirect layer every presented frame.
+	// Driven by the same menuVisible state as updateMenuLayer.
+	// Returns true if vr.skyRes.inLayers changed (caller must rebuild the
+	// layers list via syncRenderStateLayers -- updateMenuLayer owns that call
+	// so this function never calls syncRenderStateLayers itself).
+	function updateSkyLayer(frame,menuInLayers)
+	{
+		if(!vr.skyRes || vr.skyRes===false)
+		{
+			return false;
+		}
+
+		var layersChanged=false;
+		if(menuInLayers)
+		{
+			if(!vr.skyRes.inLayers)
+			{
+				vr.skyRes.inLayers=true;
+				layersChanged=true;
+			}
+			// Upload every presented frame (swapchain rotation means upload-once
+			// is not safe -- same rationale as the dial/help-placard uploads).
+			if(vr.skyRes.layer && vr.mvBinding)
+			{
+				try
+				{
+					var sub=vr.mvBinding.getSubImage(vr.skyRes.layer,frame);
+					uploadCanvasToSubImage(vr.skyRes.canvas,sub);
+				}
+				catch(e){}
+			}
+		}
+		else if(vr.skyRes.inLayers)
+		{
+			vr.skyRes.inLayers=false;
+			layersChanged=true;
+		}
+
+		return layersChanged;
+	}
+
+	// ---- Menu ray cursor (transparent overlay matched to the menu quad) ------
+	// The engine's hover highlight alone makes dialog lists and small buttons
+	// guesswork on device.  Earlier revisions used one tiny world-positioned
+	// quad per hand; on Quest the pointer rings then occupied a central square
+	// even though hover reached the menu corners.  The hit math was right, but
+	// the independently transformed visual layers were not.  Paint both rings
+	// into one transparent quad with the menu's exact dimensions/transform,
+	// using the SAME u/v values that feed mouse pixels.  Transfer it EVERY
+	// presented frame -- non-presented swapchain buffers can otherwise freeze.
+	var CURSOR_OVERLAY_MAX_PX=1024;
+	var CURSOR_DIAMETER_M=0.025;
+	function cursorOverlayPoint(u,v,w,h)
+	{
+		return {
+			x:Math.max(0,Math.min(1,u))*Math.max(0,w-1),
+			y:Math.max(0,Math.min(1,v))*Math.max(0,h-1)
+		};
+	}
+	function drawCursorMark(ctx,x,y,hand,canvasW)
+	{
+		// Keep the ring's physical diameter stable as the overlay resolution
+		// follows the menu aspect.  A 1024px-wide, 1.6m menu yields ~16px.
+		var radius=Math.max(5,canvasW*CURSOR_DIAMETER_M/MENU_QUAD_WIDTH_M/2);
+		// Dark contrast ring (outermost) so the cursor reads on light menus.
+		ctx.beginPath();
+		ctx.arc(x,y,radius+2,0,Math.PI*2);
+		ctx.lineWidth=2;
+		ctx.strokeStyle='rgba(0,0,0,0.6)';
+		ctx.stroke();
+		// Main white ring.
+		ctx.beginPath();
+		ctx.arc(x,y,radius,0,Math.PI*2);
+		ctx.lineWidth=Math.max(2,radius*0.28);
+		ctx.strokeStyle='rgba(255,255,255,0.95)';
+		ctx.stroke();
+		// Distinct centre dots make simultaneous left/right aim points easy to
+		// tell apart: cyan = left, warm yellow = right.
+		ctx.beginPath();
+		ctx.arc(x,y,Math.max(2,radius*0.28),0,Math.PI*2);
+		ctx.fillStyle=('left'===hand ? 'rgba(80,220,255,0.95)' : 'rgba(255,220,80,0.95)');
+		ctx.fill();
+	}
+
+	function setupCursor()
+	{
+		if(vr.cursorRes || !vr.mvBinding || !vr.refSpace || !vr.menuRes)
+		{
+			return; // Layers path only (test mode / non-layers browsers skip).
+		}
+		var fitted=fitMenuTextureSize(vr.menuRes.w,vr.menuRes.h,CURSOR_OVERLAY_MAX_PX);
+		var canvas=document.createElement('canvas');
+		canvas.width=fitted.w;
+		canvas.height=fitted.h;
+		var ctx=canvas.getContext('2d');
+		if(!ctx)
+		{
+			return;
+		}
+		try
+		{
+			var quad=vr.mvBinding.createQuadLayer({
+				space:vr.refSpace,
+				viewPixelWidth:fitted.w,
+				viewPixelHeight:fitted.h,
+				layout:'mono',
+				width:vr.menuRes.quadW,
+				height:vr.menuRes.quadH
+			});
+			try
+			{
+				if('blendTextureSourceAlpha' in quad)
+				{
+					quad.blendTextureSourceAlpha=true;
+				}
+			}
+			catch(e){}
+			if(vr.menuAnchor)
+			{
+				quad.transform=new XRRigidTransform(vr.menuAnchor.pos,vr.menuAnchor.quat);
+			}
+			vr.cursorRes={quad:quad,canvas:canvas,ctx:ctx,inLayers:false};
+		}
+		catch(e)
+		{
+			console.warn('[vr] menu cursor overlay failed: '+(e&&e.message?e.message:e));
+		}
+	}
+
+	function teardownCursor()
+	{
+		try{ if(vr.cursorRes&&vr.cursorRes.quad){ vr.cursorRes.quad.destroy(); } }catch(e){}
+		vr.cursorRes=null;
+	}
+
+	// ---- Controller laser beams for the menu -----------------------------
+	// One thin world-space quad per hand, from the controller's targetRay
+	// origin to the menu plane (or a default length while the ray is off the
+	// board), colour-matched to that hand's cursor ring dot (cyan=left,
+	// warm yellow=right).  2026-07 Quest feedback: with only the hit ring
+	// visible, "where I feel the ray points" and "where the hit lands" read
+	// as disagreeing -- Quest users are trained on a VISIBLE system laser,
+	// so draw one.  Layers path only, same best-effort try/catch discipline
+	// as the cursor overlay; composited between the menu quad and the
+	// cursor ring (the beam is physically in FRONT of the board, the ring
+	// sits ON it).
+	var BEAM_WIDTH_M=0.01;
+	var BEAM_DEFAULT_LEN_M=3.0;
+	var BEAM_MAX_LEN_M=6.0;
+	// Rotation quaternion from an orthonormal right-handed basis given as
+	// COLUMN vectors (the images of the canonical axes).  Standard
+	// trace-branching matrix->quaternion conversion.
+	function quatFromBasis(x,y,z)
+	{
+		var m00=x.x,m01=y.x,m02=z.x;
+		var m10=x.y,m11=y.y,m12=z.y;
+		var m20=x.z,m21=y.z,m22=z.z;
+		var tr=m00+m11+m22,s;
+		if(tr>0)
+		{
+			s=Math.sqrt(tr+1)*2;
+			return {w:0.25*s,x:(m21-m12)/s,y:(m02-m20)/s,z:(m10-m01)/s};
+		}
+		if(m00>m11&&m00>m22)
+		{
+			s=Math.sqrt(1+m00-m11-m22)*2;
+			return {w:(m21-m12)/s,x:0.25*s,y:(m01+m10)/s,z:(m02+m20)/s};
+		}
+		if(m11>m22)
+		{
+			s=Math.sqrt(1+m11-m00-m22)*2;
+			return {w:(m02-m20)/s,x:(m01+m10)/s,y:0.25*s,z:(m12+m21)/s};
+		}
+		s=Math.sqrt(1+m22-m00-m11)*2;
+		return {w:(m10-m01)/s,x:(m02+m20)/s,y:(m12+m21)/s,z:0.25*s};
+	}
+	// Pose for a beam quad: local +Y runs along the ray (texture top = far
+	// end), +Z billboarded toward the head so the flat ribbon always faces
+	// the viewer.  Pure math (no XR state) -- exposed as vr.beamPoseFor for
+	// headless tests.  Returns {pos,quat} or null on degenerate input.
+	function beamPoseFor(rayPos,rayDir,headPos,len)
+	{
+		var d=Math.sqrt(rayDir.x*rayDir.x+rayDir.y*rayDir.y+rayDir.z*rayDir.z);
+		if(!(d>1e-6)||!(len>0))
+		{
+			return null;
+		}
+		var y={x:rayDir.x/d,y:rayDir.y/d,z:rayDir.z/d};
+		var mid={x:rayPos.x+y.x*len/2,y:rayPos.y+y.y*len/2,z:rayPos.z+y.z*len/2};
+		var th={x:headPos.x-mid.x,y:headPos.y-mid.y,z:headPos.z-mid.z};
+		var xv={x:y.y*th.z-y.z*th.y,y:y.z*th.x-y.x*th.z,z:y.x*th.y-y.y*th.x};
+		var xl=Math.sqrt(xv.x*xv.x+xv.y*xv.y+xv.z*xv.z);
+		if(xl<1e-5)
+		{
+			// Ray passes (nearly) through the head: the ribbon is edge-on
+			// anyway, any perpendicular keeps the math finite.
+			xv={x:-y.z,y:0,z:y.x};
+			xl=Math.sqrt(xv.x*xv.x+xv.z*xv.z);
+			if(xl<1e-5)
+			{
+				xv={x:1,y:0,z:0};
+				xl=1;
+			}
+		}
+		xv={x:xv.x/xl,y:xv.y/xl,z:xv.z/xl};
+		// z = x cross y: the toHead component perpendicular to the beam, so
+		// it faces the viewer by construction.
+		var zv={x:xv.y*y.z-xv.z*y.y,y:xv.z*y.x-xv.x*y.z,z:xv.x*y.y-xv.y*y.x};
+		return {pos:mid,quat:quatFromBasis(xv,y,zv)};
+	}
+	// Redraws a beam's strip texture for the current lit fraction.  The quad
+	// itself NEVER changes size (see setupBeams: fixed BEAM_MAX_LEN_M span) --
+	// on-device testing showed per-frame XRQuadLayer width/height mutation is
+	// not honoured by the compositor (the beam stayed at its creation length
+	// and pierced the menu board past the cursor ring), so the variable
+	// length lives entirely in the texture's alpha: the strip is lit from the
+	// hand end (bottom, v=1) up to the hit fraction and transparent beyond,
+	// with a small glow at the cut so the beam visibly LANDS on the ring.
+	function drawBeamCanvas(res,hand,litFrac)
+	{
+		var canvas=res.canvas;
+		var ctx=res.ctx;
+		var W=canvas.width,H=canvas.height;
+		litFrac=Math.max(0.02,Math.min(1,litFrac));
+		var cutY=H*(1-litFrac); // canvas top = quad +Y = far end.
+		var core=('left'===hand ? '80,220,255' : '255,220,80');
+		ctx.clearRect(0,0,W,H);
+		// Vertical run: soft tip glow at the cut, slightly brighter at the
+		// hand end, transparent above the cut.
+		var grad=ctx.createLinearGradient(0,cutY,0,H);
+		grad.addColorStop(0,'rgba('+core+',0.9)');   // impact end
+		grad.addColorStop(0.12,'rgba('+core+',0.5)');
+		grad.addColorStop(0.9,'rgba('+core+',0.55)');
+		grad.addColorStop(1,'rgba('+core+',0.65)');  // hand end
+		ctx.fillStyle=grad;
+		ctx.fillRect(0,cutY,W,H-cutY);
+		// Soft horizontal edges so the ribbon reads as a beam, not a strip.
+		var hg=ctx.createLinearGradient(0,0,W,0);
+		hg.addColorStop(0,'rgba(0,0,0,0)');
+		hg.addColorStop(0.35,'rgba(0,0,0,1)');
+		hg.addColorStop(0.65,'rgba(0,0,0,1)');
+		hg.addColorStop(1,'rgba(0,0,0,0)');
+		ctx.globalCompositeOperation='destination-in';
+		ctx.fillStyle=hg;
+		ctx.fillRect(0,0,W,H);
+		ctx.globalCompositeOperation='source-over';
+	}
+	function setupBeams()
+	{
+		if(vr.beamRes||!vr.mvBinding||!vr.refSpace)
+		{
+			return; // Layers path only, like the cursor overlay.
+		}
+		var res={};
+		var hands=['right','left'];
+		for(var i=0; i<hands.length; ++i)
+		{
+			var hand=hands[i];
+			var canvas=document.createElement('canvas');
+			canvas.width=8;
+			canvas.height=256;
+			var ctx=canvas.getContext('2d');
+			if(!ctx)
+			{
+				return;
+			}
+			try
+			{
+				var quad=vr.mvBinding.createQuadLayer({
+					space:vr.refSpace,
+					viewPixelWidth:canvas.width,
+					viewPixelHeight:canvas.height,
+					layout:'mono',
+					width:BEAM_WIDTH_M,
+					// FIXED span, never mutated: the compositor does not
+					// honour per-frame width/height writes (see
+					// drawBeamCanvas's doc comment) -- the variable lit
+					// length lives in the texture alpha instead.
+					height:BEAM_MAX_LEN_M,
+					transform:new XRRigidTransform({x:0,y:0,z:0})
+				});
+				try
+				{
+					if('blendTextureSourceAlpha' in quad)
+					{
+						quad.blendTextureSourceAlpha=true;
+					}
+				}
+				catch(e){}
+				res[hand]={quad:quad,canvas:canvas,ctx:ctx,inLayers:false};
+			}
+			catch(e)
+			{
+				console.warn('[vr] menu beam layer failed: '+(e&&e.message?e.message:e));
+				return;
+			}
+		}
+		vr.beamRes=res;
+	}
+	function teardownBeams()
+	{
+		if(vr.beamRes)
+		{
+			try{ if(vr.beamRes.right&&vr.beamRes.right.quad){ vr.beamRes.right.quad.destroy(); } }catch(e){}
+			try{ if(vr.beamRes.left&&vr.beamRes.left.quad){ vr.beamRes.left.quad.destroy(); } }catch(e){}
+		}
+		vr.beamRes=null;
+	}
+	// Called once per onXRFrame.  Shows each hand's beam while the menu is
+	// visible and that hand has a targetRay pose; hides both otherwise.
+	// The beam ends ON the menu PLANE when the ray crosses it in front of
+	// the pilot (even outside the quad's bounds -- a beam piercing the
+	// board reads as broken), and falls back to a fixed length while
+	// pointing elsewhere so the board is findable by sweeping.
+	function updateMenuBeams(frame)
+	{
+		var res=vr.beamRes;
+		if(!res)
+		{
+			return;
+		}
+		var layersChanged=false;
+		var used={right:false,left:false};
+		var menuVisible=!!(vr.menuRes&&vr.menuRes.inLayers&&vr.menuAnchor);
+		if(menuVisible&&vr.refSpace&&vr.lastViewerPose&&vr.session&&vr.session.inputSources)
+		{
+			var aQi=quatConjugate(vr.menuAnchor.quat);
+			var aP=vr.menuAnchor.pos;
+			var sources=vr.session.inputSources;
+			for(var i=0; i<sources.length; ++i)
+			{
+				var src=sources[i];
+				var hand=src.handedness;
+				if(!src.targetRaySpace||('right'!==hand&&'left'!==hand)||!res[hand]||used[hand])
+				{
+					continue;
+				}
+				var rayPose=frame.getPose(src.targetRaySpace,vr.refSpace);
+				if(!rayPose)
+				{
+					continue;
+				}
+				var rp=rayPose.transform.position;
+				var dir=rotateVecByQuat({x:0,y:0,z:-1},rayPose.transform.orientation);
+				// Distance to the menu PLANE (same local-frame math as
+				// intersectRayWithAnchoredQuad, without the bounds check).
+				var len=BEAM_DEFAULT_LEN_M;
+				var roL=rotateVecByQuat({x:rp.x-aP.x,y:rp.y-aP.y,z:rp.z-aP.z},aQi);
+				var rdL=rotateVecByQuat(dir,aQi);
+				if(roL.z>0&&rdL.z<-1e-6)
+				{
+					var t=-roL.z/rdL.z;
+					if(t>0.02)
+					{
+						len=Math.min(t,BEAM_MAX_LEN_M);
+					}
+				}
+				// The lectern keyboard floats 0.35 m in FRONT of the board
+				// plane (anchorKbdQuad): when the ray lands ON its quad the
+				// beam must stop there, not run through the keys to the
+				// board plane behind (round-5 device report: the beam
+				// overshooting what the hand points at reads as "the ray
+				// doesn't land where I aim").  BOUNDED hit only -- the
+				// tilted keyboard PLANE crosses the board region, so an
+				// unbounded cut would truncate beams aimed at the board.
+				if(vr.kbd&&vr.kbd.res&&vr.kbd.res.inLayers&&vr.kbd.anchor)
+				{
+					var ka=vr.kbd.anchor;
+					var kQi=quatConjugate(ka.quat);
+					var kroL=rotateVecByQuat({x:rp.x-ka.pos.x,y:rp.y-ka.pos.y,z:rp.z-ka.pos.z},kQi);
+					var krdL=rotateVecByQuat(dir,kQi);
+					if(kroL.z>0&&krdL.z<-1e-6)
+					{
+						var kt=-kroL.z/krdL.z;
+						var khx=kroL.x+kt*krdL.x;
+						var khy=kroL.y+kt*krdL.y;
+						if(0.02<kt&&kt<len&&Math.abs(khx)<=ka.w/2&&Math.abs(khy)<=ka.h/2)
+						{
+							len=kt;
+						}
+					}
+				}
+				// The quad keeps its FIXED BEAM_MAX_LEN_M span along the ray;
+				// only the texture's lit fraction encodes the length (see
+				// drawBeamCanvas).
+				var bp=beamPoseFor(rp,dir,vr.lastViewerPose.position,BEAM_MAX_LEN_M);
+				if(!bp)
+				{
+					continue;
+				}
+				try
+				{
+					res[hand].quad.transform=new XRRigidTransform(bp.pos,bp.quat);
+					drawBeamCanvas(res[hand],hand,len/BEAM_MAX_LEN_M);
+					var sub=vr.mvBinding.getSubImage(res[hand].quad,frame);
+					uploadCanvasToSubImage(res[hand].canvas,sub);
+					used[hand]=true;
+				}
+				catch(e){}
+			}
+		}
+		var hands=['right','left'];
+		for(var hi=0; hi<hands.length; ++hi)
+		{
+			var h=hands[hi];
+			if(res[h]&&res[h].inLayers!==used[h])
+			{
+				res[h].inLayers=used[h];
+				layersChanged=true;
+			}
+		}
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
+		}
+	}
+
+	// Called once per onXRFrame (after processMenuRayInput has refreshed
+	// menuRayState).  Shows the cursor at the ray hit point while the menu is
+	// visible and a controller ray is on the quad; hides it otherwise.
+	function updateMenuCursor(frame)
+	{
+		var menuVisible=!!(vr.menuRes && vr.menuRes.inLayers);
+		var layersChanged=false;
+		var res=vr.cursorRes;
+		if(!res)
+		{
+			return;
+		}
+		var hands=['right','left'];
+		var show=menuVisible && (menuRayState.hands.right.wasHit||menuRayState.hands.left.wasHit);
+		if(!show)
+		{
+			if(res.inLayers)
+			{
+				res.inLayers=false;
+				layersChanged=true;
+			}
+		}
+		else
+		{
+			res.ctx.clearRect(0,0,res.canvas.width,res.canvas.height);
+			for(var hi=0; hi<hands.length; ++hi)
+			{
+				var hand=hands[hi];
+				var ray=menuRayState.hands[hand];
+				if(ray.wasHit)
+				{
+					var point=cursorOverlayPoint(ray.hitU,ray.hitV,res.canvas.width,res.canvas.height);
+					drawCursorMark(res.ctx,point.x,point.y,hand,res.canvas.width);
+				}
+			}
+			if(!res.inLayers)
+			{
+				res.inLayers=true;
+				layersChanged=true;
+			}
+			try
+			{
+				var sub=vr.mvBinding.getSubImage(res.quad,frame);
+				uploadCanvasToSubImage(res.canvas,sub);
+			}
+			catch(e){}
+		}
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
+		}
+	}
+
+	// Called once per onXRFrame after _YsfwExternalTick().  Checks whether the
+	// engine wrote to the menu FBO this frame (menuDrawn flag), blits the
+	// content into the XRQuadLayer's swapchain texture, and adds/removes the
+	// quad from the session render-state layers list as needed.
+	// Grace window before hiding the menu quad.  The menuDrawn flag is
+	// per-engine-render; the engine now redraws the menu every VR frame
+	// (fsrunloop.cpp NeedRedraw), but a transient skipped tick must not
+	// blink the whole menu out -- the pre-fix on-device symptom was the quad
+	// flickering in and out as the 2D redraw throttle gated menuDrawn.  The
+	// menu FBO keeps the last rendered image, so during the grace window we
+	// just keep compositing it (the copy still runs every presented frame,
+	// per the swapchain-freshness discipline).  8 frames = ~110ms at 72Hz:
+	// long enough to ride out a hiccup, short enough that the quad is gone
+	// before the flight scene fades in after a menu->flight transition.
+	// ---- VR keyboard quad (text input on the menu boards) ------------------
+	// menuData[6] (see fsvr.h) reports that the menu frame the engine just
+	// rendered contains a keyboard-focused text box (the aircraft-select
+	// search box, the lobby user-name box, ...).  Round 1 of this feature
+	// summoned the HEADSET's system keyboard by focusing a hidden DOM
+	// <input> mid-session -- which crashed the Quest browser outright the
+	// moment the lobby's player-name box was clicked (2026-07 device
+	// report), so the DOM route is gone entirely.  Instead the port draws
+	// its OWN keyboard: a world-anchored quad hanging just under the menu
+	// board, typed on with the same controller ray + trigger the menu
+	// itself uses (processKbdRayInput piggybacks on processMenuRayInput's
+	// per-source loop conventions).  Keystrokes reach the engine through
+	// FsPushTextEdit -- the same FsPushKey/FsPushChar pairs a physical
+	// keyboard's window events produce, so FsGuiTextBox sees no difference;
+	// a Bluetooth keyboard keeps working through the untouched window
+	// handlers.  Draw/upload follows the dial quads' hard-won discipline:
+	// canvas repaints are change-driven (hover/shift), the texture upload
+	// runs every presented frame (see updateDialLayers' stale-face
+	// post-mortem for why the upload must NOT sit behind the repaint gate).
+	var KBD_CANVAS_W=576,KBD_CANVAS_H=240;
+	var KBD_COLS=12,KBD_ROWS=5;
+	var KBD_HIDE_GRACE=8; // frames; same transient-gap tolerance as the menu quad.
+	// Grid layout: w in columns (default 1); ch types that character (shift
+	// uppercases letters), act names a FsPushTextEdit action or the local
+	// shift toggle.  ASCII-only by design -- engine text boxes are
+	// byte-charset (user names, aircraft-name search).
+	var KBD_LAYOUT=[
+		[{ch:'1'},{ch:'2'},{ch:'3'},{ch:'4'},{ch:'5'},{ch:'6'},{ch:'7'},{ch:'8'},{ch:'9'},{ch:'0'},{ch:'-'},{act:'bs',label:'\u232b'}],
+		[{ch:'q'},{ch:'w'},{ch:'e'},{ch:'r'},{ch:'t'},{ch:'y'},{ch:'u'},{ch:'i'},{ch:'o'},{ch:'p'},{ch:'_'},{ch:'.'}],
+		[{ch:'a'},{ch:'s'},{ch:'d'},{ch:'f'},{ch:'g'},{ch:'h'},{ch:'j'},{ch:'k'},{ch:'l'},{act:'enter',label:'OK',w:3}],
+		[{act:'shift',label:'\u21e7',w:2},{ch:'z'},{ch:'x'},{ch:'c'},{ch:'v'},{ch:'b'},{ch:'n'},{ch:'m'},{act:'left',label:'\u2190'},{act:'right',label:'\u2192'}],
+		[{ch:' ',label:'space',w:12}]
+	];
+	function kbdState()
+	{
+		if(!vr.kbd)
+		{
+			vr.kbd={res:undefined,anchor:null,anchorFrom:null,idleFrames:1e9,shift:false,
+				hover:{right:-1,left:-1},prevTrig:{right:false,left:false},
+				cursor:{right:null,left:null},
+				drawnKey:null,keys:null,stats:{chars:0,edits:0}};
+		}
+		return vr.kbd;
+	}
+	// Flattened key rects in canvas pixels, computed once: {x,y,w,h,def}.
+	function kbdKeyRects()
+	{
+		var st=kbdState();
+		if(st.keys)
+		{
+			return st.keys;
+		}
+		var cellW=KBD_CANVAS_W/KBD_COLS,cellH=KBD_CANVAS_H/KBD_ROWS;
+		var keys=[];
+		for(var r=0; r<KBD_LAYOUT.length; ++r)
+		{
+			var row=KBD_LAYOUT[r],c=0;
+			for(var i=0; i<row.length; ++i)
+			{
+				var def=row[i],w=def.w||1;
+				keys.push({x:c*cellW,y:r*cellH,w:w*cellW,h:cellH,def:def});
+				c+=w;
+			}
+		}
+		st.keys=keys;
+		return keys;
+	}
+	// Canvas-pixel point -> key index, or -1.  Same y-down convention as
+	// menuUvToPixel (quad UV v=0 is the canvas top row).
+	function kbdHitKey(px,py)
+	{
+		var keys=kbdKeyRects();
+		for(var i=0; i<keys.length; ++i)
+		{
+			var k=keys[i];
+			if(k.x<=px&&px<k.x+k.w&&k.y<=py&&py<k.y+k.h)
+			{
+				return i;
+			}
+		}
+		return -1;
+	}
+	function kbdKeyLabel(def,shift)
+	{
+		if(def.label)
+		{
+			return def.label;
+		}
+		var ch=def.ch||'';
+		return (shift ? ch.toUpperCase() : ch);
+	}
+	function kbdDispatchKey(i)
+	{
+		var st=kbdState();
+		var keys=kbdKeyRects();
+		if(i<0||keys.length<=i)
+		{
+			return;
+		}
+		var def=keys[i].def;
+		switch(def.act||'char')
+		{
+		case 'char':
+			var ch=(st.shift ? (def.ch||'').toUpperCase() : (def.ch||''));
+			if(ch)
+			{
+				_FsPushTextEdit(0,ch.charCodeAt(0));
+				++st.stats.chars;
+			}
+			break;
+		case 'bs':    _FsPushTextEdit(1,0); ++st.stats.edits; break;
+		case 'enter': _FsPushTextEdit(2,0); ++st.stats.edits; break;
+		case 'left':  _FsPushTextEdit(4,0); ++st.stats.edits; break;
+		case 'right': _FsPushTextEdit(5,0); ++st.stats.edits; break;
+		case 'shift': st.shift=!st.shift; break;
+		}
+	}
+	function drawKbd(ctx)
+	{
+		var st=kbdState();
+		var keys=kbdKeyRects();
+		ctx.clearRect(0,0,KBD_CANVAS_W,KBD_CANVAS_H);
+		ctx.fillStyle='rgba(10,16,20,0.92)';
+		roundRectPath(ctx,0,0,KBD_CANVAS_W,KBD_CANVAS_H,10);
+		ctx.fill();
+		ctx.textAlign='center';
+		ctx.textBaseline='middle';
+		for(var i=0; i<keys.length; ++i)
+		{
+			var k=keys[i];
+			var hovered=(i===st.hover.right||i===st.hover.left);
+			var shiftOn=('shift'===k.def.act&&st.shift);
+			roundRectPath(ctx,k.x+3,k.y+3,k.w-6,k.h-6,6);
+			ctx.fillStyle=(hovered ? 'rgba(255,214,64,0.92)' : (shiftOn ? 'rgba(120,180,255,0.40)' : 'rgba(230,237,243,0.12)'));
+			ctx.fill();
+			ctx.fillStyle=(hovered ? '#20232a' : '#dff2e8');
+			var label=kbdKeyLabel(k.def,st.shift);
+			ctx.font=(1<label.length ? '16px' : '21px')+' system-ui,sans-serif';
+			ctx.fillText(label,k.x+k.w/2,k.y+k.h/2+1);
+		}
+		// Aim cursors: a ring at each hand's exact ray hit, same affordance
+		// as the menu board's cursor overlay -- the key highlight alone read
+		// as "can't tell where I'm pointing" on device.
+		var hands=['right','left'];
+		for(var c2=0; c2<hands.length; ++c2)
+		{
+			var cur=st.cursor[hands[c2]];
+			if(cur)
+			{
+				ctx.beginPath();
+				ctx.arc(cur.x,cur.y,7,0,2*Math.PI);
+				ctx.lineWidth=3;
+				ctx.strokeStyle=('right'===hands[c2] ? 'rgba(255,214,64,0.95)' : 'rgba(102,204,255,0.95)');
+				ctx.stroke();
+				ctx.beginPath();
+				ctx.arc(cur.x,cur.y,1.5,0,2*Math.PI);
+				ctx.fillStyle='#ffffff';
+				ctx.fill();
+			}
+		}
+	}
+	function kbdQuadSize()
+	{
+		// Match the menu board's width so the pair reads as one console;
+		// height follows the canvas aspect.
+		var w=((vr.menuRes&&vr.menuRes.quadW) ? vr.menuRes.quadW : 1.2)*0.92;
+		return {w:w,h:w*(KBD_CANVAS_H/KBD_CANVAS_W)};
+	}
+	function ensureKbdResources()
+	{
+		var st=kbdState();
+		if(undefined!==st.res)
+		{
+			return st.res; // cached: an object, or false (unavailable).
+		}
+		var res=false;
+		try
+		{
+			var canvas=document.createElement('canvas');
+			canvas.width=KBD_CANVAS_W;
+			canvas.height=KBD_CANVAS_H;
+			var quad=null;
+			if(vr.mvBinding&&vr.refSpace)
+			{
+				var sz=kbdQuadSize();
+				quad=vr.mvBinding.createQuadLayer({
+					space:vr.refSpace,
+					viewPixelWidth:KBD_CANVAS_W,
+					viewPixelHeight:KBD_CANVAS_H,
+					layout:'mono',
+					width:sz.w,
+					height:sz.h
+				});
+				try{ if('blendTextureSourceAlpha' in quad){ quad.blendTextureSourceAlpha=true; } }catch(e){}
+			}
+			else if(!vr.testMode)
+			{
+				st.res=false;
+				return false; // No layers support and not in the headless harness.
+			}
+			res={canvas:canvas,ctx:canvas.getContext('2d'),quad:quad,inLayers:false};
+		}
+		catch(e)
+		{
+			console.warn('[vr] keyboard quad unavailable: '+(e&&e.message?e.message:e));
+			res=false;
+		}
+		st.res=res;
+		return res;
+	}
+	function anchorKbdQuad()
+	{
+		var st=kbdState();
+		if(!st.res||!vr.menuAnchor||!vr.menuRes)
+		{
+			return;
+		}
+		if(st.anchorFrom===vr.menuAnchor)
+		{
+			return; // Still anchored to the current menu anchor (identity check:
+			        // anchorMenuQuad replaces the object on every re-anchor).
+		}
+		var menuH=vr.menuRes.quadH||0.7;
+		var sz=kbdQuadSize();
+		// The menu anchor is yaw-only, so its local -Y is world down.  Hang
+		// the keyboard under the board's bottom edge, pulled 0.35 m toward
+		// the viewer and tilted back 30 deg like a lectern -- the coplanar
+		// round-1 placement put a vertical slab low in the view, which read
+		// as hard to aim at on device.  The ray hit-test uses this same
+		// pose (st.anchor), so typing and visuals cannot drift.
+		var fwd=rotateVecByQuat({x:0,y:0,z:1},vr.menuAnchor.quat); // local +Z = toward the viewer
+		var tilt=quatMultiply(vr.menuAnchor.quat,quatFromAxisAngle({x:1,y:0,z:0},-30*Math.PI/180));
+		var pos={
+			x:vr.menuAnchor.pos.x+fwd.x*0.35,
+			y:vr.menuAnchor.pos.y-(menuH/2+sz.h/2),
+			z:vr.menuAnchor.pos.z+fwd.z*0.35
+		};
+		st.anchor={pos:pos,quat:tilt,w:sz.w,h:sz.h};
+		st.anchorFrom=vr.menuAnchor;
+		if(st.res.quad)
+		{
+			try{ st.res.quad.transform=new XRRigidTransform(pos,tilt); }catch(e){}
+		}
+	}
+	// System-keyboard route: RETIRED after the round-5 device test.  The
+	// ?vrkbd=sys experiment requested the dom-overlay session feature (the
+	// supported precondition for summoning the Quest system keyboard -- DOM
+	// focus withOUT it is what crashed the browser outright in round 1),
+	// but the Quest Browser never granted it for this immersive-vr layers
+	// session: session.domOverlayState stayed null and the port-drawn quad
+	// took over every time (round-5 device report).  The quad keyboard
+	// below is therefore THE text-input path, not a fallback.
+	//
+	// Per-frame keyboard maintenance, called from updateMenuLayer (so it
+	// only runs in menu contexts).  Returns true when the layers list
+	// changed so the caller folds it into its own syncRenderStateLayers.
+	function updateKbdLayer(frame,menuVisible)
+	{
+		var st=kbdState();
+		var p=_YsfwVrMenuDataPointer()>>2;
+		if(menuVisible&&0!==HEAPF32[p+6])
+		{
+			st.idleFrames=0;
+		}
+		else
+		{
+			++st.idleFrames;
+		}
+		var visible=(st.idleFrames<=KBD_HIDE_GRACE);
+		var res=(visible ? ensureKbdResources() : st.res);
+		if(!res)
+		{
+			return false;
+		}
+		var layersChanged=false;
+		if(visible&&!res.inLayers&&res.quad)
+		{
+			res.inLayers=true;
+			st.drawnKey=null; // Force a repaint on (re)appearance.
+			layersChanged=true;
+		}
+		else if(!visible&&res.inLayers)
+		{
+			res.inLayers=false;
+			st.hover.right=-1;
+			st.hover.left=-1;
+			layersChanged=true;
+		}
+		if(visible)
+		{
+			anchorKbdQuad();
+			// Quantize the cursor rings to 3px so aim feedback repaints
+			// smoothly without repainting on sub-pixel jitter every frame.
+			var cq=function(c){ return (c ? Math.round(c.x/3)+','+Math.round(c.y/3) : '-'); };
+			var key=st.hover.right+'|'+st.hover.left+'|'+(st.shift?1:0)+'|'+cq(st.cursor.right)+'|'+cq(st.cursor.left);
+			if(key!==st.drawnKey&&res.ctx)
+			{
+				try
+				{
+					drawKbd(res.ctx);
+					st.drawnKey=key;
+				}
+				catch(e){}
+			}
+			// Upload every presented frame regardless of the repaint gate --
+			// see updateDialLayers' stale-face post-mortem.
+			if(res.quad&&res.inLayers&&frame)
+			{
+				try
+				{
+					var sub=vr.mvBinding.getSubImage(res.quad,frame);
+					uploadCanvasToSubImage(res.canvas,sub);
+				}
+				catch(e){}
+			}
+		}
+		return layersChanged;
+	}
+	// Ray hover + trigger typing, called unconditionally from
+	// processMenuRayInput once the per-hand menu hits are known (a hand
+	// pointing at the menu board cannot simultaneously type -- the board
+	// wins that hand; since the lectern pose the two quads are no longer
+	// coplanar, but the board hangs entirely above the keyboard so a ray
+	// still lands on at most one of them).
+	function processKbdRayInput(frame,menuHits)
+	{
+		var st=kbdState();
+		var res=st.res;
+		if(!res||!res.inLayers||!st.anchor)
+		{
+			st.hover.right=-1;
+			st.hover.left=-1;
+			st.cursor.right=null;
+			st.cursor.left=null;
+			return;
+		}
+		var sources=frame.session.inputSources;
+		var seen={right:false,left:false};
+		for(var i=0; i<sources.length; ++i)
+		{
+			var src=sources[i];
+			if(!src.targetRaySpace)
+			{
+				continue;
+			}
+			var hand=src.handedness;
+			if(hand!=='right'&&hand!=='left')
+			{
+				continue;
+			}
+			if(seen[hand])
+			{
+				continue;
+			}
+			seen[hand]=true;
+			var hover=-1,trig=false,cursor=null;
+			if(!menuHits[hand])
+			{
+				var rayPose=frame.getPose(src.targetRaySpace,vr.refSpace);
+				if(rayPose)
+				{
+					var hit=intersectRayWithAnchoredQuad(
+						rayPose.transform.position,rayPose.transform.orientation,
+						st.anchor.pos,st.anchor.quat,st.anchor.w,st.anchor.h);
+					if(hit)
+					{
+						var px=hit.u*KBD_CANVAS_W,py=hit.v*KBD_CANVAS_H;
+						hover=kbdHitKey(px,py);
+						cursor={x:px,y:py};
+						var gp=src.gamepad;
+						trig=!!(gp&&gp.buttons[0]&&gp.buttons[0].value>0.5);
+					}
+				}
+			}
+			st.hover[hand]=hover;
+			st.cursor[hand]=cursor;
+			if(trig&&!st.prevTrig[hand]&&0<=hover)
+			{
+				kbdDispatchKey(hover);
+				vrHapticPulse(src);
+			}
+			st.prevTrig[hand]=trig;
+		}
+		// A controller that dropped out of inputSources (tracking loss,
+		// sleep) never reaches the loop above: clear its remembered hover/
+		// cursor so a stale highlight cannot survive (device symptom: a key
+		// stuck yellow while neither beam pointed at the board).
+		var allHands=['right','left'];
+		for(var h3=0; h3<allHands.length; ++h3)
+		{
+			if(!seen[allHands[h3]])
+			{
+				st.hover[allHands[h3]]=-1;
+				st.cursor[allHands[h3]]=null;
+			}
+		}
+	}
+	function teardownKbd()
+	{
+		if(!vr.kbd)
+		{
+			return;
+		}
+		var res=vr.kbd.res;
+		if(res&&res.quad)
+		{
+			try{ res.quad.destroy(); }catch(e){}
+		}
+		vr.kbd=null;
+	}
+
+	var MENU_HIDE_GRACE=8;
+	var UNSUPPORTED_VR_GRACE=45; // ~0.63s at 72Hz: enough for menu/flight transitions.
+	function updateMenuLayer(frame)
+	{
+		if(!vr.menuRes)
+		{
+			// If the menu FBO failed but the sky layer exists, cover a non-flight
+			// entry while the watchdog prepares to return to 2D.  This avoids
+			// presenting a frozen, head-following projection texture even during
+			// the short failure grace window.
+			if(updateSkyLayer(frame,!globalThis.ysfwInFlight))
+			{
+				syncRenderStateLayers();
+			}
+			return;
+		}
+		var p=_YsfwVrMenuDataPointer()>>2;
+		var menuDrawn=(0!==HEAPF32[p+5]);
+		HEAPF32[p+5]=0;
+
+		if(menuDrawn)
+		{
+			vr.menuIdleFrames=0;
+		}
+		else
+		{
+			++vr.menuIdleFrames;
+		}
+		// menuIdleFrames starts (and resets to) a huge value, so the quad can
+		// only appear after the engine has actually rendered the menu once --
+		// never as an uninitialized-FBO square at session start mid-flight.
+		var menuVisible=(vr.menuIdleFrames<=MENU_HIDE_GRACE);
+
+		var layersChanged=false;
+
+		if(updateKbdLayer(frame,menuVisible))
+		{
+			layersChanged=true;
+		}
+
+		if(menuVisible)
+		{
+			// Anchor (or re-anchor after vrRecenter) the menu quad in world
+			// space whenever it is visible without an anchor.  Rising edge
+			// (first show) and post-recenter recovery both hit this path.
+			if(!vr.menuAnchor)
+			{
+				anchorMenuQuad(vr.lastViewerPose);
+			}
+			if(!vr.menuRes.inLayers)
+			{
+				vr.menuRes.inLayers=true;
+				layersChanged=true;
+			}
+			if(vr.menuRes.quad)
+			{
+				try
+				{
+					var sub=vr.mvBinding.getSubImage(vr.menuRes.quad,frame);
+					// Honour the sub-image viewport (see
+					// uploadCanvasToSubImage's identical fix): a packed
+					// allocator hands this layer a rectangle INSIDE a shared
+					// texture, and a copy pinned to (0,0) overwrites whichever
+					// layer owns the corner -- the on-device "second phantom
+					// menu quad" corruption.
+					var mvp=(sub&&sub.viewport)?sub.viewport:null;
+					var mdx=(mvp?mvp.x:0),mdy=(mvp?mvp.y:0);
+					var mcw=(mvp?Math.min(vr.menuRes.w,mvp.width):vr.menuRes.w);
+					var mch=(mvp?Math.min(vr.menuRes.h,mvp.height):vr.menuRes.h);
+					if(mvp&&(mvp.x!==0||mvp.y!==0||mvp.width!==vr.menuRes.w||mvp.height!==vr.menuRes.h))
+					{
+						reportSubImageViewport(mvp,vr.menuRes.w,vr.menuRes.h);
+					}
+					var prevReadFb=GLctx.getParameter(GLctx.READ_FRAMEBUFFER_BINDING);
+					GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,vr.menuRes.fb);
+					GLctx.bindTexture(GLctx.TEXTURE_2D,sub.colorTexture);
+					GLctx.copyTexSubImage2D(GLctx.TEXTURE_2D,0,mdx,mdy,0,0,mcw,mch);
+					GLctx.bindTexture(GLctx.TEXTURE_2D,null);
+					GLctx.bindFramebuffer(GLctx.READ_FRAMEBUFFER,prevReadFb);
+				}
+				catch(e){}
+			}
+		}
+		else if(vr.menuRes.inLayers)
+		{
+			vr.menuRes.inLayers=false;
+			vr.menuAnchor=null; // Clear so next show re-anchors fresh.
+			layersChanged=true;
+		}
+
+		// Sky equirect tracks menu visibility (grace window included).  It also
+		// covers any non-flight/non-menu entry during the short auto-exit grace,
+		// hiding the stale projection texture that otherwise follows the head.
+		// drives its own inLayers and upload, returns true if inLayers changed
+		// (we OR into layersChanged so the single syncRenderStateLayers call
+		// below covers both).
+		if(updateSkyLayer(frame,menuVisible||!globalThis.ysfwInFlight))
+		{
+			layersChanged=true;
+		}
+
+		if(layersChanged)
+		{
+			syncRenderStateLayers();
+		}
+	}
+
+	// Reads back the mean RGBA of the menu FBO -- used by smoke-vrmenu.mjs to
+	// prove the engine actually drew into it.  Uses the plain FRAMEBUFFER
+	// target, NOT READ_FRAMEBUFFER: the CI runner's fallback context is
+	// WebGL1 (no separate read/draw targets -- READ_FRAMEBUFFER is
+	// INVALID_ENUM there), and on WebGL2 binding FRAMEBUFFER sets both, so
+	// readPixels works either way.
+	vr.readMenuStats=function()
+	{
+		if(!vr.menuRes)
+		{
+			return {alpha:0,lum:0};
+		}
+		var rfb=GLctx.createFramebuffer();
+		var prev=GLctx.getParameter(GLctx.FRAMEBUFFER_BINDING);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,rfb);
+		GLctx.framebufferTexture2D(GLctx.FRAMEBUFFER,GLctx.COLOR_ATTACHMENT0,GLctx.TEXTURE_2D,vr.menuRes.tex,0);
+		var W=vr.menuRes.w, H=vr.menuRes.h;
+		// sample a 16x16 grid to stay fast even at full canvas resolution
+		var step=Math.max(1,Math.floor(Math.min(W,H)/16));
+		var wS=Math.ceil(W/step), hS=Math.ceil(H/step);
+		var px=new Uint8Array(wS*hS*4);
+		GLctx.readPixels(0,0,wS,hS,GLctx.RGBA,GLctx.UNSIGNED_BYTE,px);
+		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,prev);
+		GLctx.deleteFramebuffer(rfb);
+		var sumA=0, sumL=0;
+		for(var i=0; i<px.length; i+=4)
+		{
+			sumA+=px[i+3];
+			sumL+=0.299*px[i]+0.587*px[i+1]+0.114*px[i+2];
+		}
+		var n=px.length/4;
+		return {alpha:sumA/n, lum:sumL/n};
+	};
+
+	vr.readMenuData=function()
+	{
+		var p=_YsfwVrMenuDataPointer()>>2;
+		var out=[];
+		for(var i=0; i<8; ++i){ out.push(HEAPF32[p+i]); }
+		return out;
+	};
+	// Test-only write access (scripts/smoke-vrmenu.mjs's text-bridge group
+	// fakes the engine's menuData[6] focus flag): page contexts cannot reach
+	// HEAPF32 directly (not in EXPORTED_RUNTIME_METHODS).
+	vr.pokeMenuData=function(i,v)
+	{
+		HEAPF32[(_YsfwVrMenuDataPointer()>>2)+i]=v;
+	};
+
+	// One visual cursor per hand plus one arbitrated engine-mouse owner.
+	// hitU/hitV are the menu UV coordinates shared by cursor and mouse. Both hands
+	// stay visible; whichever hand presses trigger takes mouse ownership, and
+	// an in-progress drag keeps ownership until release/leave.  Deliberately
+	// moving the other hand transfers hover ownership without requiring a click.
+	function makeMenuRayHandState()
+	{
+		return {wasHit:false,hitU:0,hitV:0,prevTrig:false};
+	}
+	var menuRayState={activeHand:null,prevMx:-1,prevMy:-1,prevTrig:false,
+		hands:{right:makeMenuRayHandState(),left:makeMenuRayHandState()}};
+	function resetMenuRayState()
+	{
+		menuRayState.activeHand=null;
+		menuRayState.prevMx=-1;
+		menuRayState.prevMy=-1;
+		menuRayState.prevTrig=false;
+		menuRayState.hands={right:makeMenuRayHandState(),left:makeMenuRayHandState()};
+	}
+	function chooseMenuRayHand(hits,activeHand,mouseDown,previousTriggers,movedHands)
+	{
+		// Never let the other hand steal an active drag.
+		if(mouseDown && activeHand && hits[activeHand])
+		{
+			return activeHand;
+		}
+		// A fresh trigger edge explicitly claims ownership.  Check the current
+		// owner first only when both hands press on the same frame.
+		var order=(activeHand==='left' ? ['left','right'] : ['right','left']);
+		for(var i=0; i<order.length; ++i)
+		{
+			var hand=order[i];
+			if(hits[hand] && hits[hand].trig && !previousTriggers[hand])
+			{
+				return hand;
+			}
+		}
+		// When both rays remain on the menu, make the hand the pilot actually
+		// moved own hover.  Ignore sub-threshold controller jitter; if both moved
+		// together, retaining the current owner is the least surprising result.
+		movedHands=movedHands||{};
+		if(!!movedHands.right!==!!movedHands.left)
+		{
+			var moved=movedHands.right ? 'right' : 'left';
+			if(hits[moved])
+			{
+				return moved;
+			}
+		}
+		// Otherwise keep hover ownership stable while that ray remains on the
+		// menu; if it left, fall back to whichever hand still hits.
+		if(activeHand && hits[activeHand])
+		{
+			return activeHand;
+		}
+		return hits.right ? 'right' : (hits.left ? 'left' : null);
+	}
+	function menuUvToPixel(u,v,texW,texH)
+	{
+		return {
+			x:Math.round(Math.max(0,Math.min(1,u))*Math.max(0,texW-1)),
+			y:Math.round(Math.max(0,Math.min(1,v))*Math.max(0,texH-1))
+		};
+	}
+	// Pure ray-vs-anchored-quad intersection (no XR/session state) so
+	// headless tests can drive it -- same pattern as
+	// vr.yawOnlyQuatFromOrientation.  Inputs: ray origin/orientation
+	// ({x,y,z} / {x,y,z,w}) and the quad anchor pose, all in the SAME
+	// (reference) space, plus the quad's metric size.  Returns null when
+	// the ray misses, or {u,v,localX,localY} on the visible (+Z) face:
+	// u/v in [0,1] with v=0 at the TOP edge (texture convention), localX/
+	// localY in quad-local metres (for cursor placement).
+	// Backface and behind-origin hits are rejected: the ray must originate
+	// on the quad's +Z side and travel toward -Z.
+	function intersectRayWithAnchoredQuad(rayPos,rayQuat,anchorPos,anchorQuat,quadW,quadH)
+	{
+		var aQuatInv=quatConjugate(anchorQuat);
+		var roLocal=rotateVecByQuat(
+			{x:rayPos.x-anchorPos.x,y:rayPos.y-anchorPos.y,z:rayPos.z-anchorPos.z},
+			aQuatInv);
+		var worldDir=rotateVecByQuat({x:0,y:0,z:-1},rayQuat);
+		var rdLocal=rotateVecByQuat(worldDir,aQuatInv);
+		// Visible face is local z=0 seen from +Z: require the origin in
+		// front and the ray heading into the plane (backface exclusion).
+		if(roLocal.z<=0 || rdLocal.z>=-1e-6)
+		{
+			return null;
+		}
+		var t=-roLocal.z/rdLocal.z;
+		var hx=roLocal.x+t*rdLocal.x;
+		var hy=roLocal.y+t*rdLocal.y;
+		var u=(hx+quadW/2)/quadW;
+		var v=(quadH/2-hy)/quadH; // top=0, bottom=1
+		if(u<0||u>1||v<0||v>1)
+		{
+			return null;
+		}
+		return {u:u,v:v,localX:hx,localY:hy};
+	}
+	// Projects each controller's aim ray onto the menu quad (anchored in
+	// vr.refSpace) and injects a mouse-move event + left-button edge into
+	// the engine via YsfwInjectMouseEvent.  Only active while the menu quad
+	// is being shown (menuVisible, checked at call site).
+	//
+	// Menu quad geometry (quad-LOCAL space; quad face in the XY plane):
+	//   centre = (0, 0);  width = 1.6m;  height = 1.6*H/W
+	//   visible face: the +Z side (viewer is at local +Z).
+	//
+	// The ray is fetched in vr.refSpace and intersected with the quad via
+	// intersectRayWithAnchoredQuad (see above for the math), so the
+	// intersection stays correct when the head moves independently of the
+	// anchored quad.
+	//
+	// Per-hand wasHit / hitU / hitV feed both rings in the cursor overlay. The
+	// engine still receives a single mouse stream, chosen by
+	// chooseMenuRayHand (fresh trigger edges can claim it from either hand).
+	function processMenuRayInput(frame)
+	{
+		if(!vr.menuRes||!vr.refSpace||!vr.menuAnchor)
+		{
+			return;
+		}
+		var p=_YsfwVrMenuDataPointer()>>2;
+		var texW=HEAPF32[p+3];
+		var texH=HEAPF32[p+4];
+		if(texW<=0||texH<=0)
+		{
+			return;
+		}
+
+		var quadW=vr.menuRes.quadW||MENU_QUAD_WIDTH_M;
+		var quadH=vr.menuRes.quadH||menuQuadMetricSize(texW,texH).h;
+
+		var aPos=vr.menuAnchor.pos;
+		var aQuat=vr.menuAnchor.quat;
+
+		var sources=frame.session.inputSources;
+		var hits={right:null,left:null};
+		var movedHands={right:false,left:false};
+		var hands=['right','left'];
+		var previousHit={
+			right:(menuRayState.hands.right.wasHit ? {u:menuRayState.hands.right.hitU,v:menuRayState.hands.right.hitV} : null),
+			left:(menuRayState.hands.left.wasHit ? {u:menuRayState.hands.left.hitU,v:menuRayState.hands.left.hitV} : null)
+		};
+		for(var h0=0; h0<hands.length; ++h0)
+		{
+			menuRayState.hands[hands[h0]].wasHit=false;
+		}
+		for(var i=0; i<sources.length; ++i)
+		{
+			var src=sources[i];
+			if(!src.targetRaySpace)
+			{
+				continue;
+			}
+			var hand=src.handedness;
+			if(hand!=='right'&&hand!=='left')
+			{
+				// Best effort for controllers that omit handedness: assign the
+				// first two sources deterministically so they still remain usable.
+				hand=hits.right ? 'left' : 'right';
+			}
+			if(hits[hand])
+			{
+				continue;
+			}
+			// Ray in refSpace.
+			var rayPose=frame.getPose(src.targetRaySpace,vr.refSpace);
+			if(!rayPose)
+			{
+				continue;
+			}
+			var hit=intersectRayWithAnchoredQuad(
+				rayPose.transform.position,rayPose.transform.orientation,
+				aPos,aQuat,quadW,quadH);
+			if(!hit)
+			{
+				continue;
+			}
+			// Trigger button = left mouse click.
+			var gp=src.gamepad;
+			var pixel=menuUvToPixel(hit.u,hit.v,texW,texH);
+			var rec={
+				mx:pixel.x,
+				my:pixel.y,
+				trig:!!(gp && gp.buttons[0] && gp.buttons[0].value>0.5),
+				u:hit.u,v:hit.v
+			};
+			hits[hand]=rec;
+			var old=previousHit[hand];
+			movedHands[hand]=(!old || 0.002<Math.abs(hit.u-old.u)+Math.abs(hit.v-old.v));
+			menuRayState.hands[hand].wasHit=true;
+			menuRayState.hands[hand].hitU=hit.u;
+			menuRayState.hands[hand].hitV=hit.v;
+		}
+
+		// If a dragging hand left the quad, release at its LAST valid pixel
+		// before considering the other hand.  This prevents a stuck button and
+		// avoids relocating the UP edge to the other cursor.
+		if(menuRayState.prevTrig && menuRayState.activeHand && !hits[menuRayState.activeHand])
+		{
+			_YsfwInjectMouseEvent(3,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
+			menuRayState.prevTrig=false;
+			menuRayState.activeHand=null;
+		}
+
+		// Feed the keyboard BEFORE the menu decides whether any hand owns
+		// the mouse: this call used to sit at the TAIL of this function,
+		// after an early return taken whenever NO hand was on the board --
+		// which is exactly the normal typing posture (both rays down on the
+		// lectern keys), so on device the keys never hovered, never
+		// clicked, and a stale highlight could freeze (round-5 report:
+		// "aim still broken").  Hands currently over the menu are excluded
+		// inside (the board wins a hand that is on it).
+		processKbdRayInput(frame,hits);
+
+		var previousTriggers={
+			right:menuRayState.hands.right.prevTrig,
+			left:menuRayState.hands.left.prevTrig
+		};
+		var chosen=chooseMenuRayHand(hits,menuRayState.activeHand,menuRayState.prevTrig,previousTriggers,movedHands);
+		if(!chosen)
+		{
+			// No controller hit the menu this frame.  Preserve the engine's last
+			// hover coordinate (there is no mouse coordinate meaning "nowhere").
+			if(menuRayState.activeHand)
+			{
+				_YsfwInjectMouseEvent(1,0,0,0,menuRayState.prevMx,menuRayState.prevMy);
+			}
+			menuRayState.activeHand=null;
+			menuRayState.prevTrig=false;
+			for(var h1=0; h1<hands.length; ++h1)
+			{
+				var hh1=hands[h1];
+				menuRayState.hands[hh1].prevTrig=!!(hits[hh1]&&hits[hh1].trig);
+			}
+			return;
+		}
+		var selected=hits[chosen];
+		menuRayState.activeHand=chosen;
+
+		// Inject mouse move.
+		if(selected.mx!==menuRayState.prevMx||selected.my!==menuRayState.prevMy||selected.trig!==menuRayState.prevTrig)
+		{
+			// eventType: 1=FSMOUSEEVENT_MOVE, 2=FSMOUSEEVENT_LBUTTONDOWN, 3=FSMOUSEEVENT_LBUTTONUP
+			var lb=(selected.trig ? 1 : 0);
+			var evtType;
+			if(selected.trig&&!menuRayState.prevTrig)
+			{
+				evtType=2; // left button down
+			}
+			else if(!selected.trig&&menuRayState.prevTrig)
+			{
+				evtType=3; // left button up
+			}
+			else
+			{
+				evtType=1; // move
+			}
+			_YsfwInjectMouseEvent(evtType,lb,0,0,selected.mx,selected.my);
+			menuRayState.prevMx=selected.mx;
+			menuRayState.prevMy=selected.my;
+			menuRayState.prevTrig=selected.trig;
+		}
+		for(var h2=0; h2<hands.length; ++h2)
+		{
+			var hh2=hands[h2];
+			menuRayState.hands[hh2].prevTrig=!!(hits[hh2]&&hits[hh2].trig);
+		}
+	}
+
 	// Reads back [dialogVisible,apMenu] from the GUI state block -- cheap,
 	// polled once per controller-update frame (see processControllerPlain)
 	// to decide whether hand-controller input should route to the dialog
@@ -1319,6 +3031,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		// Unit quaternion: conjugate == inverse.
 		return {x:-q.x,y:-q.y,z:-q.z,w:q.w};
+	}
+	function quatFromAxisAngle(axis,rad)
+	{
+		var s=Math.sin(rad/2);
+		return {x:axis.x*s,y:axis.y*s,z:axis.z*s,w:Math.cos(rad/2)};
 	}
 	function rotateVecByQuat(v,q)
 	{
@@ -1579,6 +3296,34 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			console.warn('[vr] recenter failed: '+(e&&e.message?e.message:e));
 			return;
+		}
+		// Layers created with space:vr.refSpace keep a reference to the OLD
+		// offset-space OBJECT -- the reassignment above does not follow.
+		// Left stale, every world-anchored layer renders displaced by
+		// exactly the recenter delta while ray/controller math uses the new
+		// space (on-device symptom: menu-ray hits landing offset from where
+		// the controller points after a recenter).  Re-point them all.
+		var rebind=[
+			vr.menuRes&&vr.menuRes.quad,
+			vr.cursorRes&&vr.cursorRes.quad,
+			vr.skyRes&&vr.skyRes.layer,
+			vr.helpRes.right&&vr.helpRes.right.quad,
+			vr.helpRes.left&&vr.helpRes.left.quad,
+			vr.beamRes&&vr.beamRes.right&&vr.beamRes.right.quad,
+			vr.beamRes&&vr.beamRes.left&&vr.beamRes.left.quad
+		];
+		for(var ri=0; ri<rebind.length; ++ri)
+		{
+			if(rebind[ri])
+			{
+				try{ rebind[ri].space=vr.refSpace; }catch(e){}
+			}
+		}
+		// If the menu is currently showing, clear the anchor so it re-
+		// positions relative to the new refSpace on the very next frame.
+		if(vr.menuRes&&vr.menuRes.inLayers)
+		{
+			vr.menuAnchor=null;
 		}
 		vrHapticPulse(vr.lastRawSrc.right);
 		setTimeout(function(){ vrHapticPulse(vr.lastRawSrc.right); },120);
@@ -1891,6 +3636,121 @@ EM_JS(void,YsfwInstallWebXR,(),
 	function processControllerPlain(entry,viewerQuat,rawSrc)
 	{
 		var ptr=_YsfwVrControlDataPointer()>>2;
+		// True while the main-menu quad is being shown: B/Y dispatch ESC so the
+		// pilot can navigate back, and flight-control inputs (stick/throttle/
+		// trigger/dial) are suppressed -- the menu uses ray-to-mouse injection
+		// instead (see processMenuRayInput/YsfwInjectMouseEvent).
+		var menuVisible=!!(vr.menuRes&&vr.menuRes.inLayers);
+		// Menu routing MUST run before either hand's normal flight branch.  The
+		// old right-hand path did not test menuVisible until after its stick,
+		// dial and trigger logic.  A right trigger therefore injected BOTH the
+		// ray's mouse click and RIGHT_DIAL's default Space key; in the flight-
+		// setup GUI that Space activated the keyboard-focused Formation button
+		// instead of the Aircraft button under the ray.  The left-hand branch
+		// happened to test menuVisible before its dial/trigger, producing the
+		// observed asymmetric behaviour.  Consume both hands symmetrically here
+		// and return before ANY flight-control action can leak into the menu.
+		if(menuVisible)
+		{
+			var menuTriggerPressed=entry.trigger>TRIGGER_THRESHOLD;
+			if('right'===entry.hand)
+			{
+				// Release any state that may have been active before returning to
+				// the menu, but do not turn a menu grip/trigger into a flight input.
+				HEAPF32[ptr+0]=0;
+				HEAPF32[ptr+1]=0;
+				HEAPF32[ptr+2]=0;
+				HEAPF32[ptr+3]=0;
+				vr.ctl.stick.grabbed=false;
+				vr.ctl.stick.q0=null;
+				vr.ctl.propAnchor.right=null;
+				var menuRightDial=vr.ctl.dial.right;
+				if(menuRightDial.engaged && 'hold'===menuRightDial.engaged.mode)
+				{
+					vrKeyEdge(menuRightDial.engaged.code,false);
+				}
+				menuRightDial.engaged=null;
+				vr.ctl.rightTrigger=menuTriggerPressed; // consume level, no key
+
+				// A has no menu meaning.  Track/own its physical level so a press
+				// begun in the menu cannot become a gear tap after the transition.
+				var menuAPressed=!!(entry.buttons && entry.buttons.a);
+				if(menuAPressed)
+				{
+					vr.ctl.aBtn.pressed=true;
+					vr.ctl.aBtn.owned=true;
+					vr.ctl.aBtn.recentered=true; // suppress hold action too
+				}
+				else
+				{
+					vr.ctl.aBtn.pressed=false;
+					vr.ctl.aBtn.owned=false;
+					vr.ctl.aBtn.recentered=false;
+				}
+
+				// B remains the explicit go-back action while the menu is visible.
+				var menuBPressed=!!(entry.buttons && entry.buttons.b);
+				vrKeyEdge('KeyB',false);
+				if(menuBPressed && !vr.ctl.rightB)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap('Escape');
+				}
+				vr.ctl.rightB=menuBPressed;
+				vr.ctl.rightBSwallow=menuBPressed;
+			}
+			else if('left'===entry.hand)
+			{
+				HEAPF32[ptr+4]=0;
+				vr.ctl.thr.grabbed=false;
+				vr.ctl.thr.p0=null;
+				vr.ctl.thr.fwd0=null;
+				vr.ctl.propAnchor.left=null;
+				var menuLeftDial=vr.ctl.dial.left;
+				if(menuLeftDial.engaged && 'hold'===menuLeftDial.engaged.mode)
+				{
+					vrKeyEdge(menuLeftDial.engaged.code,false);
+				}
+				menuLeftDial.engaged=null;
+				vr.ctl.leftTrigger=menuTriggerPressed; // consume level, no key
+
+				// X likewise has no menu meaning; consume it without toggling help.
+				var menuXPressed=!!(entry.buttons && entry.buttons.a);
+				if(menuXPressed)
+				{
+					vr.ctl.xBtn.pressed=true;
+					vr.ctl.xBtn.owned=true;
+					vr.ctl.xBtn.helped=true; // suppress hold action too
+				}
+				else
+				{
+					vr.ctl.xBtn.pressed=false;
+					vr.ctl.xBtn.owned=false;
+					vr.ctl.xBtn.helped=false;
+				}
+
+				// Y mirrors B as the left-hand go-back action.
+				var menuYPressed=!!(entry.buttons && entry.buttons.b);
+				if(menuYPressed && !vr.ctl.leftY)
+				{
+					vrHapticPulse(rawSrc);
+					vrKeyTap('Escape');
+				}
+				vr.ctl.leftY=menuYPressed;
+				vr.ctl.leftYSwallow=menuYPressed;
+			}
+			return;
+		}
+
+		// [7] is a level-sensed "either XR trigger" confirmation input for
+		// FsCenterJoystick's pre-flight screen.  updateControllers (or the
+		// headless poke hook) clears it once at the start of each whole frame;
+		// individual hand calls only OR a press into it.  Menu triggers return
+		// above so a click that launches a flight cannot bleed into this slot.
+		if(entry.trigger>TRIGGER_THRESHOLD)
+		{
+			HEAPF32[ptr+7]=1;
+		}
 		var physGrabbed=entry.squeeze>GRAB_THRESHOLD;
 		// While a modal in-flight dialog is open (see SimDrawVrGui / fsvr.h's
 		// FsVrGuiDataPointer), ONE hand's dial/trigger/A-B inputs are
@@ -1952,8 +3812,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 			}
 			else if(!grabbed && st.grabbed)
 			{
-				// Self-centering: release springs the virtual stick back to
-				// neutral, like a real spring-loaded stick.
+				// Self-centering on release.  NOTE these zeros alone cannot do
+				// it: [0] flips to 0 in the same write, so the engine's
+				// grabbed-branch never consumes them (it reads [1..3] only
+				// while [0] is 1).  The real spring-to-neutral is the engine's
+				// stickEverGrabbed branch (fsvr.h [8], set while grabbed
+				// above): it centers aileron/elevator/rudder on every
+				// non-grabbed frame.  The zeros stay for block cleanliness.
 				HEAPF32[ptr+0]=0;
 				HEAPF32[ptr+1]=0;
 				HEAPF32[ptr+2]=0;
@@ -1969,6 +3834,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 				HEAPF32[ptr+1]=defl.aileron;
 				HEAPF32[ptr+2]=defl.elevator;
 				HEAPF32[ptr+3]=defl.rudder;
+				// stickEverGrabbed latch (fsvr.h [8], the stick counterpart
+				// of throttle's [6]): once set, the engine centers the three
+				// axes on every non-grabbed frame, so releasing the grab
+				// really springs the stick to neutral instead of freezing
+				// the last deflection (the release-edge zeros above land on
+				// the same frame [0] flips to 0 and are never consumed).
+				HEAPF32[ptr+8]=1;
 			}
 
 			var rdial=vr.ctl.dial.right;
@@ -2012,7 +3884,22 @@ EM_JS(void,YsfwInstallWebXR,(),
 			rdial.guiMode=(!guiMenu ? null : (guiMenu.drivable ? 'ap' : 'generic'));
 			if(rActive)
 			{
-				rdial.visible=true;
+				// Forced visibility is now DRIVABLE-ONLY: the N-way face is
+				// the sole way to discover a dialog's real options, so it must
+				// appear unprompted. The generic/ESC face labels nothing (every
+				// sector fires the same Escape), and the dialogs that get it
+				// (replay/continue/stationary/vehicle-change/chat) are either
+				// long-lived overlays a pilot mostly WATCHES (replay) or
+				// auto-shown parked-state info (stationary) -- forcing a
+				// 4-spoke "ESC" cluster into view for their whole lifetime
+				// read as noise on device. The reroute itself is unchanged
+				// (sector tap still fires Escape); flicking the thumbstick
+				// shows the ESC face via the normal engagement rule, and the
+				// forced panel below carries the dialog's actual content.
+				if(guiMenu && guiMenu.drivable)
+				{
+					rdial.visible=true;
+				}
 				// GUI_DIAL_CAPACITY sectors cannot reach every option
 				// (radio-comm's wingman-command menu is exactly at the cap,
 				// see FsGuiRadioCommCommandDialog), and some in-flight
@@ -2348,7 +4235,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 			ldial.guiMode=(!guiMenuL ? null : (guiMenuL.drivable ? 'ap' : 'generic'));
 			if(lActive)
 			{
-				ldial.visible=true;
+				// Drivable-only forced visibility, mirroring the right dial's
+				// rActive branch above (see its comment): the generic/ESC face
+				// follows the normal engagement rule instead of parking a
+				// 4-spoke "ESC" cluster in view for the dialog's lifetime.
+				if(guiMenuL && guiMenuL.drivable)
+				{
+					ldial.visible=true;
+				}
 				if(guiMenuL && (!guiMenuL.drivable || guiMenuL.overflow))
 				{
 					maybeForceGuiPanel();
@@ -2651,6 +4545,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 			return fmtPct(state.flap);
 		case 'Digit2':
 			return weaponLabel(state.wpnType)+' '+Math.max(0,Math.round(state.wpnCount));
+		case 'Escape':
+			// The press-twice grammar of the 終了 sector (first ESC closes
+			// any submenu, the second consecutive one leaves the flight).
+			return '×2';
 		}
 		return null;
 	}
@@ -3124,6 +5022,32 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.dialRes[hand]=res;
 		return res;
 	}
+	// Scratch canvas for the (rare) case a layer's allocated sub-image
+	// viewport size differs from the source canvas -- the content is scaled
+	// through here so it still fills the quad exactly.
+	var subImageScaleScratch=null;
+	// One-shot diagnostic: report the first sub-image whose viewport is NOT
+	// the naive full-texture (0,0,w,h) -- the exact allocator behaviour the
+	// 2026-07 corruption (see below) depends on.  Runs once per session.
+	var subImageVpReported=false;
+	function reportSubImageViewport(vp,srcW,srcH)
+	{
+		if(subImageVpReported)
+		{
+			return;
+		}
+		subImageVpReported=true;
+		var msg='[vr] subimage viewport x='+vp.x+' y='+vp.y+' w='+vp.width+' h='+vp.height+' (src '+srcW+'x'+srcH+')';
+		console.warn(msg);
+		try
+		{
+			if(globalThis.ysfwDiag)
+			{
+				globalThis.ysfwDiag.push('vrvp',{msg:msg});
+			}
+		}
+		catch(e){}
+	}
 	function uploadCanvasToSubImage(canvas,sub)
 	{
 		// Save/restore every bit of GL state this touches: the engine renders
@@ -3140,7 +5064,43 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// the headset.
 		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,true);
 		GLctx.pixelStorei(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
-		GLctx.texSubImage2D(GLctx.TEXTURE_2D,0,0,0,GLctx.RGBA,GLctx.UNSIGNED_BYTE,canvas);
+		// Honour the sub-image VIEWPORT (2026-07 Quest field report): the
+		// compositor may pack several layers' sub-images into one shared
+		// texture, and it grew visible once the menu scene crossed ~10 live
+		// layers -- uploads pinned to (0,0) then landed in whichever layer
+		// owned the texture's corner (on device: a second phantom "menu"
+		// quad showing another layer's region, cursor rings drawn offset
+		// from the ray).  Upload into THIS layer's assigned rectangle, and
+		// scale through the scratch canvas if the allocated size differs
+		// from the source.
+		var vp=(sub&&sub.viewport)?sub.viewport:null;
+		var dx=(vp?vp.x:0),dy=(vp?vp.y:0);
+		var src=canvas;
+		if(vp&&(vp.x!==0||vp.y!==0||vp.width!==canvas.width||vp.height!==canvas.height))
+		{
+			reportSubImageViewport(vp,canvas.width,canvas.height);
+		}
+		if(vp&&(vp.width!==canvas.width||vp.height!==canvas.height)&&0<vp.width&&0<vp.height)
+		{
+			if(!subImageScaleScratch)
+			{
+				subImageScaleScratch=document.createElement('canvas');
+			}
+			var sc=subImageScaleScratch;
+			if(sc.width!==vp.width||sc.height!==vp.height)
+			{
+				sc.width=vp.width;
+				sc.height=vp.height;
+			}
+			var sctx=sc.getContext('2d');
+			if(sctx)
+			{
+				sctx.clearRect(0,0,sc.width,sc.height);
+				sctx.drawImage(canvas,0,0,sc.width,sc.height);
+				src=sc;
+			}
+		}
+		GLctx.texSubImage2D(GLctx.TEXTURE_2D,0,dx,dy,GLctx.RGBA,GLctx.UNSIGNED_BYTE,src);
 		GLctx.pixelStorei(GLctx.UNPACK_FLIP_Y_WEBGL,prevFlipY);
 		GLctx.pixelStorei(GLctx.UNPACK_PREMULTIPLY_ALPHA_WEBGL,prevPremult);
 		GLctx.bindTexture(GLctx.TEXTURE_2D,prevTex);
@@ -3355,6 +5315,20 @@ EM_JS(void,YsfwInstallWebXR,(),
 		if(vr.helpRes.right && vr.helpRes.right.inLayers){ layers.push(vr.helpRes.right.quad); }
 		if(vr.helpRes.left && vr.helpRes.left.inLayers){ layers.push(vr.helpRes.left.quad); }
 		if(vr.perfRes && vr.perfRes.inLayers){ layers.push(vr.perfRes.quad); }
+		// Sky equirect: placed between dials/perf and the menu quad so it fills
+		// the black void (no active 3D scene) while the menu is shown.
+		if(vr.skyRes && vr.skyRes.inLayers && vr.skyRes.layer){ layers.push(vr.skyRes.layer); }
+		// Menu quad: placed after the sky so it composites over it.
+		if(vr.menuRes && vr.menuRes.inLayers && vr.menuRes.quad){ layers.push(vr.menuRes.quad); }
+		// VR keyboard: hangs under the menu board, same compositing slot.
+		if(vr.kbd && vr.kbd.res && vr.kbd.res.inLayers && vr.kbd.res.quad){ layers.push(vr.kbd.res.quad); }
+		// Controller laser beams: physically in front of the menu board, so
+		// composited over it (and under the cursor ring, which sits ON it).
+		if(vr.beamRes && vr.beamRes.right && vr.beamRes.right.inLayers){ layers.push(vr.beamRes.right.quad); }
+		if(vr.beamRes && vr.beamRes.left && vr.beamRes.left.inLayers){ layers.push(vr.beamRes.left.quad); }
+		// Transparent cursor overlay: front-most and exactly coextensive with
+		// the menu. Both hand rings share this one composition layer.
+		if(vr.cursorRes && vr.cursorRes.inLayers){ layers.push(vr.cursorRes.quad); }
 		try{ vr.session.updateRenderState({layers:layers}); }catch(e){}
 	}
 
@@ -3876,6 +5850,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// which path below is taken.
 		updateHelpAutoHide();
 
+		// Rebuilt as an OR across all tracked hands by processControllerPlain.
+		// Clear before asking for a pose so a transient tracking loss cannot
+		// leave the pre-flight confirmation trigger stuck down.
+		HEAPF32[(_YsfwVrControlDataPointer()>>2)+7]=0;
 		var pose=frame.getViewerPose(vr.refSpace);
 		if(pose)
 		{
@@ -3924,14 +5902,67 @@ EM_JS(void,YsfwInstallWebXR,(),
 		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,vr.xrFb);
 		_YsfwExternalTick();
 
-		// The 2D menus are not presented in VR: end the session when the
-		// simulation stops drawing (~1.5s of silence).
+		// Update the menu quad layer: blit the engine's menu FBO into the
+		// XRQuadLayer swapchain if the engine drew this frame (menuDrawn flag),
+		// and add/remove the quad from renderState.layers as visibility changes.
+		updateMenuLayer(frame);
+
+		// Immersive presentation is supported for the main menu, an active
+		// flight, and replay playback (YSRUNMODE_REPLAYRECORD exports
+		// ysfwReplaying, not ysfwInFlight -- see fsrunloop.cpp's ChangeRunMode
+		// EM_ASM block; its draw path is the same SimDrawAllScreen multiview
+		// branch a live flight uses, so it presents correctly).  Demo/attract
+		// and other 2D-only screens do not redraw the XR projection correctly;
+		// leaving their last texture alive makes a frozen rectangle follow the
+		// head.  The sky layer covers the short grace window (updateMenuLayer),
+		// then we return to 2D with an explicit reason.  Resetting on every
+		// supported frame also covers transitions.
+		var menuVisibleNow=!!(vr.menuRes&&vr.menuRes.inLayers);
+		if(globalThis.ysfwInFlight||globalThis.ysfwReplaying||menuVisibleNow)
+		{
+			vr.unsupportedVrFrames=0;
+		}
+		else if(UNSUPPORTED_VR_GRACE<++vr.unsupportedVrFrames)
+		{
+			vr.endReason=(!vr.menuRes||!vr.menuRes.quad) ? 'menu-unsupported' : 'not-menu-or-flight';
+			session.end().catch(function(){});
+			return;
+		}
+
+		// Ray-to-mouse synthesis: project controller aim rays onto the menu quad
+		// plane and inject synthetic mouse events into the engine while the
+		// menu is being shown.
+		if(vr.menuRes&&vr.menuRes.inLayers&&vr.menuAnchor)
+		{
+			processMenuRayInput(frame);
+		}
+
+		// Ring cursor at the ray hit point (reads the menuRayState the call
+		// above just refreshed; hides itself when the menu is not visible).
+		updateMenuCursor(frame);
+
+		// Controller laser beams from each hand to the menu plane (hide
+		// themselves when the menu is not visible).
+		updateMenuBeams(frame);
+
+		// Watchdog: end the session when the engine stops presenting entirely
+		// (~1.5s of silence).  While the main menu is visible DrawMenu sets
+		// FsVrMarkSimDrawn every frame (keeping simSilentFrames at 0), so the
+		// watchdog is safely disarmed during normal menu navigation.  On
+		// browsers without WebXR-layers support the menu quad can never be
+		// created (setupMenu is gated on vr.mvLayer) and DrawMenu deliberately
+		// stays silent, so the watchdog fires here and returns the user to the
+		// 2D page -- record why so index.html's onVrEnd can explain it.
 		if(0<_YsfwVrConsumeSimDrawnFrames())
 		{
 			vr.simSilentFrames=0;
 		}
 		else if(100<++vr.simSilentFrames)
 		{
+			if(!globalThis.ysfwInFlight && (!vr.menuRes || !vr.menuRes.quad))
+			{
+				vr.endReason='menu-unsupported';
+			}
 			session.end().catch(function(){});
 		}
 	}
@@ -3967,9 +5998,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var antialias=(undefined!==opts.antialias ? !!opts.antialias : false);
 		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0};
 		vr.jsPerf={ctl:0,dial:0,layers:0};
+		vr.endReason=null;
+		vr.unsupportedVrFrames=0;
 		vr.jsPerfWindow=0;
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
-		return navigator.xr.requestSession('immersive-vr',{requiredFeatures:['local'],optionalFeatures:['layers']}).then(function(session)
+		var sessionInit={requiredFeatures:['local'],optionalFeatures:['layers']};
+		return navigator.xr.requestSession('immersive-vr',sessionInit).then(function(session)
 		{
 			vr.session=session;
 			return GLctx.makeXRCompatible().then(function()
@@ -4136,6 +6170,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 						vr.mvDepthSize=null;
 					}
 					vr.simSilentFrames=0;
+					vr.unsupportedVrFrames=0;
 
 					// Controller state: zero the whole 16-float block for
 					// cleanliness (FsVrIsActive is 0 from here on, so the
@@ -4173,10 +6208,18 @@ EM_JS(void,YsfwInstallWebXR,(),
 					vr.helpRes={right:undefined,left:undefined};
 					vr.help={visible:false,shownAt:0};
 					vr.perfRes=undefined;
+					// menuRes/skyRes/cursorRes/beamRes are nulled by their
+					// teardown functions below (nulling them first would make
+					// the teardowns early-return and leak the GL resources).
+					resetMenuRayState();
 
 					teardownHud();
 					teardownGui();
 					teardownShadowFbo();
+					teardownMenu();
+					teardownSky();
+					teardownCursor();
+					teardownBeams();
 					_YsfwVrSetPresenting(0);
 					_YsfwVrSetMultiview(0);
 					_YsfwSetExternalDrive(0);
@@ -4192,6 +6235,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 					setupHud();
 					setupGui();
 					setupShadowFbo();
+					setupMenu();
+					setupSky();
+					setupCursor();
+					setupBeams();
 				}
 				_YsfwVrSetPresenting(1);
 				_YsfwSetExternalDrive(1);
@@ -4263,6 +6310,9 @@ EM_JS(void,YsfwInstallWebXR,(),
 	{
 		var vq=viewerQuat ? {x:viewerQuat[0],y:viewerQuat[1],z:viewerQuat[2],w:viewerQuat[3]} : {x:0,y:0,z:0,w:1};
 		var vp=viewerPos ? {x:viewerPos[0],y:viewerPos[1],z:viewerPos[2]} : {x:0,y:0,z:0};
+		// Match updateControllers: this slot represents this complete frame,
+		// then processControllerPlain ORs in either hand's trigger.
+		HEAPF32[(_YsfwVrControlDataPointer()>>2)+7]=0;
 		for(var i=0; i<list.length; ++i)
 		{
 			var e=list[i];
@@ -4393,6 +6443,23 @@ EM_JS(void,YsfwInstallWebXR,(),
 		return [r.x,r.y,r.z,r.w];
 	};
 	vr.recenter=vrRecenter;
+	// Pure-math menu test hooks (no XR state) -- ray geometry, proportional
+	// texture fit, physical quad aspect, and two-hand mouse arbitration.
+	vr.intersectRayWithAnchoredQuad=intersectRayWithAnchoredQuad;
+	vr.fitMenuTextureSize=fitMenuTextureSize;
+	vr.menuQuadMetricSize=menuQuadMetricSize;
+	vr.chooseMenuRayHand=chooseMenuRayHand;
+	vr.menuUvToPixel=menuUvToPixel;
+	vr.cursorOverlayPoint=cursorOverlayPoint;
+	vr.beamPoseFor=beamPoseFor;
+	// VR-keyboard test hooks (scripts/smoke-vrmenu.mjs): expose the pure
+	// layout/dispatch machinery and the visibility driver so a headless
+	// test can type without a headset.
+	vr.kbdHitKey=kbdHitKey;
+	vr.kbdKeyRects=kbdKeyRects;
+	vr.kbdDispatchKey=kbdDispatchKey;
+	vr.kbdUpdate=updateKbdLayer;
+	vr.kbdState=function(){ return kbdState(); };
 
 	// Headless test hooks for single-pass stereo: render into an
 	// OVR_multiview2 texture-array framebuffer without a headset, then read
@@ -4436,6 +6503,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 		setupHud();
 		setupGui();
 		setupShadowFbo();
+		setupMenu(); // Test mode: allocates menu FBO without XRQuadLayer.
+		setupSky();  // Test mode: setupSky checks for mvBinding and skips gracefully.
 		_YsfwVrSetPresenting(1);
 		// Headless stand-in for a real session start (see vr.enter): also
 		// auto-shows the help placards, so scripts/smoke-vrctl.mjs can drive
@@ -4446,6 +6515,33 @@ EM_JS(void,YsfwInstallWebXR,(),
 			showHelp();
 		}
 		return 'ok';
+	};
+	// Headless test hook for the main-menu-in-VR path ONLY: the menu FBO is a
+	// plain mono texture (see setupMenu) and DrawMenu's off-screen pass never
+	// touches the multiview scene machinery, so this hook deliberately does
+	// NOT require OVR_multiview2 -- CI runners have no multiview-capable GL,
+	// which is why scripts/smoke-vrmenu.mjs cannot use forceMultiview above
+	// (the other VR smokes run on a real GPU instead).  Just allocate the
+	// menu FBO in test mode and flip the engine into VR-presenting so
+	// FsRunLoop::DrawMenu takes its VR branch.
+	vr.forceVrMenu=function()
+	{
+		vr.testMode=true;
+		setupMenu();
+		if(!vr.menuRes)
+		{
+			return 'no menu fbo';
+		}
+		_YsfwVrSetPresenting(1);
+		return 'ok';
+	};
+	// Headless test hook: run the REAL menu teardown (zeroes the menu data
+	// block and frees the GL resources) -- page-context scripts cannot touch
+	// the block directly (HEAPF32 is not an exported runtime method), so
+	// smoke-vrmenu.mjs exercises teardown through this instead.
+	vr.teardownMenuForTest=function()
+	{
+		teardownMenu();
 	};
 	vr.readMultiviewStats=function(layer)
 	{

@@ -103,6 +103,8 @@ const S = ({
     },
     playBtn: '▶ プレイ開始',
     playHint: '機体・マップを自分で選ぶ／対戦をホストするときはこちら（エンジンのメニューが開きます）',
+    vrPlayBtn: '🥽 VRでプレイ開始',
+    vrPlayHint: 'ヘッドセットのままメニュー操作から飛行まで（WebXR・実験的機能）',
     flyAgain: '↻ 続きから',
     joinFailTitle: '⚠ 必須パックを取得できませんでした',
     joinFailDesc: (names) => 'ホストの必須フィールド' + (names.length ? '「' + names.join('・') + '」' : '') +
@@ -187,6 +189,8 @@ const S = ({
     },
     playBtn: '▶ Play',
     playHint: 'Choose your own aircraft & maps, or host multiplayer — this opens the engine menu',
+    vrPlayBtn: '🥽 Play in VR',
+    vrPlayHint: 'Menus and flying without taking the headset off (WebXR, experimental)',
     flyAgain: '↻ Fly again',
     joinFailTitle: '⚠ Couldn’t obtain required packs',
     joinFailDesc: (names) => 'Couldn’t obtain the host’s required field' + (names.length ? ' “' + names.join(', ') + '”' : '') +
@@ -1042,6 +1046,38 @@ function renderPanel() {
   playHint.textContent = S.playHint;
   playHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
   panel.appendChild(playHint);
+
+  // "Play in VR": shown only once immersive-vr support is CONFIRMED (async
+  // probe below), so flat-screen visitors never see a dead button.  It boots
+  // the exact same way as Play plus a window.__ysfwVrAutostart flag —
+  // index.html's VR block picks that up once the engine reports XR support
+  // and calls vr.enter() (or shows a one-tap overlay when the click's user
+  // activation didn't survive the wasm boot).
+  const vrPlayBtn = document.createElement('button');
+  vrPlayBtn.id = 'ysfw-pack-play-vr';
+  vrPlayBtn.textContent = S.vrPlayBtn;
+  vrPlayBtn.style.cssText =
+    'display:none;margin-top:8px;width:100%;padding:10px;border:1px solid ' + ACCENT + ';border-radius:8px;' +
+    'background:rgba(77,163,255,.10);color:#cfe0f5;font-size:14px;font-weight:700;cursor:pointer';
+  vrPlayBtn.addEventListener('click', () => {
+    window.__ysfwVrAutostart = true;
+    start();
+  });
+  panel.appendChild(vrPlayBtn);
+  const vrPlayHint = document.createElement('div');
+  vrPlayHint.textContent = S.vrPlayHint;
+  vrPlayHint.style.cssText = 'display:none;color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
+  panel.appendChild(vrPlayHint);
+  try {
+    if (navigator.xr && navigator.xr.isSessionSupported) {
+      navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
+        if (ok) {
+          vrPlayBtn.style.display = '';
+          vrPlayHint.style.display = '';
+        }
+      }).catch(() => {});
+    }
+  } catch (e) {}
 
   // Add-on management, COLLAPSED by default (auto-expanded once the visitor has
   // installed packs; see renderList).  Opening it is a deliberate "I want to add or

@@ -22,6 +22,11 @@
 <meta name="twitter:image" content="https://ysflight-web.toming.app/icons/og-cover.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
+<!-- diag.js: plain (non-module) script, loaded FIRST so error capture and the
+     unclean-end check are armed before any other script can fail.  Ships
+     heartbeats/errors/breadcrumbs to /clientlog (Workers Logs) for in-headset
+     postmortems -- see web/diag.js. -->
+<script src="diag.js"></script>
 <script type="module" src="packs-ui.js"></script>
 <script type="module" src="pack-net.js"></script>
 <script type="module" src="replays-ui.js"></script>
@@ -261,8 +266,12 @@
         fsTitle: '全画面切替（F11 / ⌃⌘F）',
         vrEnter: '🥽 VR',
         vrExit: '🥽 VR終了',
-        vrTitle: 'VRヘッドセットで飛ぶ（WebXR・実験的機能）。頭の向きが視点になります。HUD・計器・メニューはVR中は表示されません',
+        vrTitle: 'VRヘッドセットで飛ぶ（WebXR・実験的機能）。メインメニューまたはフライト中に開始してください',
         vrFail: 'VRセッションを開始できませんでした',
+        vrMenuUnsupported: 'VRメニューにはWebXRレイヤー対応ブラウザ（Quest等）が必要です。フライト開始後にVRへ入ってください',
+        vrWrongContext: 'VRはメインメニューまたはフライト中に開始してください。デモなどの2D画面はVR表示に対応していません',
+        vrTapEnter: '🥽 タップしてVRに入る',
+        vrTapEnterSub: '起動が完了しました。ブラウザの制限により、もう一度タップが必要です',
         intro: 'ジョイスティック未接続なら マウスが操縦桿 です。',
         rows: [
           ['マウス移動', '操縦桿（上下＝ピッチ / 左右＝ロール）'],
@@ -329,8 +338,12 @@
         fsTitle: 'Toggle fullscreen (F11 / ⌃⌘F)',
         vrEnter: '🥽 VR',
         vrExit: '🥽 Exit VR',
-        vrTitle: 'Fly in a VR headset (WebXR, experimental). Head tracking drives the view; HUD, instruments and menus are not shown in VR',
+        vrTitle: 'Fly in a VR headset (WebXR, experimental). Start from the main menu or during a flight',
         vrFail: 'Could not start the VR session',
+        vrMenuUnsupported: 'The VR menu requires a WebXR-layers-capable browser (e.g. Quest). Enter VR after starting a flight instead',
+        vrWrongContext: 'Start VR from the main menu or during a flight. 2D-only screens such as the demo are not available in VR',
+        vrTapEnter: '🥽 Tap to enter VR',
+        vrTapEnterSub: 'Boot finished. The browser needs one more tap to start VR',
         intro: 'With no joystick, your mouse is the control stick.',
         rows: [
           ['Move mouse', 'Control stick (up/down = pitch, left/right = roll)'],
@@ -1273,6 +1286,20 @@
     Module.onVrStart = function () { inVr = true; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrExit; };
     Module.onVrEnd = function () {
       inVr = false; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrEnter;
+      // Menu-in-VR needs the WebXR layers path (XRQuadLayer). When the session
+      // was auto-ended by the watchdog because the menu quad could never be
+      // created (fswebxr.cpp sets endReason), explain why instead of silently
+      // dropping the user back to the 2D page.
+      var vrEndReason = Module.ysfwVr && Module.ysfwVr.endReason;
+      if (vrEndReason === 'menu-unsupported' || vrEndReason === 'not-menu-or-flight') {
+        Module.ysfwVr.endReason = null;
+        var m = document.createElement('div');
+        m.textContent = (vrEndReason === 'menu-unsupported' ? TXT.help.vrMenuUnsupported : TXT.help.vrWrongContext);
+        m.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(60,16,16,.92);color:#f5d5d5;border:1px solid #5a2a2a;border-radius:8px;padding:8px 14px;font-size:12px;max-width:80vw';
+        document.body.appendChild(m);
+        setTimeout(function () { if (m.parentNode) m.remove(); }, 8000);
+        return; // No fps summary for a session that never presented anything.
+      }
       // Post-session fps summary: the practical readout for headset A/B runs,
       // where the browser console is out of reach.
       var st = Module.ysfwVr && Module.ysfwVr.stats;
@@ -1312,10 +1339,46 @@
       }
     };
     ysfwBRStack().appendChild(vrBtn);
+    // "Play in VR" autostart (packs-ui.js sets window.__ysfwVrAutostart on its
+    // VR play button): once the engine is up and XR support is confirmed, try
+    // vr.enter() straight away.  The click's transient user activation rarely
+    // survives the wasm boot, so a rejection is the EXPECTED path -- it shows
+    // a big one-tap overlay instead of failing silently.  Either way the
+    // visitor asked for VR on the portal and lands in the VR menu with at
+    // most one extra tap.
+    var vrAutostartTried = false;
+    function showVrTapOverlay() {
+      var wrap = document.createElement('div');
+      wrap.id = 'ysfw-vr-tap';
+      wrap.style.cssText = 'position:fixed;inset:0;z-index:100002;display:flex;align-items:center;justify-content:center;background:rgba(4,8,14,.66)';
+      var btn = document.createElement('button');
+      btn.style.cssText = 'padding:22px 34px;border-radius:14px;border:1px solid #4da3ff;background:#0d141d;color:#e6edf3;cursor:pointer;text-align:center';
+      var b1 = document.createElement('div');
+      b1.textContent = TXT.help.vrTapEnter;
+      b1.style.cssText = 'font-size:20px;font-weight:700';
+      var b2 = document.createElement('div');
+      b2.textContent = TXT.help.vrTapEnterSub;
+      b2.style.cssText = 'font-size:12px;color:#8fa3bb;margin-top:8px';
+      btn.appendChild(b1);
+      btn.appendChild(b2);
+      btn.onclick = function () {
+        wrap.remove();
+        var vr = Module.ysfwVr;
+        if (vr && !vr.session) { vr.enter().catch(function () {}); }
+      };
+      wrap.addEventListener('click', function (e) { if (e.target === wrap) wrap.remove(); });
+      wrap.appendChild(btn);
+      document.body.appendChild(wrap);
+    }
     setInterval(function () {
       var vr = Module.ysfwVr;
-      var show = !!(vr && vr.supported && (globalThis.ysfwInFlight || inVr));
+      var show = !!(vr && vr.supported);
       vrBtn.style.display = show ? '' : 'none';
+      if (show && window.__ysfwVrAutostart && !vrAutostartTried && !vr.session) {
+        vrAutostartTried = true;
+        window.__ysfwVrAutostart = false;
+        vr.enter().catch(function () { showVrTapOverlay(); });
+      }
     }, 500);
   })();
 

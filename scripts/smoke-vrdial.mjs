@@ -139,6 +139,15 @@ function sectorThumb(i) {
   return [Math.sin(a), -Math.cos(a)];
 }
 
+// The LEFT dial is 7-way since the ESC sector was added (LEFT_DIAL[6] in
+// fswebxr.cpp -- sector count is table-driven), so its sector centres sit at
+// i*(360/7)deg and none of the N=6 vectors above land exactly on them any
+// more (e.g. plain "down" [0,1] = 180deg falls on the 3/4 boundary at N=7).
+function leftSectorThumb(i) {
+  const a = (i * 360 / 7) * Math.PI / 180;
+  return [Math.sin(a), -Math.cos(a)];
+}
+
 // ---- Group 1: right dial defaults to Gun (up), sticky reselect to Gear --
 // (down). xr-standard thumbstick: axes[3] (thumb[1]) is POSITIVE when
 // pulled toward the user -- fswebxr.cpp flips this (upY=-thumb[1]) so
@@ -169,18 +178,18 @@ await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, tr
 keys = await readKeys();
 check('right dial: Space keyup on trigger release (hold mode)', keys.includes('up:Space'), 'keys=' + JSON.stringify(keys));
 
-// ---- Group 3: left dial defaults to Flap+ (up); reselect Flap- (down) ---
-// LEFT_DIAL[3] (index 3 of 6, "down") = Flap Down (KeyF, tap). The left
+// ---- Group 3: left dial defaults to Flap+ (up); reselect Flap- ----------
+// LEFT_DIAL[3] (index 3 of 7, ~154deg) = Flap Down (KeyF, tap). The left
 // trigger is new behaviour (previously unused; the left grip already owns
 // the throttle lever), so there is no legacy dispatch to preserve here.
 await resetKeys();
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
-await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 1], buttons: {} }]); // push down -> select Flap Down
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: leftSectorThumb(3), buttons: {} }]); // select Flap Down
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // back to centre (sticky)
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 1, thumb: [0, 0], buttons: {} }]); // trigger edge 0->1
 await page.waitForTimeout(120);
 keys = await readKeys();
-check('left dial: thumb-down selects Flap Down -> KeyF tap (down+up)', keys.includes('down:KeyF') && keys.includes('up:KeyF'), 'keys=' + JSON.stringify(keys));
+check('left dial: sector-3 deflection selects Flap Down -> KeyF tap (down+up)', keys.includes('down:KeyF') && keys.includes('up:KeyF'), 'keys=' + JSON.stringify(keys));
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release
 
 // ---- Group 4: dial logic works without any WebXR layers session --------
@@ -271,12 +280,12 @@ keys = await readKeys();
 check('right dial sector 5 (レーダー): Digit3 tap (down+up)', keys.includes('down:Digit3') && keys.includes('up:Digit3'), 'keys=' + JSON.stringify(keys));
 await poke([{ hand: 'right', pos: [0, 0, 0], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release trigger
 
-// ---- Group 9: left dial sector 5 (300deg) = トリム (KeyT, HOLD) ---------
+// ---- Group 9: left dial sector 5 (~257deg at N=7) = トリム (KeyT, HOLD) --
 // FSBTF_AUTOTRIM is level-sensed (same virtual-button family as Gun/フレア
 // above) -- 'hold'.
 await resetKeys();
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
-await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: sectorThumb(5), buttons: {} }]); // select トリム
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: leftSectorThumb(5), buttons: {} }]); // select トリム
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 1, thumb: [0, 0], buttons: {} }]); // trigger edge 0->1 (hold)
 keys = await readKeys();
@@ -285,6 +294,23 @@ check('left dial sector 5 (トリム): HOLD mode, no premature keyup while trigg
 await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release trigger
 keys = await readKeys();
 check('left dial sector 5 (トリム): KeyT keyup on trigger release (hold mode)', keys.includes('up:KeyT'), 'keys=' + JSON.stringify(keys));
+
+// ---- Group 9c: left dial sector 6 (~309deg at N=7) = 終了 (Escape, tap) --
+// The in-flight exit path (2026-07 Quest feedback: no way to leave a
+// flight in VR): each trigger pull on this sector is one truthful ESC
+// press; the ENGINE terminates the flight on the second consecutive press
+// (fssimulation.cpp escKeyCount>=2). Here we only assert the tap
+// dispatches a clean Escape down+up pulse -- a single tap, so the engine
+// under test does NOT terminate and the remaining groups keep flying.
+await resetKeys();
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // clean 0-edge
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: leftSectorThumb(6), buttons: {} }]); // select ESC
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // sticky recentre
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 1, thumb: [0, 0], buttons: {} }]); // trigger edge 0->1
+await page.waitForTimeout(120);
+keys = await readKeys();
+check('left dial sector 6 (ESC): Escape tap (down+up) on trigger press', keys.includes('down:Escape') && keys.includes('up:Escape'), 'keys=' + JSON.stringify(keys));
+await poke([{ hand: 'left', pos: [0, 0, -0.08], quat: IDENTITY_QUAT, squeeze: 0, trigger: 0, thumb: [0, 0], buttons: {} }]); // release trigger
 
 // ---- Group 9b: stale-highlight regression (round-2 fix, picking edge) -----
 // Field report (twice): confirm Gun (sector 0, "up") on the right dial,

@@ -184,6 +184,55 @@ void FsPushChar(int c)
 	}
 }
 
+// One text-editing action from the VR keyboard quad (fswebxr.cpp's
+// kbdDispatchKey), mirrored onto the same FsPushKey/FsPushChar pair the
+// flat keydown path produces for the physical key (so FsGuiTextBox sees no
+// difference).  action: 0=plain character (chr), 1=backspace, 2=enter,
+// 3=escape, 4=caret left, 5=caret right, 6=delete, 7=home, 8=end, 9=tab.
+// Numeric actions rather than DOM code strings keep the JS->wasm call free
+// of string marshalling.
+extern "C" EMSCRIPTEN_KEEPALIVE void FsPushTextEdit(int action,int chr)
+{
+	switch(action)
+	{
+	case 0:
+		if(0!=chr)
+		{
+			FsPushChar(chr);
+		}
+		break;
+	case 1:
+		FsPushKey(FSKEY_BS);
+		FsPushChar(0x08);
+		break;
+	case 2:
+		FsPushKey(FSKEY_ENTER);
+		FsPushChar('\n');
+		break;
+	case 3:
+		FsPushKey(FSKEY_ESC);
+		break;
+	case 4:
+		FsPushKey(FSKEY_LEFT);
+		break;
+	case 5:
+		FsPushKey(FSKEY_RIGHT);
+		break;
+	case 6:
+		FsPushKey(FSKEY_DEL);
+		break;
+	case 7:
+		FsPushKey(FSKEY_HOME);
+		break;
+	case 8:
+		FsPushKey(FSKEY_END);
+		break;
+	case 9:
+		FsPushKey(FSKEY_TAB);
+		break;
+	}
+}
+
 // ----------------------------------------------------------------------------
 // HTML5 event callbacks
 
@@ -764,4 +813,9 @@ void FsGetNativeTextInputText(wchar_t str[],int bufLen)
 int FsGetNativeTextInputEvent(void)
 {
 	return FSNATIVETEXTEVENT_NONE;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void YsfwInjectMouseEvent(int eventType,int lb,int mb,int rb,int mx,int my)
+{
+	PushMouseEvent(eventType,lb,mb,rb,mx,my);
 }
