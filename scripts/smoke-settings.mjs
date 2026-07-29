@@ -37,15 +37,18 @@ function die(msg) {
 await page.goto(setUrl.toString());
 await page.waitForFunction(() => window.ysfwSettingsReady === true, { timeout: 30000 }).catch(() => die('Settings page never became ready'));
 // Drive the real UI for each control type: checkbox click, slider keyboard
-// (Home -> engine min 800m), select option (2 = Always Coarse).
+// (Home -> engine min 800m), int-enum select (2 = Always Coarse), string-token
+// choice select (CLOUDTYPE NONE).
 await page.getByText(/Draw shadows|影を描画/).click();
-await page.locator('input[type=range]').focus();
+await page.locator('#ysfw-set-VISIBILIT').focus();
 await page.keyboard.press('Home');
-await page.locator('select').selectOption('2');
+await page.locator('#ysfw-set-AIRLVODTL').selectOption('2');
+await page.locator('#ysfw-set-CLOUDTYPE').selectOption('NONE');
 const stored = await page.evaluate(() => localStorage.getItem('ysfwSettings'));
 if (!stored || !/"DRWSHADOW":false/.test(stored)) die('toggling shadows did not persist DRWSHADOW:false to localStorage (' + stored + ')');
 if (!/"VISIBILIT":800/.test(stored)) die('slider Home did not persist VISIBILIT:800 to localStorage (' + stored + ')');
 if (!/"AIRLVODTL":2/.test(stored)) die('selecting Always Coarse did not persist AIRLVODTL:2 to localStorage (' + stored + ')');
+if (!/"CLOUDTYPE":"NONE"/.test(stored)) die('selecting cloud NONE did not persist CLOUDTYPE:"NONE" to localStorage (' + stored + ')');
 
 // ---- index.html: boot a freeflight; flight.cfg must carry DRWSHADOW FALSE ---
 const flyUrl = new URL(base);
@@ -61,9 +64,10 @@ if (!/DRWSHADOW FALSE/.test(cfg)) die('engine flight.cfg does not carry DRWSHADO
 // Numeric + enum options must land in the engine's own save formats.
 if (!/VISIBILIT 800\.00m/.test(cfg)) die('engine flight.cfg does not carry VISIBILIT 800.00m:\n' + cfg);
 if (!/AIRLVODTL 2/.test(cfg)) die('engine flight.cfg does not carry AIRLVODTL 2:\n' + cfg);
+if (!/CLOUDTYPE NONE/.test(cfg)) die('engine flight.cfg does not carry CLOUDTYPE NONE:\n' + cfg);
 // The deep-link JSWARNING seed is a non-managed line; it must survive the merge.
 if (!/JSWARNING FALSE/.test(cfg)) die('the merge dropped the non-managed JSWARNING line:\n' + cfg);
 if (fatal.length) die('fatal console/page errors');
 
 await browser.close();
-console.log('SMOKE-SETTINGS PASSED (Settings page -> flight.cfg DRWSHADOW FALSE + VISIBILIT 800.00m + AIRLVODTL 2, JSWARNING preserved)');
+console.log('SMOKE-SETTINGS PASSED (Settings page -> flight.cfg DRWSHADOW FALSE + VISIBILIT 800.00m + AIRLVODTL 2 + CLOUDTYPE NONE, JSWARNING preserved)');
