@@ -52,6 +52,11 @@ export const LANG = (function () {
   } catch (e) { return 'en'; }
 })();
 
+// Every studio page imports this module and renders in LANG, but the static
+// HTML skeletons say lang="ja" — stamp the real document language once here
+// so English visitors get the right attribute (a11y / font selection).
+try { document.documentElement.lang = LANG; } catch (e) { /* non-DOM import (tests) */ }
+
 // Preserve an explicit ?lang= across studio navigation; nothing else carries over.
 export function pageUrl(page, params) {
   const p = new URLSearchParams(params || {});

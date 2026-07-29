@@ -525,6 +525,15 @@
                     FS.writeFile(Module.__ysfwUserDir + '/__createflight.yfs', globalThis.ysfwYfs.buildYfs(mspec));
                   }
                 } catch (e) { console.error('[mission] ' + (e && e.message ? e.message : e)); }
+              } else if (kind === 'openyfs' || kind === 'openreplay') {
+                // ?openyfs=1 / ?openreplay=1: the top page stored a
+                // user-picked .yfs; write it for -flyyfs / -replayrecord
+                // (record-carrying files auto-route to replay).  A bad/absent
+                // file leaves nothing to run and -autoexit hands back.
+                try {
+                  var yraw = sessionStorage.getItem('ysfwOpenYfs');
+                  if (yraw) FS.writeFile(Module.__ysfwUserDir + '/__openflight.yfs', yraw);
+                } catch (e) { console.error('[openyfs] ' + (e && e.message ? e.message : e)); }
               }
             } catch (e) {}
           }
@@ -1177,7 +1186,7 @@
   (function () {
     var q = new URLSearchParams(location.search);
     var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
-    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host' && kind !== 'landing' && kind !== 'mission') return;  // flight deep-links only ('host': server mode counts as in-flight)
+    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host' && kind !== 'landing' && kind !== 'mission' && kind !== 'retry' && kind !== 'openyfs') return;  // flight deep-links only ('host': server mode counts as in-flight)
     var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html', 'studio-flight.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;
@@ -1231,7 +1240,7 @@
   // NOTE: replay links do not yet carry ?return= (deferred; see fix/fly-return PR).
   (function () {
     var q = new URLSearchParams(location.search);
-    if (!q.get('replay')) return;
+    if (!q.get('replay') && !q.get('openreplay')) return;  // openreplay: File>Open of a recorded .yfs
     var entered = false;
     var navigated = false;
     function goBack() {

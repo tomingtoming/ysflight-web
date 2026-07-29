@@ -194,5 +194,62 @@ for (const kind of ['racing', 'cas']) {
   await pg.close();
 }
 
+// ---- Open-.yfs leg: ?openyfs=1 flies a user-supplied .yfs -------------------
+// (web-shell increment 14, the web File > Open).  Inject a .yfs the way the
+// top page's file picker does (sessionStorage), then boot ?openyfs=1: preRun
+// writes __openflight.yfs and -flyyfs flies it.  The .yfs itself is a racing
+// missionSpec build — proving arbitrary user text reaches the engine.
+const page7 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page7.on('console', (m) => {
+  const t = m.text();
+  logs.push(t);
+  if (FATAL.some((re) => re.test(t))) fatal.push('[console-openyfs] ' + t);
+});
+page7.on('pageerror', (e) => fatal.push('[pageerror-openyfs] ' + e.message));
+await page7.goto(base);  // same-origin page so sessionStorage carries over
+await page7.evaluate(() => {
+  const spec = globalThis.ysfwYfs.missionSpec('racing');
+  sessionStorage.setItem('ysfwOpenYfs', globalThis.ysfwYfs.buildYfs(spec));
+});
+await page7.goto(base + '?openyfs=1');
+await page7
+  .waitForFunction(() => globalThis.ysfwInFlight === true, { timeout: waitMs })
+  .catch(() => die('?openyfs=1 never reached in-flight (sessionStorage .yfs -> -flyyfs)'));
+if (fatal.length) die('fatal console/page errors during the openyfs leg');
+
+// ---- Missions-page leg: native-granularity setup drives the deep link -------
+// (web-shell increment 14).  The studio-missions page must offer the native
+// dialog's choices and its Start button must produce a fully-parameterized
+// deep link.  Drive the endurance form (enemy level 1, no wingmen — lightest
+// sim) through the REAL UI and confirm the flight starts with those params.
+const page8 = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+page8.on('console', (m) => {
+  const t = m.text();
+  logs.push(t);
+  if (FATAL.some((re) => re.test(t))) fatal.push('[console-mpage] ' + t);
+});
+page8.on('pageerror', (e) => fatal.push('[pageerror-mpage] ' + e.message));
+{
+  const mUrl = new URL(base);
+  mUrl.pathname = mUrl.pathname.replace(/index\.html$/, 'studio-missions.html');
+  await page8.goto(mUrl.toString());
+  await page8.waitForFunction(() => window.ysfwMissionsReady === true, { timeout: 30000 })
+    .catch(() => die('missions page never became ready'));
+  // The landing section must offer ALL 15 native levels.
+  const nLevels = await page8.evaluate(() => document.getElementById('ysfw-ldg-level').options.length);
+  if (nLevels !== 15) die('landing level select has ' + nLevels + ' options (want the native 15)');
+  await page8.locator('#ysfw-end-field').selectOption('SMALL_MAP');
+  await page8.locator('#ysfw-end-wing').selectOption('0');
+  await page8.locator('#ysfw-end-level').selectOption('1');
+  await page8.locator('#ysfw-end-start').click();
+  await page8
+    .waitForURL((u) => (u.searchParams.get('endurance') || '').includes('SMALL_MAP,0,1'), { timeout: 15000 })
+    .catch(() => die('missions page Start did not navigate to the parameterized ?endurance= link'));
+  await page8
+    .waitForFunction(() => globalThis.ysfwInFlight === true, { timeout: waitMs })
+    .catch(() => die('missions-page endurance never reached in-flight'));
+  if (fatal.length) die('fatal console/page errors during the missions-page leg');
+}
+
 await browser.close();
-console.log('SMOKE-MISSION PASSED (endurance; intercept; landing practice; auto demo; racing + CAS extension missions)');
+console.log('SMOKE-MISSION PASSED (endurance; intercept; landing practice; auto demo; racing + CAS; open-.yfs; missions page)');

@@ -165,3 +165,27 @@ test('extension missions: ?mission= boots the generated .yfs via -flyyfs', () =>
   assert.equal(both.filter((t) => t === '-flyyfs').length, 1);
   assert.equal(deepLinkKind('?createflight=1&mission=racing'), 'createflight');
 });
+
+test('retry / openyfs: native Sim>Retry and File>Open as -flyyfs boots', () => {
+  assert.deepEqual(
+    buildEngineArgs('?retry=1'),
+    ['-flyyfs', USER_DIR + '/prevflight.dat', '-autoexit']);
+  assert.deepEqual(
+    buildEngineArgs('?openyfs=1'),
+    ['-flyyfs', USER_DIR + '/__openflight.yfs', '-autoexit']);
+  assert.equal(deepLinkKind('?retry=1'), 'retry');
+  assert.equal(deepLinkKind('?openyfs=1'), 'openyfs');
+  assert.equal(isDirectBoot('?retry=1'), true);
+  // Never two -flyyfs: createflight/mission win over retry/openyfs.
+  const both = buildEngineArgs('?mission=racing&retry=1');
+  assert.equal(both.filter((t) => t === '-flyyfs').length, 1);
+  assert.match(both[1], /__createflight\.yfs$/);
+});
+
+test('openreplay: a recorded .yfs plays back via -replayrecord', () => {
+  assert.deepEqual(
+    buildEngineArgs('?openreplay=1'),
+    ['-replayrecord', USER_DIR + '/__openflight.yfs', '-autoexit']);
+  assert.equal(deepLinkKind('?openreplay=1'), 'openreplay');
+  assert.equal(isDirectBoot('?openreplay=1'), true);
+});

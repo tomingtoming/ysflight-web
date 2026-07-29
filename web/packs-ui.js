@@ -73,22 +73,37 @@ const S = ({
     tagAirliner: '大型機',
     tagAdvanced: '上級者向け',
     missionTitle: '🎯 ミッション',
-    missionHint: 'クリックで即ミッション開始（耐久戦＝波状の敵を迎え撃つ／邀撃＝来襲編隊を阻止／着陸練習＝進入からの着陸訓練）',
-    missionEasySub: '耐久戦: 厚木 / 僚機2機・敵レベル3',
-    missionHardSub: '耐久戦: Hawaii / 単機・敵レベル5',
-    missionInterceptSub: '邀撃: 爆撃編隊を阻止 / 僚機2機',
-    missionLandingEasySub: '着陸練習: 青森 / Lv1 ファイナル進入',
-    missionLandingIfrSub: '着陸練習: 青森 / Lv12 低視程・計器進入',
-    missionRacingSub: 'レーシング: 渓谷コースをゲート通過でラップ計時',
-    missionCasSub: '近接航空支援: 東北 / 味方戦車隊を敵戦車から守る',
+    // Mission names use the NATIVE Japanese menu vocabulary (ja.uitxt
+    // menu/simulation-*) so 20-year veterans find what they know.
+    missionHint: 'クリックで即ミッション開始（本家 Simulation メニューと同じ項目名）',
+    missionEnduranceName: '15分間耐久空中戦',
+    missionInterceptName: '基地防空ミッション',
+    missionLandingName: '着陸訓練',
+    missionRacingName: 'レーシングモード',
+    missionCasName: '近接支援ミッション',
+    missionEasySub: 'F-15J / 厚木 / 僚機2機・敵レベル3',
+    missionHardSub: 'F/A-18 / Hawaii / 単機・敵レベル5',
+    missionInterceptSub: 'F-15J / 厚木 / 来襲する爆撃編隊を阻止',
+    missionLandingEasySub: 'レベル1: Straight-In・微風 / F/A-18・青森',
+    missionLandingIfrSub: 'レベル12: 低視程 (Low Visibility) / F/A-18・青森',
+    missionRacingSub: 'F-15J / 渓谷コースをゲート通過でラップ計時',
+    missionCasSub: 'F-15J / 東北 / 味方戦車隊を敵戦車から守る',
+    missionsPageLink: '⚙️ ミッションを設定して開始（レベル・機体・マップ・編成を選ぶ）',
+    missionsPageTitle: '本家 Simulation メニューと同じ選択肢で各ミッションを設定（着陸訓練は全15レベル）',
+    retryLink: '↻ 前回のフライトに再挑戦',
+    retryTitle: '直前に飛んだフライトをもう一度（本家 Simulation メニューと同じ）',
+    openYfsLink: '📂 フライトファイル (.yfs) を開いて飛ぶ',
+    openYfsTitle: '手持ちの .yfs（ミッション/保存フライト）を読み込んで飛行（本家 File > Open のweb版）',
+    openYfsTooBig: '.yfs が大きすぎます（4MB まで）',
+    openYfsBad: '.yfs を読み込めませんでした',
     createFlightLink: '✈️ フライトを作る（機体・敵機・時間帯を選ぶ）',
     createFlightTitle: '専用ページで機体・マップ・時間帯・AI機を組んで離陸（Create Flight のweb版）',
     settingsLink: '⚙️ 設定（影・雲・HUD など）',
     settingsTitle: '見た目と表示の設定（Option メニューのweb版）',
     demoLink: '🎬 オートデモ（デモ飛行を眺める）',
     demoTitle: 'AIのデモ飛行をループ再生（戻るときはブラウザの「戻る」）',
-    controlsLink: '🕹️ コントローラ設定（パッド/スティックの割当）',
-    controlsTitle: 'ゲームパッドの軸・ボタン割当とデッドゾーン（キー割当メニューのweb版）',
+    controlsLink: '🕹️ コントローラ設定（ジョイスティック/キー割り当て）',
+    controlsTitle: 'ゲームパッドの軸・ボタン割当とデッドゾーン（本家 Option > ジョイスティック/キー割り当て のweb版）',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -177,14 +192,29 @@ const S = ({
     tagAirliner: 'Airliner',
     tagAdvanced: 'Advanced',
     missionTitle: '🎯 Missions',
-    missionHint: 'Click to start a mission (Endurance = survive the waves / Intercept = stop the raid / Landing practice = approach training)',
-    missionEasySub: 'Endurance: Atsugi / 2 wingmen, enemy Lv 3',
-    missionHardSub: 'Endurance: Hawaii / solo, enemy Lv 5',
-    missionInterceptSub: 'Intercept: stop the bomber raid / 2 wingmen',
-    missionLandingEasySub: 'Landing practice: Aomori / Lv 1, on final',
-    missionLandingIfrSub: 'Landing practice: Aomori / Lv 12, low-visibility IFR',
-    missionRacingSub: 'Racing: lap the valley course through the gates',
-    missionCasSub: 'Close air support: Tohoku / defend friendly tanks',
+    // Mission names mirror the NATIVE menu labels (en.uitxt
+    // menu/simulation-*) so veterans find what they know.
+    missionHint: 'Click to start a mission (same names as the native Simulation menu)',
+    missionEnduranceName: 'Endurance Mode',
+    missionInterceptName: 'Intercept Mission',
+    missionLandingName: 'Landing Practice',
+    missionRacingName: 'Racing Mode',
+    missionCasName: 'Close Air Support',
+    missionEasySub: 'F-15J / Atsugi / 2 wingmen, enemy Lv 3',
+    missionHardSub: 'F/A-18 / Hawaii / solo, enemy Lv 5',
+    missionInterceptSub: 'F-15J / Atsugi / stop the incoming bomber raid',
+    missionLandingEasySub: 'Level 1: Straight-In, wind calm / F/A-18, Aomori',
+    missionLandingIfrSub: 'Level 12: Low Visibility / F/A-18, Aomori',
+    missionRacingSub: 'F-15J / lap the valley course through the gates',
+    missionCasSub: 'F-15J / Tohoku / defend the friendly tank column',
+    missionsPageLink: '⚙️ Configure a mission (level, aircraft, map, raid composition)',
+    missionsPageTitle: 'Every mission with the native menu’s choices (landing practice: all 15 levels)',
+    retryLink: '↻ Retry Previous Flight',
+    retryTitle: 'Fly your previous flight again (same as the native Simulation menu)',
+    openYfsLink: '📂 Open a flight file (.yfs) and fly',
+    openYfsTitle: 'Load one of your own .yfs files (missions / saved flights) — the web File > Open',
+    openYfsTooBig: 'That .yfs is too large (4MB max)',
+    openYfsBad: 'Could not read that .yfs',
     createFlightLink: '✈️ Create a flight (aircraft, enemies, time of day)',
     createFlightTitle: 'Compose aircraft / map / time / AI on a dedicated page, then take off (web Create Flight)',
     settingsLink: '⚙️ Settings (shadows, clouds, HUD…)',
@@ -1077,19 +1107,17 @@ function renderPanel() {
   quickWrap.appendChild(mHint);
   const mGrid = document.createElement('div');
   mGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
+  // Card headline = the MISSION NAME in native menu vocabulary (veterans
+  // navigate by mission, not by aircraft — increment 14); aircraft and
+  // conditions live in the sub line.  Native Simulation-menu order.
   const MISSIONS = [
-    { name: 'F-15J Eagle', sub: S.missionEasySub, link: '?endurance=F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
-    { name: 'F-15J Eagle', sub: S.missionInterceptSub, link: '?intercept=F-15J_EAGLE,ATSUGI_AIRBASE', tag: S.tagIntermediate },
-    { name: 'F/A-18 Hornet', sub: S.missionHardSub, link: '?endurance=F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
-    // Landing practice (?landing=, web-shell increment 10): the fork's
-    // -landingpractice maps the level to the menu's leg/wind/weather table.
-    { icon: '🛬 ', name: 'F/A-18 Hornet', sub: S.missionLandingEasySub, link: '?landing=1', tag: S.tagBeginner },
-    { icon: '🛬 ', name: 'F/A-18 Hornet', sub: S.missionLandingIfrSub, link: '?landing=12', tag: S.tagAdvanced },
-    // Extension missions (?mission=, web-shell increment 12): a built-in .yfs
-    // with an EXTENSIO line (racing = lap timer through the field's gates,
-    // CAS = tank battle generated by the extension).
-    { icon: '🏁 ', name: 'F-15J Eagle', sub: S.missionRacingSub, link: '?mission=racing', tag: S.tagIntermediate },
-    { icon: '🛡️ ', name: 'F-15J Eagle', sub: S.missionCasSub, link: '?mission=cas', tag: S.tagIntermediate },
+    { icon: '🛬 ', name: S.missionLandingName, sub: S.missionLandingEasySub, link: '?landing=1', tag: S.tagBeginner },
+    { icon: '🛬 ', name: S.missionLandingName, sub: S.missionLandingIfrSub, link: '?landing=12', tag: S.tagAdvanced },
+    { name: S.missionEnduranceName, sub: S.missionEasySub, link: '?endurance=F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
+    { name: S.missionEnduranceName, sub: S.missionHardSub, link: '?endurance=F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
+    { name: S.missionInterceptName, sub: S.missionInterceptSub, link: '?intercept=F-15J_EAGLE,ATSUGI_AIRBASE', tag: S.tagIntermediate },
+    { icon: '🛡️ ', name: S.missionCasName, sub: S.missionCasSub, link: '?mission=cas', tag: S.tagIntermediate },
+    { icon: '🏁 ', name: S.missionRacingName, sub: S.missionRacingSub, link: '?mission=racing', tag: S.tagIntermediate },
   ];
   for (const m of MISSIONS) {
     const card = document.createElement('button');
@@ -1112,6 +1140,58 @@ function renderPanel() {
     mGrid.appendChild(card);
   }
   quickWrap.appendChild(mGrid);
+
+  // Full-granularity mission setup: the cards above are quick presets; this
+  // page offers every mission with the NATIVE dialog's choices (landing
+  // practice all 15 levels, endurance wingmen/level/AAM, intercept raid
+  // composition, CAS/racing aircraft+field) — increment 14.
+  const missionsPage = document.createElement('a');
+  missionsPage.textContent = S.missionsPageLink;
+  missionsPage.title = S.missionsPageTitle;
+  missionsPage.href = 'studio-missions.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
+  missionsPage.style.cssText = 'display:block;margin-top:8px;padding:9px 11px;border:1px dashed #345;border-radius:8px;color:' + ACCENT + ';font-size:13px;text-decoration:none;text-align:center';
+  quickWrap.appendChild(missionsPage);
+
+  // Retry Previous Flight + open a .yfs — the native Sim > Retry and
+  // File > Open, as quiet one-line entries under the mission grid
+  // (increment 14).  Retry boots -flyyfs on the engine-saved prevflight.dat;
+  // with no previous flight the -autoexit path just returns here.  Open reads
+  // a user .yfs into sessionStorage and boots ?openyfs=1 (index.html preRun
+  // writes it for -flyyfs) — a bad file also falls back to the shell.
+  const retryRow = document.createElement('div');
+  retryRow.style.cssText = 'display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:8px';
+  const retryLink = document.createElement('a');
+  retryLink.textContent = S.retryLink;
+  retryLink.title = S.retryTitle;
+  retryLink.href = '?retry=1' + (curLang ? '&lang=' + encodeURIComponent(curLang) : '');
+  retryLink.style.cssText = 'color:#8fa3bb;font-size:12px;text-decoration:none;padding:5px 8px';
+  retryRow.appendChild(retryLink);
+  const openYfs = document.createElement('label');
+  openYfs.textContent = S.openYfsLink;
+  openYfs.title = S.openYfsTitle;
+  openYfs.style.cssText = 'color:#8fa3bb;font-size:12px;cursor:pointer;padding:5px 8px';
+  const yfsInput = document.createElement('input');
+  yfsInput.type = 'file';
+  yfsInput.accept = '.yfs';
+  yfsInput.style.display = 'none';
+  yfsInput.addEventListener('change', async () => {
+    const f = yfsInput.files && yfsInput.files[0];
+    if (!f) return;
+    if (f.size > 4 * 1024 * 1024) { alert(S.openYfsTooBig); yfsInput.value = ''; return; }
+    try {
+      const text = await f.text();
+      sessionStorage.setItem('ysfwOpenYfs', text);
+      // A .yfs WITH flight records (NUMRECOR) is a recording — veterans'
+      // airshow files.  -flyyfs rejects those (PlayerPlaneIsReady needs a
+      // record-free player), so route them to replay playback instead;
+      // record-free files fly.  Same auto-routing the native File > Open does.
+      const kind = text.indexOf('NUMRECOR ') !== -1 ? 'openreplay' : 'openyfs';
+      location.assign(location.origin + location.pathname + '?' + kind + '=1' + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
+    } catch (e) { alert(S.openYfsBad); }
+  });
+  openYfs.appendChild(yfsInput);
+  retryRow.appendChild(openYfs);
+  quickWrap.appendChild(retryRow);
 
   // Create Flight: author a custom flight (aircraft/map/time/AI) on a dedicated
   // page, then take off — the web-shell replacement for Sim > Create Flight.
