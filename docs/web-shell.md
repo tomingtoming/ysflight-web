@@ -35,7 +35,7 @@
 | Sim > リプレイ再生 | `?replay=` → `-replayrecord` | ✅ 稼働中 |
 | Net > Client/Server | `?join=` → `-client`＋シグナリングWorker | ✅ 稼働中 |
 | Sim > Endurance | `?endurance=` → `-endurance` | ✅ 増分1（本ドキュメントと同PR） |
-| Sim > Intercept | `-intercept` は**上流バグあり**（後述）→ fork修正後に `?intercept=` | 増分3 |
+| Sim > Intercept | `?intercept=` → `-intercept`（fork の絶対index修正込み） | ✅ 増分3 |
 | Sim > Create Flight（本格作成・昼夜・地上砲火・CAS/地対空/レーシング） | web UIで `.yfs` を生成 → IDBFSに書く → `-flyyfs` | 増分4（本丸） |
 | Sim > 着陸練習 Lv1-15 | 定型 `.yfs` または生成 | 増分4に含む |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
@@ -61,11 +61,15 @@
    `fsrunloop.cpp:198` がESCも食う）→ESC×2（`fssimulation.cpp`
    escKeyCount>=2）→（enduranceは CONTINUE FLIGHT? ダイアログ）→ESC。
    飛行中の継続確認等のダイアログはエンジン側に残す（方針どおり）。
-3. **`?intercept=`** ── 上流 `fscmdparaminfo.cpp` の `-intercept` は
-   フラグ群を `av[3..8]`（**絶対位置**）で読む off-by-one バグがあり、
-   `av[i+3..i+8]` であるべき。fork `emscripten` ブランチに単独コミットで
-   修正（上流にそのままPRできる純バグ修正として分離）→ submodule bump →
-   `?intercept=` 追加。
+3. **`?intercept=`（実装済み）** ── 上流 `fscmdparaminfo.cpp` の
+   `-intercept` はフラグ群を `av[3..8]`（**絶対位置**）で読む off-by-one
+   バグがあり、`av[i+3..i+8]` であるべきだった。fork `fix/intercept-arg-index`
+   に単独コミットで修正（上流にそのままPRできる純バグ修正として分離）→
+   submodule bump → `?intercept=機体[,マップ,ステルス,護衛,重爆,爆弾,機数,僚機]`。
+   検証知見: intercept は勝利条件を持つため離陸前に `== Your Mission ==`
+   ブリーフィング（`fsguisiminfodialog.cpp`）が出る。これは飛行画面の
+   ミッション内容としてエンジン側に残す（enduranceの CONTINUE? と同じ扱い）。
+   OKボタンのクリックで離陸（Enterでは閉じない）。
 4. **`.yfs` ジェネレータ（本丸）** ── フライト定義をJSで組み立てて
    `-flyyfs` で起動。Create Flight 相当のweb UI（機体複数・僚機・地上物・
    昼夜・ミッション種別）。ミッション拡張は ident 経由で `.yfs` から復元

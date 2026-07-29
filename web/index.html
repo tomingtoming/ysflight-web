@@ -1120,7 +1120,7 @@
   (function () {
     var q = new URLSearchParams(location.search);
     var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
-    if (kind !== 'freeflight' && kind !== 'endurance') return;  // flight deep-links only
+    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept') return;  // flight deep-links only
     var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;

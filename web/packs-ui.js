@@ -73,9 +73,10 @@ const S = ({
     tagAirliner: '大型機',
     tagAdvanced: '上級者向け',
     missionTitle: '🎯 ミッション',
-    missionHint: '邀撃ミッション — 次々に来襲する敵編隊を迎え撃つ（撃墜されるまで）',
-    missionEasySub: '厚木 / 僚機2機・敵レベル3',
-    missionHardSub: 'Hawaii / 単機・敵レベル5',
+    missionHint: 'クリックで即ミッション開始（耐久戦＝波状の敵を迎え撃つ／邀撃＝来襲編隊を阻止）',
+    missionEasySub: '耐久戦: 厚木 / 僚機2機・敵レベル3',
+    missionHardSub: '耐久戦: Hawaii / 単機・敵レベル5',
+    missionInterceptSub: '邀撃: 爆撃編隊を阻止 / 僚機2機',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -164,9 +165,10 @@ const S = ({
     tagAirliner: 'Airliner',
     tagAdvanced: 'Advanced',
     missionTitle: '🎯 Missions',
-    missionHint: 'Endurance interception — waves of raiders keep coming; survive as long as you can',
-    missionEasySub: 'Atsugi / 2 wingmen, enemy Lv 3',
-    missionHardSub: 'Hawaii / solo, enemy Lv 5',
+    missionHint: 'Click to start a mission (Endurance = survive the waves / Intercept = stop the raid)',
+    missionEasySub: 'Endurance: Atsugi / 2 wingmen, enemy Lv 3',
+    missionHardSub: 'Endurance: Hawaii / solo, enemy Lv 5',
+    missionInterceptSub: 'Intercept: stop the bomber raid / 2 wingmen',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -1052,8 +1054,9 @@ function renderPanel() {
   const mGrid = document.createElement('div');
   mGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
   const MISSIONS = [
-    { name: 'F-15J Eagle', sub: S.missionEasySub, en: 'F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
-    { name: 'F/A-18 Hornet', sub: S.missionHardSub, en: 'F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
+    { name: 'F-15J Eagle', sub: S.missionEasySub, link: '?endurance=F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
+    { name: 'F-15J Eagle', sub: S.missionInterceptSub, link: '?intercept=F-15J_EAGLE,ATSUGI_AIRBASE', tag: S.tagIntermediate },
+    { name: 'F/A-18 Hornet', sub: S.missionHardSub, link: '?endurance=F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
   ];
   for (const m of MISSIONS) {
     const card = document.createElement('button');
@@ -1071,7 +1074,7 @@ function renderPanel() {
     tag.style.cssText = 'margin-top:5px;font-size:10px;color:#7d93b0';
     card.appendChild(tag);
     card.addEventListener('click', () => {
-      location.assign(location.origin + location.pathname + '?endurance=' + m.en + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
+      location.assign(location.origin + location.pathname + m.link + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
     });
     mGrid.appendChild(card);
   }

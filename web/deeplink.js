@@ -15,6 +15,8 @@
 //   ?freeflight=AIRPLANE[,FIELD[,POSITION]]   free flight (Quick Flight)
 //   ?endurance=AIRPLANE[,FIELD[,WINGMEN,LEVEL,AAM]]
 //                                             endurance mission (wave defense)
+//   ?intercept=AIRPLANE[,FIELD[,STEALTH,AIRCOVER,HEAVY,BOMB,ATTACKERS,WINGMEN]]
+//                                             intercept mission (stop the raid)
 //   ?replay=<file>                            play a saved recording
 globalThis.ysfwDeepLink = (function () {
   'use strict';
@@ -61,6 +63,23 @@ globalThis.ysfwDeepLink = (function () {
         intParam(e[3], 3, 1, 5),   // enemy level 1-5
         intParam(e[4], 1, 0, 1));  // allow AAM 0/1
     }
+    // ?intercept=AIRPLANE,FIELD,STEALTH,AIRCOVER,HEAVY,BOMB,ATTACKERS,WINGMEN —
+    // the engine's intercept mission (-intercept, EXEMODE_INTERCEPT): an
+    // attacker raid comes in, stop it.  Flag order mirrors the engine's argv
+    // (fscmdparaminfo.cpp; requires the fork's i-relative index fix).
+    // Defaults: a classic raid — no stealth, escorted heavy bombers with
+    // bombs, 3 attackers, 2 wingmen.
+    var ic = q.get('intercept');
+    if (ic) {
+      var c = ic.split(',');
+      a.push('-intercept', c[0], c[1] || 'ATSUGI_AIRBASE',
+        intParam(c[2], 0, 0, 1),   // attackers may include stealth
+        intParam(c[3], 1, 0, 1),   // attackers have air cover (escort)
+        intParam(c[4], 1, 0, 1),   // attackers may include heavy bombers
+        intParam(c[5], 1, 0, 1),   // attackers carry bombs
+        intParam(c[6], 3, 1, 5),   // number of attackers 1-5
+        intParam(c[7], 2, 0, 2));  // wingmen 0-2
+    }
     // ?replay=<file> plays a saved recording: the engine's -replayrecord loads the
     // .yfs and auto-starts playback (a loaded flight record makes PlayerPlaneIsReady
     // false).  The file lives in the IDBFS user dir's replays/; sanitize to a bare
@@ -77,7 +96,7 @@ globalThis.ysfwDeepLink = (function () {
     // All three modes start their flight synchronously inside the init state
     // machine (fsmain.cpp case 7), so autoexit cannot fire before takeoff.
     if (a.indexOf('-freeflight') >= 0 || a.indexOf('-endurance') >= 0 ||
-        a.indexOf('-replayrecord') >= 0) {
+        a.indexOf('-intercept') >= 0 || a.indexOf('-replayrecord') >= 0) {
       a.push('-autoexit');
     }
     return a;
@@ -92,6 +111,7 @@ globalThis.ysfwDeepLink = (function () {
     var q = search instanceof URLSearchParams ? search : new URLSearchParams(search);
     if (q.get('freeflight')) return 'freeflight';
     if (q.get('endurance')) return 'endurance';
+    if (q.get('intercept')) return 'intercept';
     if (q.get('replay')) return 'replay';
     return null;
   }
