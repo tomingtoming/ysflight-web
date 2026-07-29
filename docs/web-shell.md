@@ -50,14 +50,17 @@
 1. **ミッションディープリンク（このPR）** ── `web/deeplink.js` 新設
    （URL→argv写像の単一の置き場・単体テスト付き）、`?endurance=`、トップ
    ページにミッションセクション、CIに mission smoke。エンジン無改変。
-2. **即時ハンドオーバー** ── 現状、飛行終了→800msポーリングが拾うまで本家
-   メニューが一瞬見える。port層 `fslazywindow_emscripten.cpp` の
-   `MainLoopTick` は `MustTerminate` で `emscripten_cancel_main_loop()` を
-   呼ぶだけで**JSに通知しない**（実測）。ここに terminate→JSイベントを足し、
-   ディープリンク起動に `-autoexit` を付ける（`-autoexit`＝メニュー復帰時
+2. **即時ハンドオーバー（実装済み・増分1の次のPR）** ── port層
+   `fslazywindow_emscripten.cpp` の `MainLoopTick` が terminate 時に
+   `ysfw-terminated` イベントをJSへ発火（メニューフレームを描く前に脱出）し、
+   ディープリンク起動には `-autoexit` を付与（`-autoexit`＝メニュー復帰時
    モーダル無しなら終了、`fsrunloop.cpp` の
-   `terminateWhenNoModalDialogIsOpenAndBackToMenu`）。メニューは1フレームも
-   見えなくなる。wasm再ビルド要・fork不要（port層は本リポジトリの所有）。
+   `terminateWhenNoModalDialogIsOpenAndBackToMenu`）。シェルはイベントで即
+   帰還（800msポーリングはフォールバックに降格）。メニューは1フレームも
+   見えない。検証知見: 飛行終了の操作列は Space（CENTER JOYSTICK ゲート解除、
+   `fsrunloop.cpp:198` がESCも食う）→ESC×2（`fssimulation.cpp`
+   escKeyCount>=2）→（enduranceは CONTINUE FLIGHT? ダイアログ）→ESC。
+   飛行中の継続確認等のダイアログはエンジン側に残す（方針どおり）。
 3. **`?intercept=`** ── 上流 `fscmdparaminfo.cpp` の `-intercept` は
    フラグ群を `av[3..8]`（**絶対位置**）で読む off-by-one バグがあり、
    `av[i+3..i+8]` であるべき。fork `emscripten` ブランチに単独コミットで

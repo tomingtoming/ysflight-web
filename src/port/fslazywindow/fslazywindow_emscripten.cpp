@@ -29,6 +29,8 @@ static bool busy=false;  // To prevent re-entry
 // message every ~16ms and the main thread runs Interval() from it whenever
 // the page is hidden.  Drawing is skipped while invisible.
 
+static void NotifyTerminated(void);
+
 extern "C" void EMSCRIPTEN_KEEPALIVE YsfwBackgroundTick(void)
 {
 	auto appPtr=FsLazyWindowApplicationBase::GetApplication();
@@ -40,6 +42,15 @@ extern "C" void EMSCRIPTEN_KEEPALIVE YsfwBackgroundTick(void)
 	busy=true;
 	appPtr->Interval();
 	busy=false;
+	// A hidden tab still simulates; if the flight ended there (-autoexit set
+	// the terminate flag inside Interval), hand over to the shell now — the
+	// rAF loop is parked while hidden and would only notice on re-focus.
+	if(true==appPtr->MustTerminate())
+	{
+		appPtr->BeforeTerminate();
+		emscripten_cancel_main_loop();
+		NotifyTerminated();
+	}
 }
 
 EM_JS(void,YsfwInstallBackgroundTicker,(),
@@ -109,6 +120,22 @@ extern "C" double EMSCRIPTEN_KEEPALIVE YsfwGetTickMs(void)
 	return tickMsAvg;
 }
 
+// Tell the web shell the moment the engine decides to terminate.  With
+// -autoexit (which the shell adds to every flight deep link) this fires on
+// "flight over, back to menu": the shell navigates away IMMEDIATELY instead of
+// ever presenting the engine's 2D menu (docs/web-shell.md, instant handover).
+// Idempotent; also covers File>Exit and fatal window-close paths.
+static void NotifyTerminated(void)
+{
+	EM_ASM({
+		if(!globalThis.ysfwTerminated)
+		{
+			globalThis.ysfwTerminated=true;
+			try { window.dispatchEvent(new Event('ysfw-terminated')); } catch(e) {}
+		}
+	});
+}
+
 static void MainLoopTick(void)
 {
 	auto appPtr=FsLazyWindowApplicationBase::GetApplication();
@@ -117,6 +144,7 @@ static void MainLoopTick(void)
 	{
 		appPtr->BeforeTerminate();
 		emscripten_cancel_main_loop();
+		NotifyTerminated();
 		return;
 	}
 
@@ -127,6 +155,17 @@ static void MainLoopTick(void)
 	busy=true;
 	appPtr->Interval();
 	busy=false;
+
+	// Terminate decided DURING this tick (typically -autoexit observing the
+	// return to menu inside Interval): bail out before the Draw below would
+	// present a single menu frame.  The canvas keeps the last flight frame.
+	if(true==appPtr->MustTerminate())
+	{
+		appPtr->BeforeTerminate();
+		emscripten_cancel_main_loop();
+		NotifyTerminated();
+		return;
+	}
 
 	// Phase split for FsVrPerfDataPointer()[0]/[1] (see fsvr.h): the
 	// simulation/interval half vs. the draw half of the tick, same EMA

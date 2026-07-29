@@ -1140,10 +1140,10 @@
       try { if (localStorage.getItem('ysfwHelpSeen')) return; localStorage.setItem('ysfwHelpSeen', '1'); } catch (e) {}
       window.__ysfwHelpToggle(true);
     }
-    setInterval(function () {
-      if (!booted) return;
-      if (globalThis.ysfwInFlight) { if (!enteredFlight) maybeAutoHelp(); enteredFlight = true; return; }
-      if (!enteredFlight) return;  // still booting into the flight; not an exit yet
+    var navigated = false;
+    function goBack() {
+      if (navigated) return;
+      navigated = true;
       var lang = q.get('lang');  // keep an explicit language override across the reload
       if (returnPage) {
         // Navigate back to the studio/workbench page that launched this flight.
@@ -1152,6 +1152,19 @@
         // Fallback: return to the clean top page.
         location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
       }
+    }
+    // Instant handover: deep links carry -autoexit, so "flight over" makes the
+    // engine terminate and the port fires 'ysfw-terminated' BEFORE any menu
+    // frame is drawn.  Navigate right away — no enteredFlight latch here, since
+    // a terminate without ever reaching flight (bad aircraft name etc.) should
+    // also return to the shell rather than strand a frozen canvas.
+    window.addEventListener('ysfw-terminated', goBack);
+    // Fallback: poll the flight flag (pre-autoexit builds, or a missed event).
+    setInterval(function () {
+      if (!booted) return;
+      if (globalThis.ysfwInFlight) { if (!enteredFlight) maybeAutoHelp(); enteredFlight = true; return; }
+      if (!enteredFlight) return;  // still booting into the flight; not an exit yet
+      goBack();
     }, 800);
   })();
 
@@ -1163,12 +1176,21 @@
     var q = new URLSearchParams(location.search);
     if (!q.get('replay')) return;
     var entered = false;
+    var navigated = false;
+    function goBack() {
+      if (navigated) return;
+      navigated = true;
+      var lang = q.get('lang');
+      location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
+    }
+    // Instant handover on engine terminate (-autoexit), same as the flight
+    // watcher above.
+    window.addEventListener('ysfw-terminated', goBack);
     setInterval(function () {
       if (!booted) return;
       if (globalThis.ysfwReplaying) { entered = true; return; }
       if (!entered) return;  // still loading into the replay; not an exit yet
-      var lang = q.get('lang');
-      location.assign(location.origin + location.pathname + (lang ? '?lang=' + encodeURIComponent(lang) : ''));
+      goBack();
     }, 800);
   })();
 
