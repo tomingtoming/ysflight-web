@@ -11,10 +11,11 @@ import { validateReturnPage, RETURN_WHITELIST } from '../web/fly-return.js';
 
 // ── Whitelist completeness ───────────────────────────────────────────────────
 
-test('RETURN_WHITELIST contains exactly the four expected pages', () => {
+test('RETURN_WHITELIST contains exactly the expected pages', () => {
   const sorted = [...RETURN_WHITELIST].sort();
   assert.deepEqual(sorted, [
     'studio-aircraft.html',
+    'studio-flight.html',
     'studio-pack.html',
     'studio-scenery.html',
     'workbench.html',
@@ -22,6 +23,10 @@ test('RETURN_WHITELIST contains exactly the four expected pages', () => {
 });
 
 // ── Valid pages ──────────────────────────────────────────────────────────────
+
+test('accepts studio-flight.html', () => {
+  assert.equal(validateReturnPage('studio-flight.html'), 'studio-flight.html');
+});
 
 test('accepts workbench.html', () => {
   assert.equal(validateReturnPage('workbench.html'), 'workbench.html');

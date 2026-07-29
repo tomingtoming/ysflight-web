@@ -11,6 +11,7 @@ export const RETURN_WHITELIST = [
   'studio-aircraft.html',
   'studio-scenery.html',
   'studio-pack.html',
+  'studio-flight.html',
 ];
 
 /**

@@ -92,6 +92,16 @@ jobs:
           sleep 2
           node scripts/smoke-mission.mjs "http://localhost:8924/index.html"
 
+      # Create-Flight smoke (PR only): the engine-less Create-Flight page authors
+      # a flight spec -> .yfs (yfs.js) -> -flyyfs, and the engine reaches
+      # in-flight.  Guards the web Create-Flight path end to end.
+      - name: Create-Flight smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          node "${{ github.workspace }}/scripts/serve.mjs" 8925 "${{ github.workspace }}/dist" &
+          sleep 2
+          node scripts/smoke-createflight.mjs "http://localhost:8925/index.html"
+
       # VR menu smoke (PR only): verifies that the engine renders the 2D main
       # menu into the VR off-screen FBO (setupMenu/DrawMenu/updateMenuLayer),
       # that the menuDrawn flag is set, and that the watchdog stays disarmed.

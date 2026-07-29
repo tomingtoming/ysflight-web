@@ -77,6 +77,8 @@ const S = ({
     missionEasySub: '耐久戦: 厚木 / 僚機2機・敵レベル3',
     missionHardSub: '耐久戦: Hawaii / 単機・敵レベル5',
     missionInterceptSub: '邀撃: 爆撃編隊を阻止 / 僚機2機',
+    createFlightLink: '✈️ フライトを作る（機体・敵機・時間帯を選ぶ）',
+    createFlightTitle: '専用ページで機体・マップ・時間帯・AI機を組んで離陸（Create Flight のweb版）',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -169,6 +171,8 @@ const S = ({
     missionEasySub: 'Endurance: Atsugi / 2 wingmen, enemy Lv 3',
     missionHardSub: 'Endurance: Hawaii / solo, enemy Lv 5',
     missionInterceptSub: 'Intercept: stop the bomber raid / 2 wingmen',
+    createFlightLink: '✈️ Create a flight (aircraft, enemies, time of day)',
+    createFlightTitle: 'Compose aircraft / map / time / AI on a dedicated page, then take off (web Create Flight)',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -1079,6 +1083,16 @@ function renderPanel() {
     mGrid.appendChild(card);
   }
   quickWrap.appendChild(mGrid);
+
+  // Create Flight: author a custom flight (aircraft/map/time/AI) on a dedicated
+  // page, then take off — the web-shell replacement for Sim > Create Flight.
+  const createLink = document.createElement('a');
+  createLink.textContent = S.createFlightLink;
+  createLink.title = S.createFlightTitle;
+  createLink.href = 'studio-flight.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
+  createLink.style.cssText = 'display:block;margin-top:12px;padding:9px 11px;border:1px dashed #345;border-radius:8px;color:' + ACCENT + ';font-size:13px;text-decoration:none;text-align:center';
+  quickWrap.appendChild(createLink);
+
   panel.appendChild(quickWrap);
 
   // ▶ Play (primary CTA) sits directly under Quick Flight — ABOVE the add-on
