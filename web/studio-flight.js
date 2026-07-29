@@ -6,7 +6,7 @@
 // to index.html?createflight=1.  index.html's preRun turns the spec into a
 // .yfs via web/yfs.js and boots it with -flyyfs.  Engine-less like the other
 // studio pages: it only needs the stock aircraft index for the id dropdown.
-import { ACCENT, LANG, pageUrl, stockIndex } from './studio-shared.js';
+import { ACCENT, LANG, pageUrl, stockIndex, stockFields } from './studio-shared.js';
 
 // yfs.js is a classic script (globalThis.ysfwYfs), loaded by studio-flight.html
 // before this module — the same publish-on-global arrangement index.html uses.
@@ -22,6 +22,9 @@ const S = ({
     sideFriend: '味方', sideEnemyA: '敵A', sideEnemyB: '敵B', startPos: '開始位置',
     remove: '削除', fly: '🛫 離陸', back: '← 戻る',
     needPlayer: '「あなた」の機体を1機選んでください。',
+    ground: '地上物', groundNone: 'なし',
+    groundAaa: '対空砲陣地（AAA×3）', groundSam: 'SAM陣地（SAM×2＋AAA×1）',
+    groundTargets: '練習ターゲット（×4）', groundAt: '配置場所',
   },
   en: {
     title: '✈️ Create Flight',
@@ -32,6 +35,9 @@ const S = ({
     sideFriend: 'Friendly', sideEnemyA: 'Enemy A', sideEnemyB: 'Enemy B', startPos: 'Start position',
     remove: 'Remove', fly: '🛫 Take off', back: '← Back',
     needPlayer: 'Pick one aircraft for "You".',
+    ground: 'Ground objects', groundNone: 'None',
+    groundAaa: 'AAA site (AAA×3)', groundSam: 'SAM site (SAM×2 + AAA×1)',
+    groundTargets: 'Practice targets (×4)', groundAt: 'Placed at',
   },
 })[LANG] || {};
 
@@ -51,6 +57,20 @@ const SIDES = () => [
   { iff: 2, label: S.sideEnemyB },
 ];
 
+// Ground-object presets: stock identifies + a scatter pattern (dx/dz meters
+// from the anchor).  y stays the anchor's own — GNDPOSIT is absolute and the
+// engine does not snap to terrain, so anchoring at a ground start position
+// (from stock/fields.json) keeps everything on the apron.
+const GROUND_PRESETS = () => [
+  { key: 'aaa', label: S.groundAaa, objs: [{ id: 'AAA', dx: 0, dz: 0 }, { id: 'AAA', dx: 180, dz: -130 }, { id: 'AAA', dx: -180, dz: -130 }] },
+  { key: 'sam', label: S.groundSam, objs: [{ id: 'ASPAM', dx: 120, dz: 0 }, { id: 'ASPAM', dx: -120, dz: 0 }, { id: 'AAA', dx: 0, dz: -160 }] },
+  { key: 'targets', label: S.groundTargets, objs: [{ id: 'GROUNDTARGET1', dx: -150, dz: 0 }, { id: 'GROUNDTARGET1', dx: -50, dz: 0 }, { id: 'GROUNDTARGET2', dx: 50, dz: 0 }, { id: 'GROUNDTARGET2', dx: 150, dz: 0 }] },
+];
+
+// A start position is "on the ground" (usable as a ground-object anchor) when
+// its .stp altitude is low — airborne starts sit at thousands of meters.
+const groundStps = (stps) => (stps || []).filter((s) => typeof s.y === 'number' && s.y < 50);
+
 const el = (tag, css, text) => {
   const e = document.createElement(tag);
   if (css) e.style.cssText = css;
@@ -59,6 +79,7 @@ const el = (tag, css, text) => {
 };
 
 let AIRCRAFT_IDS = [];
+let FIELD_STPS = {};  // { FIELD_ID: [{n,x,y,z,h}] } from stock/fields.json
 
 function aircraftSelect(value) {
   const sel = el('select', 'padding:6px 8px;border-radius:6px;border:1px solid #243244;background:#0d141d;color:#e6edf3;font-size:13px;min-width:180px');
@@ -145,6 +166,36 @@ function render(root) {
   addBtn.addEventListener('click', () => list.appendChild(makeRow(false)));
   wrap.appendChild(addBtn);
 
+  // Ground objects: a preset scattered around a ground start position of the
+  // selected field.  Hidden when stock/fields.json has no ground start for the
+  // field (nowhere safe to anchor — GNDPOSIT is absolute, no terrain snap).
+  const gndBox = el('div', 'margin-bottom:22px');
+  gndBox.appendChild(el('div', 'color:#8fa3bb;font-size:11px;margin-bottom:6px', S.ground));
+  const gndRow = el('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 11px;border:1px solid #243244;border-radius:8px;background:#0d141d');
+  const selCss = 'padding:6px 8px;border-radius:6px;border:1px solid #243244;background:#0b1119;color:#e6edf3;font-size:13px';
+  const gndPreset = el('select', selCss);
+  gndPreset.id = 'ysfw-ground-preset';
+  { const o = el('option', null, S.groundNone); o.value = ''; gndPreset.appendChild(o); }
+  for (const p of GROUND_PRESETS()) { const o = el('option', null, p.label); o.value = p.key; gndPreset.appendChild(o); }
+  const gndAtLbl = el('span', 'font-size:12px;color:#8fa3bb', S.groundAt);
+  const gndAnchor = el('select', selCss);
+  gndAnchor.id = 'ysfw-ground-anchor';
+  const gndSide = el('select', selCss);
+  for (const s of SIDES()) { const o = el('option', null, s.label); o.value = String(s.iff); gndSide.appendChild(o); }
+  gndSide.value = '1';
+  gndRow.appendChild(gndPreset); gndRow.appendChild(gndAtLbl); gndRow.appendChild(gndAnchor); gndRow.appendChild(gndSide);
+  gndBox.appendChild(gndRow);
+  wrap.appendChild(gndBox);
+  function refreshAnchors() {
+    const stps = groundStps(FIELD_STPS[fieldSel.value]);
+    gndAnchor.textContent = '';
+    for (const s of stps) { const o = el('option', null, s.n); o.value = s.n; gndAnchor.appendChild(o); }
+    gndBox.style.display = stps.length ? '' : 'none';
+    if (!stps.length) gndPreset.value = '';
+  }
+  fieldSel.addEventListener('change', refreshAnchors);
+  refreshAnchors();
+
   // Fly.
   const flyBtn = el('button', 'display:block;width:100%;padding:12px;border:0;border-radius:8px;background:' + ACCENT + ';color:#04101f;font-size:16px;font-weight:700;cursor:pointer', S.fly);
   const err = el('div', 'color:#e78;font-size:12px;margin-top:8px;min-height:16px');
@@ -168,6 +219,18 @@ function render(root) {
       weapons: { gun: wpn.gun.checked, aam: wpn.aam.checked, agm: wpn.agm.checked, bomb: wpn.bomb.checked, rocket: wpn.rocket.checked },
       aircraft,
     };
+    // Ground preset -> concrete placements around the chosen anchor (same y:
+    // the anchor comes from the .stp, so it is on the ground; see yfs.js).
+    const preset = GROUND_PRESETS().find((p) => p.key === gndPreset.value);
+    const anchor = groundStps(FIELD_STPS[f.id]).find((s) => s.n === gndAnchor.value);
+    if (preset && anchor) {
+      spec.ground = preset.objs.map((o) => ({
+        id: o.id,
+        x: anchor.x + o.dx, y: anchor.y, z: anchor.z + o.dz,
+        h: anchor.h || 0,
+        iff: parseInt(gndSide.value, 10),
+      }));
+    }
     try {
       buildYfs(spec);  // validate before navigating (throws on a bad spec)
       sessionStorage.setItem('ysfwCreateFlight', JSON.stringify(spec));
@@ -187,6 +250,7 @@ function render(root) {
   } catch (e) {
     AIRCRAFT_IDS = ['F-15J_EAGLE', 'F-18C_HORNET'];
   }
+  try { FIELD_STPS = await stockFields(); } catch (e) { FIELD_STPS = {}; }
   render(document.body);
   window.ysfwCreateFlightReady = true;  // smoke-test signal
 })();

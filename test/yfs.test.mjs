@@ -83,3 +83,38 @@ test('rejects specs that could not boot', () => {
     { id: 'A', player: true }, { id: 'B', player: true },
   ] }), /exactly one player/);
 });
+
+// ---- Ground objects (web-shell increment 8) ---------------------------------
+
+const PLAYER = [{ id: 'P', player: true }];
+
+test('ground objects emit the engine save grammar after the aircraft', () => {
+  const yfs = buildYfs({ field: 'F', aircraft: PLAYER, ground: [
+    { id: 'AAA', x: 3792, y: 1, z: 1325, h: 180, iff: 1 },
+  ] });
+  assert.match(yfs, /GROUNDOB AAA FALSE\nIDENTIFY 1\nGNDPOSIT 3792m 1m 1325m\nGNDATTIT 180deg 0deg 0deg\n/);
+  // Ground blocks come after the airplane block, mirroring FsSimulation::Save.
+  assert.ok(yfs.indexOf('AIRPLANE ') < yfs.indexOf('GROUNDOB '));
+});
+
+test('ground positions are rounded to 2 decimals; heading defaults to 0', () => {
+  const yfs = buildYfs({ field: 'F', aircraft: PLAYER, ground: [
+    { id: 'ASPAM', x: 1.005, y: 0.333, z: -2.999 },
+  ] });
+  assert.match(yfs, /GNDPOSIT 1m 0\.33m -3m/);
+  assert.match(yfs, /GNDATTIT 0deg 0deg 0deg/);
+  assert.match(yfs, /GROUNDOB ASPAM FALSE\nIDENTIFY 1\n/);  // iff defaults hostile
+});
+
+test('ground identifiers are sanitized and bad entries throw', () => {
+  const yfs = buildYfs({ field: 'F', aircraft: PLAYER, ground: [
+    { id: 'AAA\nGROUNDOB evil', x: 0, y: 0, z: 0 },
+  ] });
+  assert.equal((yfs.match(/^GROUNDOB /gm) || []).length, 1);
+  assert.throws(() => buildYfs({ field: 'F', aircraft: PLAYER, ground: [{ x: 0, y: 0, z: 0 }] }), /has no id/);
+  assert.throws(() => buildYfs({ field: 'F', aircraft: PLAYER, ground: [{ id: 'AAA', x: 'junk', y: 0, z: 0 }] }), /non-numeric position/);
+});
+
+test('no ground key -> no GROUNDOB lines (back-compat)', () => {
+  assert.doesNotMatch(buildYfs({ field: 'F', aircraft: PLAYER }), /GROUNDOB/);
+});
