@@ -71,6 +71,11 @@ const S = ({
     tagBeginner: '👍 はじめての方向け',
     tagIntermediate: '中級者向け',
     tagAirliner: '大型機',
+    tagAdvanced: '上級者向け',
+    missionTitle: '🎯 ミッション',
+    missionHint: '邀撃ミッション — 次々に来襲する敵編隊を迎え撃つ（撃墜されるまで）',
+    missionEasySub: '厚木 / 僚機2機・敵レベル3',
+    missionHardSub: 'Hawaii / 単機・敵レベル5',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -157,6 +162,11 @@ const S = ({
     tagBeginner: '👍 Beginner',
     tagIntermediate: 'Intermediate',
     tagAirliner: 'Airliner',
+    tagAdvanced: 'Advanced',
+    missionTitle: '🎯 Missions',
+    missionHint: 'Endurance interception — waves of raiders keep coming; survive as long as you can',
+    missionEasySub: 'Atsugi / 2 wingmen, enemy Lv 3',
+    missionHardSub: 'Hawaii / solo, enemy Lv 5',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -1026,6 +1036,46 @@ function renderPanel() {
     quickWrap.appendChild(again);
   }
   quickWrap.appendChild(qGrid);
+
+  // ---- Missions: the engine's endurance mode via ?endurance= deep links -------
+  // Same card idiom as Quick Flight; a separate section so the "just fly" and
+  // "fight" entries don't blur.  Bundled aircraft/fields only (same rule as
+  // PRESETS: a deep link must never point into an uninstalled add-on).
+  const mTitle = document.createElement('div');
+  mTitle.textContent = S.missionTitle;
+  mTitle.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin:14px 0 2px';
+  quickWrap.appendChild(mTitle);
+  const mHint = document.createElement('div');
+  mHint.textContent = S.missionHint;
+  mHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:8px';
+  quickWrap.appendChild(mHint);
+  const mGrid = document.createElement('div');
+  mGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
+  const MISSIONS = [
+    { name: 'F-15J Eagle', sub: S.missionEasySub, en: 'F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
+    { name: 'F/A-18 Hornet', sub: S.missionHardSub, en: 'F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
+  ];
+  for (const m of MISSIONS) {
+    const card = document.createElement('button');
+    card.style.cssText = 'text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid #243244;background:#0d141d';
+    const nm = document.createElement('div');
+    nm.textContent = '🎯 ' + m.name;
+    nm.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600';
+    const sub = document.createElement('div');
+    sub.textContent = m.sub;
+    sub.style.cssText = 'color:#8fa3bb;font-size:11px;margin-top:1px';
+    card.appendChild(nm);
+    card.appendChild(sub);
+    const tag = document.createElement('div');
+    tag.textContent = m.tag;
+    tag.style.cssText = 'margin-top:5px;font-size:10px;color:#7d93b0';
+    card.appendChild(tag);
+    card.addEventListener('click', () => {
+      location.assign(location.origin + location.pathname + '?endurance=' + m.en + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
+    });
+    mGrid.appendChild(card);
+  }
+  quickWrap.appendChild(mGrid);
   panel.appendChild(quickWrap);
 
   // ▶ Play (primary CTA) sits directly under Quick Flight — ABOVE the add-on

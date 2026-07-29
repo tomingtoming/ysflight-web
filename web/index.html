@@ -27,6 +27,7 @@
      heartbeats/errors/breadcrumbs to /clientlog (Workers Logs) for in-headset
      postmortems -- see web/diag.js. -->
 <script src="diag.js"></script>
+<script src="deeplink.js"></script>
 <script type="module" src="packs-ui.js"></script>
 <script type="module" src="pack-net.js"></script>
 <script type="module" src="replays-ui.js"></script>
@@ -395,32 +396,10 @@
       if (path === 'ysflight32_gl2.data') return ASSET.data;
       return path;
     },
-    // UI language follows the browser locale (ja/en); override with ?lang=ja etc.
-    // ?freeflight=AIRPLANE,FIELD[,POSITION] jumps straight into a flight.
-    arguments: (function () {
-      var a = [];
-      var q = new URLSearchParams(location.search);
-      var lang = q.get('lang');
-      if (lang) a.push('-language', lang);
-      var ff = q.get('freeflight');
-      if (ff) {
-        var p = ff.split(',');
-        // Default start position: NORTH10000_01 is an airborne start that exists in
-        // every bundled field's .stp (verified).  The old default 'NORTH3000' is in
-        // NO .stp, so a bare ?freeflight=AIRCRAFT silently failed to spawn.
-        a.push('-freeflight', p[0], p[1] || 'ATSUGI_AIRBASE', p[2] || 'NORTH10000_01');
-      }
-      // ?replay=<file> plays a saved recording: the engine's -replayrecord loads the
-      // .yfs and auto-starts playback (a loaded flight record makes PlayerPlaneIsReady
-      // false).  The file lives in the IDBFS user dir's replays/; sanitize to a bare
-      // name so it cannot escape that directory.
-      var rp = q.get('replay');
-      if (rp) {
-        var rf = String(rp).replace(/[^A-Za-z0-9._-]/g, '');
-        if (rf) a.push('-replayrecord', '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT/replays/' + rf);
-      }
-      return a;
-    })(),
+    // Deep link (?freeflight= / ?endurance= / ?replay= / ?lang=) → engine argv.
+    // The mapping lives in deeplink.js (classic script above) so it is unit-
+    // testable; see docs/web-shell.md for the entry contract.
+    arguments: globalThis.ysfwDeepLink.buildEngineArgs(location.search),
     preRun: [function () {
       // Let YSFLIGHT's locale detection see the browser language.
       try {
@@ -481,6 +460,7 @@
           var joinRoom = Module.ysfwJoinRoom;
           var freeflight = q.get('freeflight');
           var replay = q.get('replay');
+          var directBoot = globalThis.ysfwDeepLink.isDirectBoot(q);
           // v1 スコープ: ホスト→joiner の「追加パック配信(同期)」は一旦スコープ外。
           // 同期パス(Option A/B・メタ束・必須ゲート・Retry/Soloパネル)は既定で無効化し、
           // joiner は -client のまま即ブートして base＋自分のローカル取り込みパックだけで
@@ -490,6 +470,38 @@
           var MP_PACK_SYNC = /[?&]packsync=1\b/.test(location.search);
           Module.__ysfwUserDir = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
           try { FS.mkdirTree(Module.__ysfwUserDir); } catch (e) {}
+          // Web-shell rule: a deep-link boot must reach flight with ZERO engine
+          // dialogs.  On a truly first visit the engine would pop its first-start
+          // dialog, which stalls the takeoff behind a modal.  Pre-seed the marker
+          // the engine itself writes on first start (a file named after
+          // YSFLIGHT_VERSION in the common YSFLIGHT dir — fsmain.cpp /
+          // FsGetFirstStartFile; 20181124 is fsdef.h's YSFLIGHT_VERSION, frozen
+          // upstream).  Safe to skip the dialog's other work: default control
+          // assignments come from the FsControlAssignment CONSTRUCTOR (a missing
+          // control file keeps them), and MergeDefaultControl only upgrades an
+          // existing user control file.  The one real side effect — creating the
+          // net-chat-log dir — is replicated here.  Manual (pack-panel) boots keep
+          // the engine's own first-start flow.
+          if (directBoot) {
+            try {
+              var marker = Module.__ysfwUserDir + '/20181124';
+              if (!FS.analyzePath(marker).exists) FS.writeFile(marker, 'YS\n');
+              FS.mkdirTree(Module.__ysfwUserDir + '/netchatlog');
+              // Second pre-flight modal: the no-joystick warning
+              // (Sim_Fly_MissionGoalDone -> StartNoJoystickWarningDialog) stalls
+              // gamepad-less deep-link takeoffs the same way.  Suppressing it is
+              // safe: the actual mouse-as-stick fallback is applied by
+              // CheckJoystickAssignmentAndFixIfNecessary regardless of the
+              // dialog.  flight.cfg is line-per-key with constructor defaults
+              // for absent keys, so a one-line seed only flips the warning; an
+              // EXISTING flight.cfg is the user's own and is left alone.
+              var cfgDir = Module.__ysfwUserDir + '/config';
+              FS.mkdirTree(cfgDir);
+              if (!FS.analyzePath(cfgDir + '/flight.cfg').exists) {
+                FS.writeFile(cfgDir + '/flight.cfg', 'JSWARNING FALSE\n');
+              }
+            } catch (e) {}
+          }
           // Path A pack storage: payload lives in OPFS (on disk, deduped).  Mount
           // MEMFS on the user dir's packs/ so materialized payload is ephemeral and
           // is NOT written to IndexedDB by the periodic syncfs.  Then materialize
@@ -600,7 +612,7 @@
               if (!gateReleased && !Module.__ysfwJoinFailureShown) bootSolo();
             }, 90000);
             runJoinSync();
-          } else if (!joinRoom && !freeflight && !replay) {
+          } else if (!joinRoom && !directBoot) {
             // Manual launch: show the pack panel; packs-ui.js releases on "play".
             Module.addRunDependency('ysfw-packs');
             Module.__ysfwGateHeld = true;
@@ -611,8 +623,8 @@
             window.__ysfwFsReady = true;
             initPackUi();
           } else {
-            // freeflight OR replay OR a join with pack-sync descoped (MP_PACK_SYNC
-            // off): boot straight in (no gate).  A joiner keeps its -client args and
+            // A deep link (freeflight / endurance / replay) OR a join with pack-sync
+            // descoped (MP_PACK_SYNC off): boot straight in (no gate).  A joiner keeps its -client args and
             // connects to the host on base + locally-imported packs only.  For a
             // freeflight,
             // remember the launched triple so the top page can offer a one-tap "Fly
@@ -1092,14 +1104,14 @@
     window.addEventListener('pageshow', resumeSignaling);
   })();
 
-  // ---- Quick Flight: return to the originating page when the flight ends -------
-  // Quick Flight deep-links via ?freeflight=..., booting straight into a flight.
-  // The engine reports flight state through globalThis.ysfwInFlight (set by its
-  // ChangeRunMode).  When the user exits the flight back to the engine menu,
-  // ysfwInFlight flips true -> false; we treat that edge as "flight over" and
-  // navigate back.  If ?return=<page> is present and passes the whitelist check
-  // we go there; otherwise we fall back to the clean top-page URL.  Armed only
-  // for ?freeflight launches, so normal in-engine menu navigation after a manual
+  // ---- Flight deep links: return to the originating page when the flight ends --
+  // ?freeflight= / ?endurance= boot straight into a flight.  The engine reports
+  // flight state through globalThis.ysfwInFlight (set by its ChangeRunMode).
+  // When the user exits the flight back to the engine menu, ysfwInFlight flips
+  // true -> false; we treat that edge as "flight over" and navigate back.  If
+  // ?return=<page> is present and passes the whitelist check we go there;
+  // otherwise we fall back to the clean top-page URL.  Armed only for flight
+  // deep-link launches, so normal in-engine menu navigation after a manual
   // boot is untouched.  We latch on having actually entered flight first, so the
   // initial pre-boot false never counts as an exit.
   //
@@ -1107,7 +1119,8 @@
   // are accepted.  Any value containing / \ : or .. is rejected regardless.
   (function () {
     var q = new URLSearchParams(location.search);
-    if (!q.get('freeflight')) return;  // only Quick Flight deep-links trigger return
+    var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
+    if (kind !== 'freeflight' && kind !== 'endurance') return;  // flight deep-links only
     var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;
