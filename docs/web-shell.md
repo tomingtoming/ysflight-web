@@ -33,7 +33,8 @@
 |---|---|---|
 | Sim > Fly | `?freeflight=` → `-freeflight` | ✅ 稼働中 |
 | Sim > リプレイ再生 | `?replay=` → `-replayrecord` | ✅ 稼働中 |
-| Net > Client/Server | `?join=` → `-client`＋シグナリングWorker | ✅ 稼働中 |
+| Net > Client | `?join=` → `-client`＋シグナリングWorker | ✅ 稼働中 |
+| Net > Server | `?host=1&name=` → `-server`（トップのホストフォームから発射） | ✅ 増分6 |
 | Sim > Endurance | `?endurance=` → `-endurance` | ✅ 増分1（本ドキュメントと同PR） |
 | Sim > Intercept | `?intercept=` → `-intercept`（fork の絶対index修正込み） | ✅ 増分3 |
 | Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4（地上物・CAS/地対空/レーシングは今後） |
@@ -90,6 +91,21 @@
    `test/settings.test.mjs`＋`scripts/smoke-settings.mjs`（ページ→flight.cfg
    反映＋非管理行温存を実機確認）。**残**: 数値option（視程等）・キー割当
    （TRG/AXS行）・ジョイスティック較正UIのweb移管。いずれもMANAGED拡張。
+6. **ホスト入口（実装済み）** ── `?host=1&name=NAME[&field=FIELD]` →
+   `-server NAME [FIELD]`（上流 `fscmdparaminfo.cpp` の EXEMODE_SERVER →
+   `StartNetServerMode`。エンジン無改変）。web port の yssocket 層が
+   シグナリングroomを claim（`?room=` で固定・省略時8桁自動採番）、既存の
+   Room チップが招待リンクを出す。`&name=` は `?join=&name=` と同じ別パラメータ
+   方式（`?host` の値自体はトリガーのみ＝旧 `?host=1` リンクは名前フォーム
+   自動展開として生き続ける）。トップの「ホストの始め方」howtoカードは
+   実フォーム（名前→ホスト開始）へ置換——本家 Network メニュー経由の教示は
+   退役。`?join=` と併用時は join 優先（-server は argv に入れない）。
+   ホスト起動にも `-autoexit` が付き、セッション終了→シェル帰還。
+   検証: `test/deeplink.test.mjs`（写像）＋`scripts/smoke-host.mjs`
+   （?host=→サーバーモード到達＋sig-stub相手のroom claim＋autoexit誤発火なし、
+   CIは `scripts/smoke-host.sh`）。**残**: マルチロビー体験の本格化
+   （ルーム一覧・フィールド選択UI等）は需要駆動で。ホスト中の機体選択・
+   終了確認等のダイアログはエンジン側に残す（飛行画面の一部＝方針どおり）。
 
 ## 検証面
 
@@ -97,5 +113,6 @@
 |---|---|
 | URL→argv写像 | `test/deeplink.test.mjs`（node --test・純関数） |
 | ディープリンク→飛行到達 | `scripts/smoke-mission.mjs`（CI・ヘッドレス実機） |
+| ホスト入口→サーバーモード到達＋room claim | `scripts/smoke-host.mjs`（CI・ヘッドレス実機＋sig-stub） |
 | 帰還（飛行終了→web引き取り） | `test/fly-return.test.mjs`＋実機 |
 | 増分2以降のport変更 | 既存 smoke 群（ビルドはCIが毎PR実施） |

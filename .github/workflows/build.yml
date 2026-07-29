@@ -112,6 +112,14 @@ jobs:
           sleep 2
           node scripts/smoke-settings.mjs "http://localhost:8926/index.html"
 
+      # Host smoke (PR only): boots ?host=1&name= and asserts the engine reaches
+      # multiplayer server mode and claims the signaling room against a local
+      # sig-stub — guards the web host entry (web/deeplink.js -> -server ->
+      # EXEMODE_SERVER -> yssocket host).
+      - name: Host smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: scripts/smoke-host.sh
+
       # VR menu smoke (PR only): verifies that the engine renders the 2D main
       # menu into the VR off-screen FBO (setupMenu/DrawMenu/updateMenuLayer),
       # that the menuDrawn flag is set, and that the watchdog stays disarmed.

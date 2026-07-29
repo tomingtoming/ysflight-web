@@ -113,11 +113,13 @@ join は `no-room` (従来挙動)。時間は env `SIGNAL_GRACE_MS` / `SIGNAL_KE
 ### 本番 (Cloudflare)
 
 `scripts/build.sh` で `dist/` を生成 → Cloudflare Workers Builds が
-`worker/signal.js` と `dist/` をデプロイ。利用者は配信 URL を開き、ゲーム内
-ホストが「サーバ開始」でホストになると画面右上に Room ID と「📋 招待リンクを
-コピー」ボタンが出る (Room ID は 8 桁数字を自動採番)。参加者は招待リンク
-(`?join=12345678`) を開いて名前を入力すれば自動参加、またはゲーム内
-ネットワーク→クライアントの「Room ID」欄に 8 桁を入力する。
+`worker/signal.js` と `dist/` をデプロイ。ホストはトップページの
+「友達と対戦したい？（ホストを立てる）」フォームから名前を入れて開始する
+(＝`?host=1&name=` ディープリンク。エンジンが `-server` で直接サーバモード起動、
+web-shell 増分6。docs/web-shell.md)。ホストが立つと Room ID と「📋 招待リンクを
+コピー」ボタンが出る (Room ID は 8 桁数字を自動採番、`?room=` で固定可)。
+参加者は招待リンク (`?join=12345678`) を開いて名前を入力すれば自動参加、
+またはトップページの「Room ID で参加」フォームに 8 桁を入力する。
 
 画面の右上 UI は 3 状態 (engine の `ChangeRunMode` が `globalThis.ysfwInFlight`
 を、ホスト中は `globalThis.ysfwRtc.host` をセットし、`web/index.html` がそれを見て切替):

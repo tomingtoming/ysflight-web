@@ -101,3 +101,33 @@ test('intercept numeric params are clamped and junk-proofed', () => {
     buildEngineArgs('?intercept=A,F,9,1,1,1,0,junk'),
     ['-intercept', 'A', 'F', '1', '1', '1', '1', '1', '2', '-autoexit']);
 });
+
+test('host with a name -> -server + autoexit (direct boot)', () => {
+  assert.deepEqual(
+    buildEngineArgs('?host=1&name=Pilot'),
+    ['-server', 'Pilot', '-autoexit']);
+  assert.equal(deepLinkKind('?host=1&name=Pilot'), 'host');
+  assert.equal(isDirectBoot('?host=1&name=Pilot'), true);
+});
+
+test('host field override rides along after the name', () => {
+  assert.deepEqual(
+    buildEngineArgs('?host=1&name=Pilot&field=ATSUGI_AIRBASE'),
+    ['-server', 'Pilot', 'ATSUGI_AIRBASE', '-autoexit']);
+});
+
+test('host without a name adds no args (manual launch shows the host form)', () => {
+  assert.deepEqual(buildEngineArgs('?host=1'), []);
+  assert.equal(deepLinkKind('?host=1'), null);
+  assert.equal(isDirectBoot('?host=1'), false);
+  // Whitespace-only name is still "no name".
+  assert.deepEqual(buildEngineArgs('?host=1&name=%20%20'), []);
+  assert.equal(deepLinkKind('?host=1&name=%20%20'), null);
+});
+
+test('join wins over host: no -server in the argv', () => {
+  // The join IIFE appends -client later; the engine acts on the LAST execution
+  // mode parsed, so ?host= must stay out of the argv entirely.
+  assert.deepEqual(buildEngineArgs('?host=1&name=Pilot&join=12345678'), []);
+  assert.equal(deepLinkKind('?host=1&name=Pilot&join=12345678'), null);
+});
