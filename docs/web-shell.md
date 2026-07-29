@@ -38,7 +38,7 @@
 | Sim > Endurance | `?endurance=` → `-endurance` | ✅ 増分1（本ドキュメントと同PR） |
 | Sim > Intercept | `?intercept=` → `-intercept`（fork の絶対index修正込み） | ✅ 増分3 |
 | Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4＋地上物プリセット=増分8（CAS/地対空/レーシングは今後） |
-| Sim > 着陸練習 Lv1-15 | 定型 `.yfs` または生成 | 今後（yfs.js基盤を再利用） |
+| Sim > 着陸練習 Lv1-15 | `?landing=` → fork `-landingpractice`（`.yfs`では採点HUD/進入生成が再現できないためCLI新設が正道） | ✅ 増分10 |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
 | File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
 | Option > Option（見た目・表示） | Settingsページ（`studio-settings.html`）→ localStorage → index.htmlが `flight.cfg` にマージ | ✅ 増分5（bool群）＋増分7（視程・機体LOD）＋増分9（煙/雲/Zバッファ・表示系・ゲームプレイ系=本家Optionダイアログとほぼパリティ。キー割当は今後） |
@@ -139,6 +139,21 @@
    を持ち smoke が安定参照。検証: `test/settings.test.mjs`（choice 検証・既定値）
    ＋`scripts/smoke-settings.mjs`（CLOUDTYPE NONE を実UI→flight.cfg まで確認）。
    **残**: キー割当（=ジョイスティック割当、port絡み）・較正・オートデモ。
+10. **着陸練習（実装済み・fork小改変）** ── `?landing=LEVEL[,機体[,フィールド]]`
+    → fork 新設の `-landingpractice LEVEL AIRCRAFT [FIELD]`
+    （EXEMODE_LANDINGPRACTICE=7、fork `feat/landing-practice-cli`）。エンジンの
+    着陸練習は ILS 相対の進入生成・AOA/トリム・天候・採点HUDの深いロジックで
+    `.yfs` では再現できないため、メニューと同じ2呼び出し
+    （`SetUpLandingPracticeMode`＋`StartShowLandingPracticeInfoMode`）を
+    コマンドラインから叩く入口を fsmain に追加（レベル→旋回脚/横風/天候の
+    15段表は fsmenu_sim.cpp の switch をデータ表として鏡写し・要同期コメント付き）。
+    トラフィックパターン情報画面は Space/クリックで離陸（飛行画面の一部＝
+    エンジン側に残す方針どおり）。web 既定は F/A-18＋AOMORI（エンジン既定
+    フィールド・ILS 有りを smoke で実証）。トップのミッション節に
+    🛬 カード2枚（Lv1 ファイナル/Lv12 低視程IFR）。検証:
+    `test/deeplink.test.mjs`（写像・クランプ）＋`scripts/smoke-mission.mjs`
+    第3レッグ（?landing=1→情報画面を Space で抜け in-flight 到達）。
+    **残**: レベル任意選択UI（1-15セレクト）は需要駆動。
 
 ## 検証面
 

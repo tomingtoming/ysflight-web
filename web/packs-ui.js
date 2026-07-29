@@ -73,10 +73,12 @@ const S = ({
     tagAirliner: '大型機',
     tagAdvanced: '上級者向け',
     missionTitle: '🎯 ミッション',
-    missionHint: 'クリックで即ミッション開始（耐久戦＝波状の敵を迎え撃つ／邀撃＝来襲編隊を阻止）',
+    missionHint: 'クリックで即ミッション開始（耐久戦＝波状の敵を迎え撃つ／邀撃＝来襲編隊を阻止／着陸練習＝進入からの着陸訓練）',
     missionEasySub: '耐久戦: 厚木 / 僚機2機・敵レベル3',
     missionHardSub: '耐久戦: Hawaii / 単機・敵レベル5',
     missionInterceptSub: '邀撃: 爆撃編隊を阻止 / 僚機2機',
+    missionLandingEasySub: '着陸練習: 青森 / Lv1 ファイナル進入',
+    missionLandingIfrSub: '着陸練習: 青森 / Lv12 低視程・計器進入',
     createFlightLink: '✈️ フライトを作る（機体・敵機・時間帯を選ぶ）',
     createFlightTitle: '専用ページで機体・マップ・時間帯・AI機を組んで離陸（Create Flight のweb版）',
     settingsLink: '⚙️ 設定（影・雲・HUD など）',
@@ -169,10 +171,12 @@ const S = ({
     tagAirliner: 'Airliner',
     tagAdvanced: 'Advanced',
     missionTitle: '🎯 Missions',
-    missionHint: 'Click to start a mission (Endurance = survive the waves / Intercept = stop the raid)',
+    missionHint: 'Click to start a mission (Endurance = survive the waves / Intercept = stop the raid / Landing practice = approach training)',
     missionEasySub: 'Endurance: Atsugi / 2 wingmen, enemy Lv 3',
     missionHardSub: 'Endurance: Hawaii / solo, enemy Lv 5',
     missionInterceptSub: 'Intercept: stop the bomber raid / 2 wingmen',
+    missionLandingEasySub: 'Landing practice: Aomori / Lv 1, on final',
+    missionLandingIfrSub: 'Landing practice: Aomori / Lv 12, low-visibility IFR',
     createFlightLink: '✈️ Create a flight (aircraft, enemies, time of day)',
     createFlightTitle: 'Compose aircraft / map / time / AI on a dedicated page, then take off (web Create Flight)',
     settingsLink: '⚙️ Settings (shadows, clouds, HUD…)',
@@ -1065,12 +1069,16 @@ function renderPanel() {
     { name: 'F-15J Eagle', sub: S.missionEasySub, link: '?endurance=F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
     { name: 'F-15J Eagle', sub: S.missionInterceptSub, link: '?intercept=F-15J_EAGLE,ATSUGI_AIRBASE', tag: S.tagIntermediate },
     { name: 'F/A-18 Hornet', sub: S.missionHardSub, link: '?endurance=F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
+    // Landing practice (?landing=, web-shell increment 10): the fork's
+    // -landingpractice maps the level to the menu's leg/wind/weather table.
+    { icon: '🛬 ', name: 'F/A-18 Hornet', sub: S.missionLandingEasySub, link: '?landing=1', tag: S.tagBeginner },
+    { icon: '🛬 ', name: 'F/A-18 Hornet', sub: S.missionLandingIfrSub, link: '?landing=12', tag: S.tagAdvanced },
   ];
   for (const m of MISSIONS) {
     const card = document.createElement('button');
     card.style.cssText = 'text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid #243244;background:#0d141d';
     const nm = document.createElement('div');
-    nm.textContent = '🎯 ' + m.name;
+    nm.textContent = (m.icon || '🎯 ') + m.name;
     nm.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600';
     const sub = document.createElement('div');
     sub.textContent = m.sub;

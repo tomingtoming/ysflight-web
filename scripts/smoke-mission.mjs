@@ -111,6 +111,37 @@ await page2
   .waitForFunction(() => globalThis.ysfwInFlight === true, { timeout: 30000 })
   .catch(() => die('intercept deep link did not reach in-flight after the mission briefing'));
 if (fatal.length) die('fatal console/page errors during the intercept leg');
+await page2.close();
+
+// ---- Landing-practice leg: ?landing= boots the fork's -landingpractice ------
+// (web-shell increment 10).  The engine sets up the approach and shows the
+// traffic-pattern info screen (YSRUNMODE_SHOWLANDINGPRACTICEINFO); Space
+// dismisses it (FsShowLandingPracticeInfo::RunOneStep) and the engine takes
+// off onto the approach.  Reaching in-flight proves the whole chain: URL ->
+// -landingpractice -> level table -> SetUpLandingPracticeMode (field+ILS
+// resolve) -> info screen -> takeoff.
+const page3 = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+page3.on('console', (m) => {
+  const t = m.text();
+  logs.push(t);
+  if (FATAL.some((re) => re.test(t))) fatal.push('[console3] ' + t);
+});
+page3.on('pageerror', (e) => fatal.push('[pageerror3] ' + e.message));
+await page3.goto(base + '?landing=1');
+{
+  // The info screen has no JS-visible flag; boot, then keep tapping Space
+  // until the engine reports in-flight (each tap is harmless pre-boot, and
+  // dismisses the info screen once it is up).
+  const t0 = Date.now();
+  let flying = false;
+  while (Date.now() - t0 < 90000) {
+    await page3.keyboard.press('Space');
+    await page3.waitForTimeout(1000);
+    if (await page3.evaluate(() => globalThis.ysfwInFlight === true)) { flying = true; break; }
+  }
+  if (!flying) die('landing practice never reached in-flight (?landing=1 -> -landingpractice)');
+}
+if (fatal.length) die('fatal console/page errors during the landing leg');
 
 await browser.close();
-console.log('SMOKE-MISSION PASSED (endurance: in-flight + Esc handover; intercept: in-flight)');
+console.log('SMOKE-MISSION PASSED (endurance: in-flight + Esc handover; intercept: in-flight; landing practice: in-flight)');
