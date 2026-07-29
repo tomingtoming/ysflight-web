@@ -87,6 +87,8 @@ const S = ({
     settingsTitle: '見た目と表示の設定（Option メニューのweb版）',
     demoLink: '🎬 オートデモ（デモ飛行を眺める）',
     demoTitle: 'AIのデモ飛行をループ再生（戻るときはブラウザの「戻る」）',
+    controlsLink: '🕹️ コントローラ設定（パッド/スティックの割当）',
+    controlsTitle: 'ゲームパッドの軸・ボタン割当とデッドゾーン（キー割当メニューのweb版）',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
     urlBtn: '追加',
@@ -189,6 +191,8 @@ const S = ({
     settingsTitle: 'Look & display options (web Option menu)',
     demoLink: '🎬 Auto demo (watch AI demo flights)',
     demoTitle: 'Loop the AI demo flights (use browser Back to leave)',
+    controlsLink: '🕹️ Controller setup (pad / stick bindings)',
+    controlsTitle: 'Gamepad axis & button assignment and dead zones (web key-assignment menu)',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
     urlBtn: 'Add',
@@ -1125,6 +1129,15 @@ function renderPanel() {
   settingsLink.href = 'studio-settings.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
   settingsLink.style.cssText = 'display:block;margin-top:8px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
   quickWrap.appendChild(settingsLink);
+
+  // Controller setup: the web replacement for the engine's key-assignment
+  // menu (gamepad axes/buttons + dead zones; keyboard passes through).
+  const controlsLink = document.createElement('a');
+  controlsLink.textContent = S.controlsLink;
+  controlsLink.title = S.controlsTitle;
+  controlsLink.href = 'studio-controls.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
+  controlsLink.style.cssText = 'display:block;margin-top:2px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
+  quickWrap.appendChild(controlsLink);
 
   // Auto demo: the engine's kiosk demo loop (?demo=1 -> -demoforever).  A quiet
   // link — it is a "watch" mode that never returns on its own (leave via

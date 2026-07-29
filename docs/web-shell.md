@@ -43,8 +43,8 @@
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
 | File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
 | Option > Option（見た目・表示） | Settingsページ（`studio-settings.html`）→ localStorage → index.htmlが `flight.cfg` にマージ | ✅ 増分5（bool群）＋増分7（視程・機体LOD）＋増分9（煙/雲/Zバッファ・表示系・ゲームプレイ系=本家Optionダイアログとほぼパリティ。キー割当は今後） |
-| Option > キー割当 / Config詳細 | 同経路を拡張（`settings.js` のMANAGED拡張） | 今後 |
-| Option > ジョイスティック較正 | 入力はweb port層（Gamepad API）の管轄＝webが本来の持ち主 | 今後 |
+| Option > キー割当（ゲームパッド） | Controlsページ（`studio-controls.html`）→ localStorage → index.htmlが `ctlassign.cfg` にマージ | ✅ 増分13（パッド軸/ボタン＋DZ。キーボード再割当UIは今後） |
+| Option > ジョイスティック較正 | **web版では構造的に不要**＝portがGamepad APIの正規化済み値を供給・YsJoyReader較正系は無効（`fsplatform_emscripten.cpp`）。REV＋DZが全て | ✅ 解消（増分13の調査で確定） |
 | Option > オートデモ | `?demo=1` → `-demoforever`（観るモード。ループは仕様＝退出はブラウザ戻る） | ✅ 増分11 |
 | Help | webページ | ✅ 事実上済 |
 
@@ -178,6 +178,24 @@
     `test/yfs.test.mjs`（EXTENSIO 行・whitelist・preset）＋
     `scripts/smoke-mission.mjs` 第5・6レッグ（racing/cas とも in-flight 到達＋
     生成 .yfs の EXTENSIO 行確認）。
+13. **コントローラ設定（実装済み・エンジン無改変）** ── Controls ページ
+    （`studio-controls.html`）: Gamepad API のライブ検出＋キャプチャ式割当
+    （「スティックを動かして/ボタンを押して」）で、軸5機能・ボタン15機能の
+    厳選セット＋デッドゾーン3種＋「ゲームパッド標準」プリセット（エンジン
+    `SetDefaultGamePad` 鏡写し）。localStorage → index.html preRun が
+    `ctlassign.cfg` へマージ（`web/controls.js`）。**設計の核心**（調査で確定）:
+    ①ファイル書式は `VER/AXS/TRG/KEY/DZ*/HATSW/END` で**キーボード・マウスも
+    同居**、かつエンジンの Load は**ファイルが開けた瞬間に全消去してから読む**
+    ＝部分ファイルはキーボードを殺す→webはパッド行（dev 0-6）とDZだけを
+    own し、他は素通し。②エンジンは自分ではこのファイルを作らない（初回
+    マーカー抑止で MergeDefaultControl も走らない）→**欠損時はエンジン既定
+    （SetDefault＋SetDefaultKeyAssign 57キー・非Apple枝）を JS で完全合成**して
+    そこへマージ（要同期コメント付き）。③**較正は web では構造的に不要**＝
+    port が正規化済み軸値を直接供給し YsJoyReader 系は無効化済み→REV＋DZが
+    全て（ページにその旨明記）。検証: `test/controls.test.mjs`（マージ・合成・
+    正規化・プリセット）＋`scripts/smoke-controls.mjs`（プリセット＋DZ実UI→
+    エンジンFSの ctlassign.cfg にパッド行と **キーボード既定の温存** を確認、
+    CI追加）。**残**: キーボード再割当UI・キャプチャの実機確認（要実パッド）。
 
 ## 検証面
 

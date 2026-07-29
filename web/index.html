@@ -30,6 +30,7 @@
 <script src="deeplink.js"></script>
 <script src="yfs.js"></script>
 <script src="settings.js"></script>
+<script src="controls.js"></script>
 <script type="module" src="packs-ui.js"></script>
 <script type="module" src="pack-net.js"></script>
 <script type="module" src="replays-ui.js"></script>
@@ -543,6 +544,21 @@
               FS.writeFile(cfgPath, globalThis.ysfwSettings.mergeFlightCfg(cur, sVals));
             }
           } catch (e) { console.error('[settings] ' + (e && e.message ? e.message : e)); }
+          // Controls: merge the web-owned GAMEPAD assignments into the
+          // engine's ctlassign.cfg (web/controls.js).  The file also holds
+          // keyboard/mouse lines the web must not lose (a partial file would
+          // wipe them: the engine's Load replaces everything the moment the
+          // file opens), so a missing file is merged into the synthesized
+          // engine-default map instead.
+          try {
+            var craw = localStorage.getItem('ysfwControls');
+            if (craw && globalThis.ysfwControls) {
+              var cPath = Module.__ysfwUserDir + '/config/ctlassign.cfg';
+              var cCur = FS.analyzePath(cPath).exists ? FS.readFile(cPath, { encoding: 'utf8' }) : null;
+              var cOut = globalThis.ysfwControls.mergeCtlAssign(cCur, JSON.parse(craw));
+              if (cOut != null) FS.writeFile(cPath, cOut);
+            }
+          } catch (e) { console.error('[controls] ' + (e && e.message ? e.message : e)); }
           // Path A pack storage: payload lives in OPFS (on disk, deduped).  Mount
           // MEMFS on the user dir's packs/ so materialized payload is ephemeral and
           // is NOT written to IndexedDB by the periodic syncfs.  Then materialize
