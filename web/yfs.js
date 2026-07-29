@@ -46,6 +46,15 @@ globalThis.ysfwYfs = (function () {
     return name + ' ' + (v ? 'TRUE' : 'FALSE');
   }
 
+  // Mission extensions the web may enable (fssimextension.cpp registry).  Only
+  // the two that fully work from a plain .yfs: RACINGMODE (gates are RACECHKP
+  // ground objects in the field's own scenery; the extension just adds the lap
+  // timer and strips weapons) and CLOSEAIRSUPPORT (persists NO state — its
+  // StartSimulation/OnInterval generate the friendly and enemy tanks on every
+  // sim start).  GROUNDTOAIR is excluded: its player is a GROUND object, which
+  // -flyyfs's PlayerPlaneIsReady() gate rejects (a fork change, later).
+  var EXTENSIONS = ['RACINGMODE', 'CLOSEAIRSUPPORT'];
+
   // spec:
   //   field:    stock/add-on field identifier (required)
   //   env:      'DAY' | 'NIGHT' (default DAY)
@@ -54,6 +63,9 @@ globalThis.ysfwYfs = (function () {
   //   ground:   [ { id, x, y, z, h, iff } ... ]  (optional; CONCRETE placements
   //             in meters/degrees — the page computes coordinates around a
   //             ground start position, this stays a dumb writer)
+  //   extensions: [ 'RACINGMODE' | 'CLOSEAIRSUPPORT' ... ]  (optional; each
+  //             becomes an EXTENSIO line the engine's loader restores via its
+  //             extension registry — fsworld.cpp case 52)
   //
   // Returns the .yfs file text (LF-terminated).  Throws on a spec that could
   // not boot (no field, no aircraft, no player) so the caller fails loudly
@@ -80,6 +92,16 @@ globalThis.ysfwYfs = (function () {
     lines.push(boolLine('ALLOWAGM', each('agm')));
     lines.push(boolLine('ALLOWBOM', each('bomb')));
     lines.push(boolLine('ALLOWRKT', each('rocket')));
+
+    // Mission extensions come early, mirroring the engine's own save order
+    // (fssimulationfileio.cpp dumps the extension list near the top).
+    var exts = Array.isArray(spec.extensions) ? spec.extensions : [];
+    for (var x = 0; x < exts.length; x++) {
+      if (EXTENSIONS.indexOf(exts[x]) === -1) {
+        throw new Error('yfs: unknown extension "' + exts[x] + '"');
+      }
+      lines.push('EXTENSIO ' + exts[x]);
+    }
 
     var players = 0;
     for (var i = 0; i < aircraft.length; i++) {
@@ -121,9 +143,42 @@ globalThis.ysfwYfs = (function () {
     return lines.join('\n') + '\n';
   }
 
+  // Built-in mission presets for the ?mission= deep link:
+  //   'racing[,AIRCRAFT[,FIELD]]' — lap race through the field's RACECHKP
+  //     gates.  Default field RACING_VALLEY, whose single .stp entry is START
+  //     (the designed grid position; RACING_DESERT matches).
+  //   'cas[,AIRCRAFT[,FIELD]]' — close air support over TOHOKU (the classic
+  //     tank-country map); airborne start (NORTH10000_01 exists in every
+  //     bundled field's .stp).
+  // Returns a spec for buildYfs, or null for an unknown kind.  Note: mission
+  // GOALS are not part of the .yfs grammar (the engine does not persist them),
+  // so these play as open-ended missions — same as the engine's own
+  // prevflight reload.
+  function missionSpec(str) {
+    var p = String(str == null ? '' : str).split(',');
+    var kind = (p[0] || '').toLowerCase();
+    if (kind === 'racing') {
+      return {
+        field: p[2] || 'RACING_VALLEY',
+        extensions: ['RACINGMODE'],
+        aircraft: [{ id: p[1] || 'F-15J_EAGLE', player: true, startPos: 'START' }],
+      };
+    }
+    if (kind === 'cas') {
+      return {
+        field: p[2] || 'TOHOKU',
+        extensions: ['CLOSEAIRSUPPORT'],
+        aircraft: [{ id: p[1] || 'F-15J_EAGLE', player: true, startPos: 'NORTH10000_01' }],
+      };
+    }
+    return null;
+  }
+
   return {
     YFS_VERSION: YFS_VERSION,
+    EXTENSIONS: EXTENSIONS,
     buildYfs: buildYfs,
+    missionSpec: missionSpec,
     sanitizeIdent: sanitizeIdent,
     sanitizeStartPos: sanitizeStartPos,
   };

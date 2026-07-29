@@ -118,3 +118,29 @@ test('ground identifiers are sanitized and bad entries throw', () => {
 test('no ground key -> no GROUNDOB lines (back-compat)', () => {
   assert.doesNotMatch(buildYfs({ field: 'F', aircraft: PLAYER }), /GROUNDOB/);
 });
+
+// ---- Mission extensions (web-shell increment 12) ----------------------------
+
+test('extensions emit EXTENSIO lines early, unknown idents throw', () => {
+  const yfs = buildYfs({ field: 'F', aircraft: PLAYER, extensions: ['RACINGMODE'] });
+  assert.match(yfs, /\nEXTENSIO RACINGMODE\n/);
+  assert.ok(yfs.indexOf('EXTENSIO ') < yfs.indexOf('AIRPLANE '));
+  assert.throws(() => buildYfs({ field: 'F', aircraft: PLAYER, extensions: ['GROUNDTOAIR'] }), /unknown extension/);
+  assert.doesNotMatch(buildYfs({ field: 'F', aircraft: PLAYER }), /EXTENSIO/);
+});
+
+test('missionSpec presets: racing on the valley grid, CAS airborne over Tohoku', () => {
+  const r = globalThis.ysfwYfs.missionSpec('racing');
+  assert.equal(r.field, 'RACING_VALLEY');
+  assert.deepEqual(r.extensions, ['RACINGMODE']);
+  assert.equal(r.aircraft[0].startPos, 'START');
+  const c = globalThis.ysfwYfs.missionSpec('cas,F-18C_HORNET');
+  assert.equal(c.field, 'TOHOKU');
+  assert.deepEqual(c.extensions, ['CLOSEAIRSUPPORT']);
+  assert.equal(c.aircraft[0].id, 'F-18C_HORNET');
+  assert.equal(c.aircraft[0].startPos, 'NORTH10000_01');
+  assert.equal(globalThis.ysfwYfs.missionSpec('junk'), null);
+  // Both presets build a valid .yfs end to end.
+  assert.match(buildYfs(r), /EXTENSIO RACINGMODE/);
+  assert.match(buildYfs(c), /EXTENSIO CLOSEAIRSUPPORT/);
+});

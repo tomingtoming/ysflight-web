@@ -514,6 +514,16 @@
                     FS.writeFile(Module.__ysfwUserDir + '/__createflight.yfs', yfs);
                   }
                 } catch (e) { console.error('[createflight] ' + (e && e.message ? e.message : e)); }
+              } else if (kind === 'mission') {
+                // ?mission=racing|cas: a BUILT-IN spec (yfs.js missionSpec)
+                // instead of a sessionStorage one — shareable URLs, same
+                // generated-file path as Create Flight.
+                try {
+                  var mspec = globalThis.ysfwYfs.missionSpec(q.get('mission'));
+                  if (mspec) {
+                    FS.writeFile(Module.__ysfwUserDir + '/__createflight.yfs', globalThis.ysfwYfs.buildYfs(mspec));
+                  }
+                } catch (e) { console.error('[mission] ' + (e && e.message ? e.message : e)); }
               }
             } catch (e) {}
           }
@@ -1151,7 +1161,7 @@
   (function () {
     var q = new URLSearchParams(location.search);
     var kind = globalThis.ysfwDeepLink.deepLinkKind(q);
-    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host' && kind !== 'landing') return;  // flight deep-links only ('host': server mode counts as in-flight)
+    if (kind !== 'freeflight' && kind !== 'endurance' && kind !== 'intercept' && kind !== 'createflight' && kind !== 'host' && kind !== 'landing' && kind !== 'mission') return;  // flight deep-links only ('host': server mode counts as in-flight)
     var RETURN_WHITELIST = ['workbench.html', 'studio-aircraft.html', 'studio-scenery.html', 'studio-pack.html', 'studio-flight.html'];
     function validateReturnPage(raw) {
       if (!raw) return null;

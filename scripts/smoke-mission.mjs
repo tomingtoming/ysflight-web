@@ -166,6 +166,33 @@ await page4
   .catch(() => die('auto demo never booted (overlay still visible)'));
 await page4.waitForTimeout(6000);
 if (fatal.length) die('fatal console/page errors during the demo leg');
+await page4.close();
+
+// ---- Extension-mission legs: ?mission=racing / ?mission=cas -----------------
+// (web-shell increment 12).  preRun writes a built-in .yfs (yfs.js missionSpec)
+// with an EXTENSIO line; -flyyfs boots it and the extension registry restores
+// the mission (racing: lap timer + the field's RACECHKP gates; CAS: the
+// extension generates the tanks).  Reaching in-flight proves the chain.
+for (const kind of ['racing', 'cas']) {
+  const pg = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  pg.on('console', (m) => {
+    const t = m.text();
+    logs.push(t);
+    if (FATAL.some((re) => re.test(t))) fatal.push('[console-' + kind + '] ' + t);
+  });
+  pg.on('pageerror', (e) => fatal.push('[pageerror-' + kind + '] ' + e.message));
+  await pg.goto(base + '?mission=' + kind);
+  await pg
+    .waitForFunction(() => globalThis.ysfwInFlight === true, { timeout: waitMs })
+    .catch(() => die('?mission=' + kind + ' never reached in-flight (missionSpec -> EXTENSIO -> -flyyfs)'));
+  const yfs = await pg.evaluate(() => {
+    try { return Module.FS.readFile('/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT/__createflight.yfs', { encoding: 'utf8' }); }
+    catch (e) { return ''; }
+  });
+  if (!/EXTENSIO (RACINGMODE|CLOSEAIRSUPPORT)/.test(yfs)) die('?mission=' + kind + ' generated a .yfs without an EXTENSIO line:\n' + yfs);
+  if (fatal.length) die('fatal console/page errors during the ' + kind + ' leg');
+  await pg.close();
+}
 
 await browser.close();
-console.log('SMOKE-MISSION PASSED (endurance: in-flight + Esc handover; intercept: in-flight; landing practice: in-flight; auto demo: boots + stable)');
+console.log('SMOKE-MISSION PASSED (endurance; intercept; landing practice; auto demo; racing + CAS extension missions)');
