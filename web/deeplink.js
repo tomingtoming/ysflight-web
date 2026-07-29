@@ -21,6 +21,9 @@
 //                                             (spec in sessionStorage, -> .yfs)
 //   ?replay=<file>                            play a saved recording
 //   ?landing=LEVEL[,AIRCRAFT[,FIELD]]         landing practice (Lv 1-15)
+//   ?demo=1                                   auto demo, looping forever
+//                                             (screensaver mode; leave via
+//                                             browser navigation)
 //   ?host=1&name=NAME[&field=FIELD]           host a multiplayer room (server
 //                                             mode; ?room= fixes the room code)
 globalThis.ysfwDeepLink = (function () {
@@ -109,6 +112,14 @@ globalThis.ysfwDeepLink = (function () {
       a.push('-landingpractice', intParam(l[0], 1, 1, 15),
         l[1] || 'F-18C_HORNET', l[2] || 'AOMORI');
     }
+    // ?demo=1 — the engine's kiosk demo loop (-demoforever,
+    // EXEMODE_OPENINGDEMOFOREVER): random dogfight/acro demos, forever.  A
+    // keypress skips to the NEXT demo (native soak/exhibition semantics), so
+    // there is deliberately NO -autoexit: the mode never returns to the menu;
+    // leaving is browser navigation (back / reopen the top page).
+    if (q.get('demo')) {
+      a.push('-demoforever');
+    }
     // ?host=1&name=NAME[&field=FIELD] hosts a multiplayer room directly: the
     // engine's -server (fscmdparaminfo.cpp, EXEMODE_SERVER) boots straight into
     // server mode (StartNetServerMode), and the web port's yssocket layer claims
@@ -166,6 +177,7 @@ globalThis.ysfwDeepLink = (function () {
     if (q.get('createflight')) return 'createflight';
     if (q.get('replay')) return 'replay';
     if (q.get('landing')) return 'landing';
+    if (q.get('demo')) return 'demo';
     // 'host' only when buildEngineArgs would actually emit -server (name given,
     // no ?join=): a bare ?host=1 stays a manual launch so index.html can show
     // the host form instead of booting an argv-less engine into its own menu.

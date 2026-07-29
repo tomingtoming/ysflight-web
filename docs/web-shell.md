@@ -44,7 +44,7 @@
 | Option > Option（見た目・表示） | Settingsページ（`studio-settings.html`）→ localStorage → index.htmlが `flight.cfg` にマージ | ✅ 増分5（bool群）＋増分7（視程・機体LOD）＋増分9（煙/雲/Zバッファ・表示系・ゲームプレイ系=本家Optionダイアログとほぼパリティ。キー割当は今後） |
 | Option > キー割当 / Config詳細 | 同経路を拡張（`settings.js` のMANAGED拡張） | 今後 |
 | Option > ジョイスティック較正 | 入力はweb port層（Gamepad API）の管轄＝webが本来の持ち主 | 今後 |
-| Option > オートデモ | 収録済み飛行データ → `-flyyfs` / `-demoforever` | 低優先 |
+| Option > オートデモ | `?demo=1` → `-demoforever`（観るモード。ループは仕様＝退出はブラウザ戻る） | ✅ 増分11 |
 | Help | webページ | ✅ 事実上済 |
 
 ## 増分計画
@@ -154,6 +154,13 @@
     `test/deeplink.test.mjs`（写像・クランプ）＋`scripts/smoke-mission.mjs`
     第3レッグ（?landing=1→情報画面を Space で抜け in-flight 到達）。
     **残**: レベル任意選択UI（1-15セレクト）は需要駆動。
+11. **オートデモ（実装済み）** ── `?demo=1` → 既存 `-demoforever`
+    （EXEMODE_OPENINGDEMOFOREVER、エンジン無改変）。キー押下＝次のデモ・
+    メニュー復帰なしのキオスク仕様なので **`-autoexit` は意図的に付けない**
+    （観るモード。退出はブラウザの戻る）。トップの設定リンク下に静かな
+    🎬 リンク。検証: `test/deeplink.test.mjs`＋`scripts/smoke-mission.mjs`
+    第4レッグ（ブート＋パネル非表示＋数秒の安定）。これで置き換え地図の
+    未対応行は **Option > キー割当/較正（=ジョイスティック領域）だけ**。
 
 ## 検証面
 

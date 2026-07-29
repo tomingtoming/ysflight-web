@@ -147,3 +147,9 @@ test('landing practice: level clamped, aircraft/field default to F-18 at Aomori'
   assert.equal(deepLinkKind('?landing=1'), 'landing');
   assert.equal(isDirectBoot('?landing=1'), true);
 });
+
+test('auto demo: -demoforever with NO autoexit (the mode never returns to menu)', () => {
+  assert.deepEqual(buildEngineArgs('?demo=1'), ['-demoforever']);
+  assert.equal(deepLinkKind('?demo=1'), 'demo');
+  assert.equal(isDirectBoot('?demo=1'), true);
+});
