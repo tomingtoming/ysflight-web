@@ -40,8 +40,9 @@
 | Sim > 着陸練習 Lv1-15 | 定型 `.yfs` または生成 | 今後（yfs.js基盤を再利用） |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
 | File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
-| Option > Config / Option / キー割当 | IDBFS上の設定ファイルをwebエディタで直接編集 | 増分5 |
-| Option > ジョイスティック較正 | 入力はweb port層（Gamepad API）の管轄＝webが本来の持ち主 | 増分5 |
+| Option > Option（見た目・表示） | Settingsページ（`studio-settings.html`）→ localStorage → index.htmlが `flight.cfg` にマージ | ✅ 増分5（曲率の高いbool群。キー割当・Config詳細は今後） |
+| Option > キー割当 / Config詳細 | 同経路を拡張（`settings.js` のMANAGED拡張） | 今後 |
+| Option > ジョイスティック較正 | 入力はweb port層（Gamepad API）の管轄＝webが本来の持ち主 | 今後 |
 | Option > オートデモ | 収録済み飛行データ → `-flyyfs` / `-demoforever` | 低優先 |
 | Help | webページ | ✅ 事実上済 |
 
@@ -80,8 +81,15 @@
    （ページ→生成→飛行到達をヘッドレス実機）。**残**: 地上物（GROUNDOB）・
    ミッション拡張（identで `.yfs` から復元＝`fsworld.cpp:1966`。CAS/地対空/
    レーシング）・着陸練習。
-5. **設定エディタ** ── config / option / キー割当のwebエディタ
-   （IDBFS直編集）。ジョイスティック較正UIのweb移管。
+5. **設定エディタ（実装済み・第一段）** ── `web/settings.js` の
+   `mergeFlightCfg(existing, values)` が web所有の option を `flight.cfg` に
+   行単位でマージ（非管理行＝エンジン書き込み/未公開は温存）。Settingsページ
+   （`studio-settings.html`）が localStorage に持ち、index.html preRun が
+   **全起動で**マージ→エンジンは通常どおり読む。現状は曲率の高いbool群
+   （影・雲・地平線・AA・煙パーティクル・簡易HUD）。検証:
+   `test/settings.test.mjs`＋`scripts/smoke-settings.mjs`（ページ→flight.cfg
+   反映＋非管理行温存を実機確認）。**残**: 数値option（視程等）・キー割当
+   （TRG/AXS行）・ジョイスティック較正UIのweb移管。いずれもMANAGED拡張。
 
 ## 検証面
 

@@ -102,6 +102,16 @@ jobs:
           sleep 2
           node scripts/smoke-createflight.mjs "http://localhost:8925/index.html"
 
+      # Settings smoke (PR only): the web Settings page's choices are merged into
+      # the engine's flight.cfg at boot (settings.js) and the engine reads them;
+      # also checks a non-managed line survives the merge.
+      - name: Settings smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          node "${{ github.workspace }}/scripts/serve.mjs" 8926 "${{ github.workspace }}/dist" &
+          sleep 2
+          node scripts/smoke-settings.mjs "http://localhost:8926/index.html"
+
       # VR menu smoke (PR only): verifies that the engine renders the 2D main
       # menu into the VR off-screen FBO (setupMenu/DrawMenu/updateMenuLayer),
       # that the menuDrawn flag is set, and that the watchdog stays disarmed.

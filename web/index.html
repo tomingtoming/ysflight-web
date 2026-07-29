@@ -29,6 +29,7 @@
 <script src="diag.js"></script>
 <script src="deeplink.js"></script>
 <script src="yfs.js"></script>
+<script src="settings.js"></script>
 <script type="module" src="packs-ui.js"></script>
 <script type="module" src="pack-net.js"></script>
 <script type="module" src="replays-ui.js"></script>
@@ -519,6 +520,22 @@
               }
             } catch (e) {}
           }
+          // Settings: the web Settings page owns a curated set of flight.cfg
+          // options in localStorage; merge them into the engine's flight.cfg on
+          // EVERY boot (manual and deep-link) so the engine reads them normally.
+          // Non-managed lines (engine-written, or options not yet exposed) are
+          // preserved — see web/settings.js mergeFlightCfg.
+          try {
+            var sraw = localStorage.getItem('ysfwSettings');
+            if (sraw && globalThis.ysfwSettings) {
+              var sVals = globalThis.ysfwSettings.normalize(JSON.parse(sraw));
+              var sDir = Module.__ysfwUserDir + '/config';
+              FS.mkdirTree(sDir);
+              var cfgPath = sDir + '/flight.cfg';
+              var cur = FS.analyzePath(cfgPath).exists ? FS.readFile(cfgPath, { encoding: 'utf8' }) : '';
+              FS.writeFile(cfgPath, globalThis.ysfwSettings.mergeFlightCfg(cur, sVals));
+            }
+          } catch (e) { console.error('[settings] ' + (e && e.message ? e.message : e)); }
           // Path A pack storage: payload lives in OPFS (on disk, deduped).  Mount
           // MEMFS on the user dir's packs/ so materialized payload is ephemeral and
           // is NOT written to IndexedDB by the periodic syncfs.  Then materialize
