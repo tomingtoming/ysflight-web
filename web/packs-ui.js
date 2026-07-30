@@ -106,8 +106,8 @@ const S = ({
     missionInterceptDesc: '来襲する爆撃編隊を基地到達前に阻止する。護衛戦闘機つき。',
     missionCasDesc: '味方戦車隊を敵戦車から守る近接航空支援。地上戦の趨勢は支援次第。',
     missionRacingDesc: '渓谷コースをゲート通過でラップ計時。最速ラインを探そう。',
-    missionsPageLink: 'レベル・編成を変えて開始(D)...',
-    missionsPageTitle: '本家 Simulation メニューと同じ選択肢で各ミッションを設定（着陸訓練は全15レベル）',
+    missionsPageLink: 'ミッション(D)...',
+    missionsPageTitle: '着陸訓練・空中戦・迎撃・近接支援・レーシング ── 本家 Simulation メニューと同じ項目・全選択肢（既定値なら1クリックで開始）',
     retryLink: '前回のフライトに再挑戦(R)',
     retryTitle: '直前に飛んだフライトをもう一度（本家 Simulation メニューと同じ）',
     openYfsLink: 'フライトファイルを開く(O)...',
@@ -243,8 +243,8 @@ const S = ({
     missionLandingIfrSub: 'Low Visibility / F/A-18, Aomori',
     missionRacingSub: 'F-15J / valley course',
     missionCasSub: 'F-15J / Tohoku',
-    missionsPageLink: 'Set level & composition (D)...',
-    missionsPageTitle: 'Every mission with the native menu’s choices (landing practice: all 15 levels)',
+    missionsPageLink: 'Missions (D)...',
+    missionsPageTitle: 'Landing practice, endurance, intercept, CAS, racing — every native mission with all its choices (defaults start in one click)',
     retryLink: 'Retry Previous Flight (R)',
     retryTitle: 'Fly your previous flight again (same as the native Simulation menu)',
     openYfsLink: 'Open a flight file (O)...',
@@ -1119,77 +1119,17 @@ function renderPanel() {
   quickWrap.appendChild(quickRow);
   panel.appendChild(quickWrap);
 
-  // ---- ミッション (group box, ListView idiom) --------------------------------
-  // Row headline = the MISSION NAME in native menu vocabulary (veterans navigate
-  // by mission, not by aircraft); aircraft and conditions live in the second
-  // column, the hover/selection description in the panel below (the classic
-  // dialog pattern replaces per-card explainer noise).  Native Simulation-menu
-  // order.  Bundled aircraft/fields only (same rule as PRESETS).
-  const missionWrap = document.createElement('fieldset');
-  const mLegend = document.createElement('legend');
-  mLegend.textContent = S.missionTitle;
-  missionWrap.appendChild(mLegend);
-  const MISSIONS = [
-    { name: S.missionLandingName + ' ' + S.lvl1, sub: S.missionLandingEasySub, desc: S.missionLandingEasyDesc, link: '?landing=1', tag: S.tagBeginner },
-    { name: S.missionLandingName + ' ' + S.lvl12, sub: S.missionLandingIfrSub, desc: S.missionLandingIfrDesc, link: '?landing=12', tag: S.tagAdvanced },
-    { name: S.missionEnduranceName, sub: S.missionEasySub, desc: S.missionEasyDesc, link: '?endurance=F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
-    { name: S.missionEnduranceName, sub: S.missionHardSub, desc: S.missionHardDesc, link: '?endurance=F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
-    { name: S.missionInterceptName, sub: S.missionInterceptSub, desc: S.missionInterceptDesc, link: '?intercept=F-15J_EAGLE,ATSUGI_AIRBASE', tag: S.tagIntermediate },
-    { name: S.missionCasName, sub: S.missionCasSub, desc: S.missionCasDesc, link: '?mission=cas', tag: S.tagIntermediate },
-    { name: S.missionRacingName, sub: S.missionRacingSub, desc: S.missionRacingDesc, link: '?mission=racing', tag: S.tagIntermediate },
-  ];
-  const mList = document.createElement('div');
-  mList.className = 'xp-list';
-  const mHd = document.createElement('div');
-  mHd.className = 'hd';
-  for (const h of [S.colMission, S.colCond, S.colTag]) {
-    const c = document.createElement('span');
-    c.textContent = h;
-    if (h === S.colCond) c.className = 'c2';
-    if (h === S.colTag) c.className = 'c3';
-    mHd.appendChild(c);
-  }
-  mList.appendChild(mHd);
-  const mDesc = document.createElement('div');
-  mDesc.className = 'xp-desc';
-  mDesc.id = 'ysfw-mission-desc';
-  mDesc.textContent = S.missionHint;
-  for (const m of MISSIONS) {
-    const row = document.createElement('button');
-    row.className = 'row';
-    const c1 = document.createElement('span');
-    c1.textContent = m.name;
-    const c2 = document.createElement('span');
-    c2.className = 'c2';
-    c2.textContent = m.sub;
-    const c3 = document.createElement('span');
-    c3.className = 'c3';
-    c3.textContent = m.tag;
-    row.appendChild(c1); row.appendChild(c2); row.appendChild(c3);
-    const show = () => {
-      mList.querySelectorAll('.row.sel').forEach((r) => r.classList.remove('sel'));
-      row.classList.add('sel');
-      mDesc.textContent = m.desc;
-    };
-    row.addEventListener('mouseenter', show);
-    row.addEventListener('focus', show);
-    row.addEventListener('click', () => {
-      location.assign(location.origin + location.pathname + m.link + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
-    });
-    mList.appendChild(row);
-  }
-  missionWrap.appendChild(mList);
-  missionWrap.appendChild(mDesc);
-
-  // Full-granularity mission setup + File > Open, under the list.
-  const mRow = document.createElement('div');
-  mRow.className = 'xp-rowline';
+  // ---- ミッション: 選択は専用ページで ----------------------------------------
+  // 2026-07-30: the top page stays light — the mission list (native names,
+  // all levels, raid composition) lives on studio-missions.html, where every
+  // entry starts with defaults in one click.  Same era idiom as the rest
+  // ('...' = opens another page).
   const missionsPage = document.createElement('a');
   missionsPage.className = 'xp-btn';
   missionsPage.textContent = S.missionsPageLink;
   missionsPage.title = S.missionsPageTitle;
   missionsPage.href = 'studio-missions.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
-  mRow.appendChild(missionsPage);
+  quickRow.insertBefore(missionsPage, createLink);
   // Open a .yfs — the native File > Open.  Reads a user .yfs into sessionStorage
   // and boots ?openyfs=1 (index.html preRun writes it for -flyyfs) — a bad file
   // falls back to the shell.
@@ -1217,9 +1157,7 @@ function renderPanel() {
     } catch (e) { alert(S.openYfsBad); }
   });
   openYfs.appendChild(yfsInput);
-  mRow.appendChild(openYfs);
-  missionWrap.appendChild(mRow);
-  panel.appendChild(missionWrap);
+  quickRow.insertBefore(openYfs, qHint);
 
   // ---- ツール (group box) ----------------------------------------------------
   // Settings / Controller / Auto-demo / Workbench / Add-ons as one plain button
