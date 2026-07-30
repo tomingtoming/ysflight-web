@@ -693,7 +693,7 @@ export function mountPartPaint(opts) {
   lightRow.style.cssText = 'display:flex;align-items:center;gap:6px';
   const lightCheck = Object.assign(document.createElement('input'), { type: 'checkbox' });
   const lightLabel = el('span', null, S.unlockLights);
-  lightLabel.style.cssText = 'color:#8fa3bb;font-size:12px';
+  lightLabel.style.cssText = 'color:#555;font-size:12px';
   lightCheck.addEventListener('change', () => { lightUnlocked = lightCheck.checked; });
   lightRow.appendChild(lightCheck);
   lightRow.appendChild(lightLabel);
@@ -701,12 +701,12 @@ export function mountPartPaint(opts) {
 
   // Dynamic paint panel (rebuilt when selection changes)
   const paintArea = el('div');
-  paintArea.style.cssText = 'border-top:1px solid #2a3647;padding-top:8px;margin-top:4px';
+  paintArea.style.cssText = 'border-top:1px solid #ACA899;padding-top:8px;margin-top:4px';
   container.appendChild(paintArea);
 
   // Waterline split panel
   splitPanel = el('div');
-  splitPanel.style.cssText = 'border-top:1px solid #2a3647;padding-top:8px;margin-top:4px';
+  splitPanel.style.cssText = 'border-top:1px solid #ACA899;padding-top:8px;margin-top:4px';
   const splitH = el('h3');
   splitH.textContent = S.splitSection;
   splitH.style.cssText = 'margin:0 0 4px;font-size:13px';
@@ -797,8 +797,8 @@ export function mountPartPaint(opts) {
     for (const [key, count] of colorCounts) {
       const [r, g, b] = key.split(',').map(Number);
       const sw = el('span');
-      sw.style.cssText = 'display:inline-flex;align-items:center;gap:3px;background:#0b1017;' +
-        'border:1px solid #2a3647;border-radius:4px;padding:2px 5px;font-size:11px';
+      sw.style.cssText = 'display:inline-flex;align-items:center;gap:3px;background:#fff;' +
+        'border:1px solid #ACA899;border-radius:2px;padding:2px 5px;font-size:11px';
       const dot = el('span');
       dot.style.cssText = 'width:12px;height:12px;border-radius:2px;background:rgb(' + r + ',' + g + ',' + b + ')';
       sw.appendChild(dot);
@@ -811,8 +811,8 @@ export function mountPartPaint(opts) {
     const pickRow = el('div', 'row');
     pickRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:6px';
     colorPicker = Object.assign(document.createElement('input'), { type: 'color', value: '#888888' });
-    colorPicker.style.cssText = 'width:44px;height:32px;padding:1px;border:1px solid #2a3647;' +
-      'border-radius:6px;background:#0b1017;cursor:pointer';
+    colorPicker.style.cssText = 'width:44px;height:32px;padding:1px;border:1px solid #7F9DB9;' +
+      'border-radius:2px;background:#fff;cursor:pointer';
     // Pre-fill with the first selected color if uniform
     if (colorCounts.size === 1) {
       const [r, g, b] = [...colorCounts.keys()][0].split(',').map(Number);
@@ -825,7 +825,7 @@ export function mountPartPaint(opts) {
     paletteRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px';
     for (const { key, color: [r, g, b] } of modelColors.slice(0, 20)) {
       const chip = el('button');
-      chip.style.cssText = 'width:20px;height:20px;padding:0;border:1px solid #2a3647;border-radius:3px;' +
+      chip.style.cssText = 'width:20px;height:20px;padding:0;border:1px solid #ACA899;border-radius:2px;' +
         'background:rgb(' + r + ',' + g + ',' + b + ');cursor:pointer';
       chip.title = 'C ' + r + ' ' + g + ' ' + b;
       chip.addEventListener('click', () => {
@@ -897,7 +897,7 @@ export function mountPartPaint(opts) {
 // ─── i18n strings ─────────────────────────────────────────────────────────────
 const STRINGS = {
   ja: {
-    section: '🎯 部位塗り',
+    section: '部位塗り',
     intro: 'プレビューの面をクリックして選択→色を塗る。Shift+クリックで追加選択。',
     undo: '↩ 元に戻す',
     redo: '↪ やり直す',
@@ -912,7 +912,7 @@ const STRINGS = {
     paintHint: '選択面の色:',
     paintApply: '選択面に塗る',
     paintDone: (n) => '✓ ' + n + ' 面を塗り替えました',
-    splitSection: '✂ 塗り分け線',
+    splitSection: '塗り分け線',
     splitHint: '選択ノードの面群を水平面(y=定数)で分割。分割後は上下を別色に塗れます。',
     splitBtn: '分割する',
     splitDone: (n) => '✓ ' + n + ' ノードを分割しました',
@@ -920,7 +920,7 @@ const STRINGS = {
     splitBadY: '有効なy値を入力してください',
   },
   en: {
-    section: '🎯 Part paint',
+    section: 'Part paint',
     intro: 'Click a face in the preview to select it, then pick a color. Shift+click to add to the selection.',
     undo: '↩ Undo',
     redo: '↪ Redo',
@@ -935,7 +935,7 @@ const STRINGS = {
     paintHint: 'Selected face color(s):',
     paintApply: 'Paint selected faces',
     paintDone: (n) => '✓ Repainted ' + n + ' face' + (n === 1 ? '' : 's'),
-    splitSection: '✂ Split plane',
+    splitSection: 'Split plane',
     splitHint: 'Split faces in the selected node at a horizontal plane (y = constant). After splitting, paint the upper and lower halves different colors.',
     splitBtn: 'Split',
     splitDone: (n) => '✓ Split ' + n + ' node' + (n === 1 ? '' : 's'),

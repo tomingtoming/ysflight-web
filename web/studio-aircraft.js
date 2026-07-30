@@ -27,28 +27,29 @@ import { buildLintSection } from './dnm-lint-ui.js';
 
 const S = ({
   ja: {
-    title: '✈️ 機体スタジオ',
+    title: '機体スタジオ',
+    sub: 'Blender製 .glb や .dnm/.srf と飛行特性 .dat を1機に組み立て。3Dプレビューで塗装・可動部・視点も編集できます。',
     errorPrefix: 'エラー: ',
     working: '作業中…',
-    acTitle: '✈️ 組み立て',
+    acTitle: '組み立て',
     acIntro: 'Blenderで作った .glb（または .dnm / .srf）と、飛行特性 .dat を1機に組み立てます。.dat が無ければ下の「stockから作る」で。',
     acDrop: '機体のファイル (.dat / .dnm / .srf / .glb) をドロップ / クリックして選択',
     glbImported: (n, k, t) => '✓ ' + n + ' をDNMに変換して取り込みました（' + k + 'ノード・' + t + '三角形）',
     glbAutoColl: '＋ 当たり判定を外観から自動生成しました',
     glbAutoDat: (b) => '＋ 飛行特性 (.dat) を ' + b + ' ベースで自動生成しました（下のウィザードで調整可）',
     glbReady: '→ このまま「組み立てて保存」で機体になります',
-    blTitle: '🟠 Blenderで作る',
+    blTitle: 'Blenderで作る',
     blIntro: 'Blenderが主役のモデリング経路。テンプレから始めて、書き出した .glb を上のドロップ欄に入れるだけ。',
-    blTemplate: '📥 機体テンプレをダウンロード (.glb)',
+    blTemplate: '機体テンプレをダウンロード (.glb)',
     blTemplateTitle: '可動部（脚・フラップ・プロペラ・VTOLノズル等）が配線済みの箱組み機体。Blenderで箱を彫り替えれば飛ばせます',
-    blSample: '📥 サンプル機 B747-8I をダウンロード (.glb)',
+    blSample: 'サンプル機 B747-8I をダウンロード (.glb)',
     blSampleTitle: 'Boeing公式三面図から起こした9,806三角形の完成機（舵面・脚が可動、曲面はスムーズシェーディング）。そのまま上のドロップ欄に入れても、Blenderの参考にしてもOK',
-    blExport: '⬇ 選択中の外観を .glb で書き出す',
+    blExport: '選択中の外観を .glb で書き出す',
     blExportTitle: '外観モデル (.dnm) をBlender用glTFに変換してダウンロード（階層・可動アニメ・YSFLIGHT情報つき）',
     blExportNone: '書き出すには外観モデル (.dnm) を選んでください',
     blExported: (n, a) => '✓ ' + n + ' を書き出しました（アニメ: ' + (a.length ? a.join('・') : 'なし') + '）',
     blHint: '⚠ Blenderからの書き出しは glTF 2.0 (.glb)、「含める → データ → カスタムプロパティ」にチェック（可動部情報の保持に必須）',
-    borrowLabel: '🎨 stockの見た目を借りる',
+    borrowLabel: 'stockの見た目を借りる',
     borrowBtn: '取り込む',
     borrowTitle: 'stock機体の外観・当たり判定・コックピットをこの組み立てに取り込む（.datは下のウィザードで）',
     borrowDone: (name, n) => '✓ ' + name + ' の見た目（' + n + 'ファイル）を取り込みました。あとは .dat＝下の「stockから作る」で完成',
@@ -71,8 +72,8 @@ const S = ({
       NO_COLLISION: '当たり判定 (.srf) を割り当ててください',
     },
     ignored: (names) => '— 対象外: ' + names.join(', '),
-    fly: (n) => '🛫 ' + n + ' で飛ぶ',
-    datTitle: '✏️ 飛行特性 (.dat) を stock から作る',
+    fly: (n) => n + ' で離陸',
+    datTitle: '飛行特性 (.dat) を stock から作る',
     datIntro: '元になる機体を選んで、名前を付けて、性能を倍率でいじれます。できた .dat は上の機体組み立てに入ります。',
     datBase: '元になる機体',
     datName: '新しい機体名（英数字）',
@@ -83,7 +84,7 @@ const S = ({
     exStealthOpts: { 0.1: 'ステルス (0.1)', 0.05: '超ステルス (0.05)' },
     exGunOpts: { 0.03: '速い', 0.075: 'ふつう', 0.15: 'ゆっくり' },
     exSmokeOn: 'スモークを付ける',
-    paintSection: '🎨 塗装',
+    paintSection: '塗装',
     paintTitle: 'この外観モデルの色を塗り替える（ナビライト等は自動保護）',
     paintHint: '色ごとに新しい色を選んで「塗り替える」。数字はその色が使われている面の数',
     paintApply: '塗り替える',
@@ -97,19 +98,19 @@ const S = ({
     datSet: (n) => '✓ ' + n + ' を機体組み立ての .dat スロットに入れました',
     datNeedName: '新しい機体名を入れてください',
     datDup: '⚠ その名前は既存の機体と重複しています（別名を推奨）',
-    ckTitle: '🧑‍✈️ メインコックピット',
+    ckTitle: 'メインコックピット',
     ckIntro: 'F1視点の目の位置と追加視点。保存時に .dat の COCKPITP / EXCAMERA へ書き込まれ、レシピにも残ります。追加視点の並び順＝ゲーム内F1サイクルの巡回順。',
     ckX: '左右 x（右+）', ckY: '上下 y（上+）', ckZ: '前後 z（機首+）',
-    ckView: '👀 コックピットビュー', ckViewOff: '🔭 外部視点に戻る（ドラッグで見回し）',
+    ckView: 'コックピットビュー', ckViewOff: '外部視点に戻る（ドラッグで見回し）',
     ckSrc: {
       recipe: 'レシピの保存値', dat: '.dat から', glb: '.glb のカメラから', user: '手動指定',
       estimate: 'ジオメトリから推定（機首から全長の約7%後方）— 要調整',
     },
     ckNone: '（外観 .dnm か .dat を入れると初期値を提案します）',
     glbCockpit: '＋ コックピット位置を .glb のカメラから取り込みました',
-    vpTitle: '👁 視点',
-    vpExTitle: '📷 追加視点 (EXCAMERA)',
-    vpExIntro: '機長・副操縦士・客席・尾翼カメラなど、F1で巡回する名前付き視点。マーカーをドラッグで移動、📷で今の視点を写し取り。',
+    vpTitle: '視点',
+    vpExTitle: '追加視点 (EXCAMERA)',
+    vpExIntro: '機長・副操縦士・客席・尾翼カメラなど、F1で巡回する名前付き視点。マーカーをドラッグで移動、「写し取り」で今の視点を記録。',
     vpAdd: '＋ 追加視点',
     vpDel: '削除',
     vpName: '名前',
@@ -118,39 +119,40 @@ const S = ({
     vpNoInst: '計器盤非表示',
     vpH: '向き h（左+°）', vpP: '向き p（上+°）', vpB: '傾き b（°）',
     vpNone: '（追加視点なし — stockのB747は副操縦士席などを持っています）',
-    vpCapture: '📷 今の視点を写し取る',
-    vpCaptureTitle: 'プレビューの今のカメラ（位置＋向き）を選択中の視点へ書き込む。オービット/👀で構図を決めて1クリック',
+    vpCapture: '今の視点を写し取る',
+    vpCaptureTitle: 'プレビューの今のカメラ（位置＋向き）を選択中の視点へ書き込む。オービット/視点サイクルで構図を決めて1クリック',
     vpCapturedMain: '✓ メインコックピットへ位置を写し取りました（COCKPITP は向きを持ちません）',
     vpCapturedEx: (n) => '✓ 「' + n + '」へ位置と向きを写し取りました',
-    vpCycle: '👀 視点サイクル',
-    vpViewing: (n) => '👀 ' + n + '（クリックで次へ）',
+    vpCycle: '視点サイクル',
+    vpViewing: (n) => '視点: ' + n + '（クリックで次へ）',
     vpMain: 'メインコックピット',
     glbExcams: (n) => '＋ 追加視点 ' + n + ' 件を .glb のカメラから取り込みました',
-    libEditingBadge: (n) => '✏️ 編集中: ' + n,
+    libEditingBadge: (n) => '編集中: ' + n,
   },
   en: {
-    title: '✈️ Aircraft Studio',
+    title: 'Aircraft Studio',
+    sub: 'Assemble a Blender-made .glb (or .dnm/.srf) with a flight-model .dat — paint, movables and viewpoints edit live in the 3D preview.',
     errorPrefix: 'Error: ',
     working: 'Working…',
-    acTitle: '✈️ Assemble',
+    acTitle: 'Assemble',
     acIntro: 'Combine your Blender-made .glb (or .dnm / .srf) with a flight-model .dat. No .dat? Make one below from a stock base.',
     acDrop: 'Drop aircraft files (.dat / .dnm / .srf / .glb) / click to choose',
     glbImported: (n, k, t) => '✓ Converted ' + n + ' to DNM (' + k + ' nodes, ' + t + ' triangles)',
     glbAutoColl: '+ Generated a collision shell from the visual',
     glbAutoDat: (b) => '+ Generated a flight model (.dat) from ' + b + ' (tune it in the wizard below)',
     glbReady: '→ “Assemble & save” makes it an aircraft as-is',
-    blTitle: '🟠 Build in Blender',
+    blTitle: 'Build in Blender',
     blIntro: 'The Blender-first modeling path: start from the template, drop the exported .glb into the file drop above.',
-    blTemplate: '📥 Download the aircraft template (.glb)',
+    blTemplate: 'Download the aircraft template (.glb)',
     blTemplateTitle: 'A boxy airframe with every movable part (gear, flaps, propeller, VTOL nozzles, ...) pre-wired — carve the boxes and it flies',
-    blSample: '📥 Download the B747-8I sample (.glb)',
+    blSample: 'Download the B747-8I sample (.glb)',
     blSampleTitle: 'A finished 9,806-triangle airliner compiled from the official Boeing three-view (movable control surfaces and gear, smooth-shaded curves). Drop it into the file drop as-is, or use it as a Blender reference',
-    blExport: '⬇ Export the selected visual as .glb',
+    blExport: 'Export the selected visual as .glb',
     blExportTitle: 'Convert the visual model (.dnm) to Blender-ready glTF (hierarchy, movable-part animations, YSFLIGHT metadata)',
     blExportNone: 'Select a visual model (.dnm) to export',
     blExported: (n, a) => '✓ Exported ' + n + ' (animations: ' + (a.length ? a.join(', ') : 'none') + ')',
     blHint: '⚠ Export from Blender as glTF 2.0 (.glb) with Include > Data > Custom Properties checked (required to keep the movable-part wiring)',
-    borrowLabel: '🎨 Borrow a stock airframe',
+    borrowLabel: 'Borrow a stock airframe',
     borrowBtn: 'Import',
     borrowTitle: 'Pull a stock aircraft’s visual/collision/cockpit into this assembly (make the .dat below)',
     borrowDone: (name, n) => '✓ Imported ' + name + '’s airframe (' + n + ' files). Now make a .dat below to complete it',
@@ -173,8 +175,8 @@ const S = ({
       NO_COLLISION: 'Assign a collision shell (.srf)',
     },
     ignored: (names) => '— not usable: ' + names.join(', '),
-    fly: (n) => '🛫 Fly ' + n,
-    datTitle: '✏️ Make a flight model (.dat) from stock',
+    fly: (n) => 'Fly ' + n,
+    datTitle: 'Make a flight model (.dat) from stock',
     datIntro: 'Pick a base aircraft, name yours, scale its performance. The result feeds the assembly above.',
     datBase: 'Base aircraft',
     datName: 'New aircraft name (ASCII)',
@@ -185,7 +187,7 @@ const S = ({
     exStealthOpts: { 0.1: 'Stealth (0.1)', 0.05: 'Super stealth (0.05)' },
     exGunOpts: { 0.03: 'Fast', 0.075: 'Normal', 0.15: 'Slow' },
     exSmokeOn: 'Enable smoke',
-    paintSection: '🎨 Paint',
+    paintSection: 'Paint',
     paintTitle: 'Recolor this visual model (nav lights are auto-protected)',
     paintHint: 'Pick a new color per swatch, then Apply. The number is how many faces use it',
     paintApply: 'Apply paint',
@@ -199,19 +201,19 @@ const S = ({
     datSet: (n) => '✓ Placed ' + n + ' into the assembly’s .dat slot',
     datNeedName: 'Enter a new aircraft name',
     datDup: '⚠ That name clashes with an existing aircraft (pick another)',
-    ckTitle: '🧑‍✈️ Main cockpit',
+    ckTitle: 'Main cockpit',
     ckIntro: 'F1 eye positions: the main cockpit and named extra viewpoints. Written into the .dat COCKPITP / EXCAMERA on save, and kept in the recipe. Extra-view order = the in-game F1 cycle order.',
     ckX: 'x (starboard +)', ckY: 'y (up +)', ckZ: 'z (nose +)',
-    ckView: '👀 Cockpit view', ckViewOff: '🔭 Back to orbit (drag to look around)',
+    ckView: 'Cockpit view', ckViewOff: 'Back to orbit (drag to look around)',
     ckSrc: {
       recipe: 'from the saved recipe', dat: 'from the .dat', glb: 'from the .glb camera', user: 'set by hand',
       estimate: 'estimated from geometry (~7% of the length behind the nose) — adjust to taste',
     },
     ckNone: '(assign a visual .dnm or a .dat and a starting value appears)',
     glbCockpit: '+ Cockpit position imported from the .glb camera',
-    vpTitle: '👁 Viewpoints',
-    vpExTitle: '📷 Extra viewpoints (EXCAMERA)',
-    vpExIntro: 'Named F1-cycle viewpoints — captain, co-pilot, cabin, tail cam. Drag a marker to move it; 📷 captures the current preview view.',
+    vpTitle: 'Viewpoints',
+    vpExTitle: 'Extra viewpoints (EXCAMERA)',
+    vpExIntro: 'Named F1-cycle viewpoints — captain, co-pilot, cabin, tail cam. Drag a marker to move it; Capture writes the current preview view.',
     vpAdd: '+ Add viewpoint',
     vpDel: 'Delete',
     vpName: 'Name',
@@ -220,15 +222,15 @@ const S = ({
     vpNoInst: 'Hide inst panel',
     vpH: 'h (yaw, left +°)', vpP: 'p (pitch, up +°)', vpB: 'b (bank °)',
     vpNone: '(no extra viewpoints — stock B747 carries a co-pilot seat and more)',
-    vpCapture: '📷 Capture current view',
-    vpCaptureTitle: 'Write the preview camera (position + direction) into the selected viewpoint. Frame the shot by orbit/👀, then one click',
+    vpCapture: 'Capture current view',
+    vpCaptureTitle: 'Write the preview camera (position + direction) into the selected viewpoint. Frame the shot by orbit / the view cycle, then one click',
     vpCapturedMain: '✓ Captured the position into the main cockpit (COCKPITP has no direction)',
     vpCapturedEx: (n) => '✓ Captured position + direction into “' + n + '”',
-    vpCycle: '👀 View cycle',
-    vpViewing: (n) => '👀 ' + n + ' (click for next)',
+    vpCycle: 'View cycle',
+    vpViewing: (n) => 'Viewing: ' + n + ' (click for next)',
     vpMain: 'Main cockpit',
     glbExcams: (n) => '+ Imported ' + n + ' extra viewpoint(s) from the .glb cameras',
-    libEditingBadge: (n) => '✏️ Editing: ' + n,
+    libEditingBadge: (n) => 'Editing: ' + n,
   },
 })[LANG];
 
@@ -274,15 +276,17 @@ let datEditorHandle = null;  // { load } returned by mountDatEditor
 // --- the big preview surface (main) ------------------------------------------------
 
 function buildSurface(surface) {
+  // The 3D preview keeps its dark viewport (the scene clears to #0b1017 —
+  // viewport convention, not chrome); the slider bar below is chrome and light.
   previewWrap = el('div');
-  previewWrap.style.cssText = 'flex:1;min-height:0;position:relative';
+  previewWrap.style.cssText = 'flex:1;min-height:0;position:relative;background:#0b1017';
   surfaceHint = el('div', null, S.previewNone);
   surfaceHint.style.cssText =
     'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
     'color:#7d93b0;font-size:13px;text-align:center;padding:24px';
   previewWrap.appendChild(surfaceHint);
   animBar = el('div');
-  animBar.style.cssText = 'flex:none;padding:8px 12px;border-top:1px solid #2a3647';
+  animBar.style.cssText = 'flex:none;padding:8px 12px;border-top:1px solid #ACA899;background:#ECE9D8';
   surface.appendChild(previewWrap);
   surface.appendChild(animBar);
 }
@@ -477,7 +481,7 @@ function refreshDatEditor() {
     : sel && sel.value ? byName.get(sel.value) : null);
   const datEntry = sels ? pick(sels.dat) : null;
   if (!datEntry) return;
-  const h2 = el('h2', null, LANG === 'ja' ? '✏️ .dat エディタ' : '✏️ .dat Editor');
+  const h2 = el('h2', null, LANG === 'ja' ? '.dat エディタ' : '.dat Editor');
   datEditorWrap.appendChild(h2);
   const intro = el('p', 'intro', LANG === 'ja'
     ? '飛行特性の全パラメータをフォームまたは生テキストで編集できます。保存すると組み立てに反映されます。'
@@ -648,11 +652,11 @@ function renderPaint() {
   grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;margin:4px 0';
   for (const c of colors) {
     const cell = el('div');
-    cell.style.cssText = 'display:flex;align-items:center;gap:4px;border:1px solid #2a3647;border-radius:6px;padding:3px 6px';
+    cell.style.cssText = 'display:flex;align-items:center;gap:4px;border:1px solid #ACA899;border-radius:2px;background:#fff;padding:3px 6px';
     const sw = el('span');
     sw.style.cssText = 'width:16px;height:16px;border-radius:3px;display:inline-block;background:rgb(' + c.r + ',' + c.g + ',' + c.b + ')';
     const cnt = el('span', null, String(c.count));
-    cnt.style.cssText = 'color:#7d93b0;font-size:10.5px';
+    cnt.style.cssText = 'color:#777;font-size:10.5px';
     const inp = Object.assign(document.createElement('input'), { type: 'color', value: rgb2hex6(c.r, c.g, c.b) });
     inp.style.cssText = 'width:34px;height:24px;padding:0;border:0;background:none';
     cell.appendChild(sw);
@@ -813,13 +817,13 @@ function renderExcamList() {
   const refreshSel = () => {
     if (mainRadio) mainRadio.checked = selCam === 'main';
     parts.forEach((p, i) => {
-      p.item.style.borderColor = selCam === i ? '#ff8c3a' : '#2a3647';
+      p.item.style.borderColor = selCam === i ? '#ff8c3a' : '#ACA899';
       p.radio.checked = selCam === i;
     });
   };
   excams.forEach((cam, i) => {
     const item = el('div');
-    item.style.cssText = 'border:1px solid ' + (selCam === i ? '#ff8c3a' : '#2a3647') + ';border-radius:6px;padding:6px;margin:6px 0';
+    item.style.cssText = 'border:1px solid ' + (selCam === i ? '#ff8c3a' : '#ACA899') + ';border-radius:2px;background:#F2F1E5;padding:6px;margin:6px 0';
     const pick = () => { if (selCam !== i) { selCam = i; refreshSel(); syncMarkers(); } };
     item.addEventListener('pointerdown', pick);
 
@@ -855,7 +859,7 @@ function renderExcamList() {
     r2.appendChild(typeSel);
     const cb = (labelText, key) => {
       const lab = el('span', null, labelText);
-      lab.style.cssText = 'color:#8fa3bb;font-size:11px';
+      lab.style.cssText = 'color:#555;font-size:11px';
       const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!cam[key] });
       c.addEventListener('change', () => { cam[key] = c.checked; excamsSource = 'user'; });
       r2.appendChild(c);
@@ -871,9 +875,9 @@ function renderExcamList() {
     const numIn = (key, labelText, step) => {
       const wrap = el('div');
       const lab = el('div', null, labelText);
-      lab.style.cssText = 'color:#7d93b0;font-size:10px';
+      lab.style.cssText = 'color:#555;font-size:10px';
       const inp = Object.assign(document.createElement('input'), { type: 'number', step, value: String(cam[key]) });
-      inp.style.cssText = 'width:100%;box-sizing:border-box';
+      inp.style.cssText = 'width:100%;box-sizing:border-box;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;padding:2px 4px';
       inp.addEventListener('input', () => {
         const v = parseFloat(inp.value);
         if (!Number.isFinite(v)) return;
@@ -1067,9 +1071,9 @@ async function buildDatSection(rail) {
   smokeWrap.style.cssText = 'flex:1;display:flex;align-items:center;gap:8px;min-width:0';
   const smokeOn = Object.assign(document.createElement('input'), { type: 'checkbox' });
   const smokeLab = el('span', null, S.exSmokeOn);
-  smokeLab.style.cssText = 'color:#8fa3bb;font-size:12px';
+  smokeLab.style.cssText = 'color:#555;font-size:12px';
   const smokeCol = Object.assign(document.createElement('input'), { type: 'color', value: '#ff5050' });
-  smokeCol.style.cssText = 'width:52px;height:28px;padding:1px;border:1px solid #2a3647;border-radius:6px;background:#0b1017';
+  smokeCol.style.cssText = 'width:52px;height:28px;padding:1px;border:1px solid #7F9DB9;border-radius:2px;background:#fff';
   smokeWrap.appendChild(smokeOn);
   smokeWrap.appendChild(smokeLab);
   smokeWrap.appendChild(smokeCol);
@@ -1121,8 +1125,11 @@ async function buildDatSection(rail) {
 function buildBlenderSection(rail) {
   rail.appendChild(el('h2', null, S.blTitle));
   rail.appendChild(el('p', 'intro', S.blIntro));
-  const linkCss = 'display:inline-block;margin:0 8px 8px 0;padding:6px 12px;border:1px solid #4da3ff;' +
-    'border-radius:6px;color:#4da3ff;font-size:12.5px;text-decoration:none;background:rgba(77,163,255,.14)';
+  // Download links dressed as the era's buttons (same gradient as the chrome).
+  const linkCss = 'display:inline-block;margin:0 8px 8px 0;padding:6px 12px;border:1px solid #003C74;' +
+    'border-radius:3.5px;color:#000;font-size:12.5px;text-decoration:none;' +
+    'background:linear-gradient(180deg,#FFFFFF 0%,#F4F2E7 55%,#E5E1CE 90%,#D8D0B8 100%);' +
+    'box-shadow:inset 0 -2px 2px rgba(160,140,90,0.22)';
   const tpl = el('a', null, S.blTemplate);
   tpl.href = './aircraft-starter.glb';
   tpl.download = 'aircraft-starter.glb';
@@ -1168,7 +1175,7 @@ function buildBlenderSection(rail) {
 // --- boot ------------------------------------------------------------------------------
 
 async function main() {
-  const chrome = studioChrome(S.title);
+  const chrome = studioChrome(S.title, S.sub);
   buildSurface(chrome.main);
   buildAssembleSection(chrome.rail);
   // Thin mount: the linter UI lives in dnm-lint-ui.js; we only hand it the

@@ -1,4 +1,4 @@
-// Studio UI for the nightmare linter (web/dnm-lint.js): a "🩺 検査" section
+// Studio UI for the nightmare linter (web/dnm-lint.js): a "検査" section
 // that runs the geometry linter over the files currently assigned to the
 // studio slots and lists the findings with severity badges and fix hints.
 //
@@ -13,7 +13,7 @@ import { lintDnm, lintSrf } from './dnm-lint.js';
 
 const S = ({
   ja: {
-    title: '🩺 検査',
+    title: '検査',
     intro: '組み立て中のモデルを「悪夢リンター」にかけます。実飛行で画面に化けて出た病理（N法線欠落・薄板の黒縁・ヒンジ線のZファイト…）を機械検出。',
     run: '検査する',
     none: '検査対象がありません（外観 .dnm などを割り当ててください）',
@@ -23,7 +23,7 @@ const S = ({
     failed: (name, m) => '⚠ ' + name + ' を検査できませんでした: ' + m,
   },
   en: {
-    title: '🩺 Inspect',
+    title: 'Inspect',
     intro: 'Run the assembled model through the "nightmare linter" — machine checks for the pathologies real flights surfaced (missing N normals, black thin-plate edges, hinge-line z-fighting...).',
     run: 'Inspect',
     none: 'Nothing to inspect (assign a visual .dnm first)',
@@ -35,22 +35,22 @@ const S = ({
 })[LANG];
 
 const BADGE = {
-  error: ['error', '#3d1512', '#ff7b72'],
-  warn: ['warn', '#3a2d10', '#e3b341'],
-  info: ['info', '#0f2a45', '#79c0ff'],
+  error: ['error', '#FDE7E9', '#C00000', '#E0A0A6'],
+  warn: ['warn', '#FFF8DC', '#7A5C00', '#C9A227'],
+  info: ['info', '#E8F0FE', '#0046D5', '#9DB8E8'],
 };
 
 function badge(sev) {
-  const [label, bg, fg] = BADGE[sev];
+  const [label, bg, fg, bd] = BADGE[sev];
   const b = el('span', null, label);
-  b.style.cssText = 'display:inline-block;padding:0 6px;border-radius:4px;font-size:10.5px;' +
-    'font-weight:600;margin-right:6px;background:' + bg + ';color:' + fg + ';border:1px solid ' + fg + '33';
+  b.style.cssText = 'display:inline-block;padding:0 6px;border-radius:2px;font-size:10.5px;' +
+    'font-weight:600;margin-right:6px;background:' + bg + ';color:' + fg + ';border:1px solid ' + bd;
   return b;
 }
 
 function renderFinding(box, f) {
   const item = el('div');
-  item.style.cssText = 'border:1px solid #2a3647;border-radius:6px;padding:6px 8px;margin:4px 0;font-size:12px';
+  item.style.cssText = 'border:1px solid #ACA899;border-radius:2px;background:#fff;padding:6px 8px;margin:4px 0;font-size:12px';
   const head = el('div');
   head.appendChild(badge(f.severity));
   const where = [f.node, f.srf].filter(Boolean).join(' / ');
@@ -59,14 +59,14 @@ function renderFinding(box, f) {
   item.appendChild(head);
   if (f.detail) {
     const d = el('div', null, f.detail);
-    d.style.cssText = 'color:#7d93b0;font-size:11px;margin:2px 0 0';
+    d.style.cssText = 'color:#666;font-size:11px;margin:2px 0 0';
     item.appendChild(d);
   }
   const why = el('div', null, f.why[LANG]);
-  why.style.cssText = 'color:#8fa3bb;margin:3px 0 0';
+  why.style.cssText = 'color:#555;margin:3px 0 0';
   item.appendChild(why);
   const fix = el('div', null, '→ ' + f.fix[LANG]);
-  fix.style.cssText = 'color:#9ece6a;margin:2px 0 0';
+  fix.style.cssText = 'color:#008000;margin:2px 0 0';
   item.appendChild(fix);
   box.appendChild(item);
 }
@@ -99,8 +99,8 @@ export function runLint(box, targets) {
   sum.style.fontWeight = '600';
   box.appendChild(sum);
   for (const s of sections) {
-    const h = el('div', null, '📄 ' + s.name);
-    h.style.cssText = 'color:#c9d5e3;font-size:12px;margin:8px 0 2px;font-weight:600';
+    const h = el('div', null, s.name);
+    h.style.cssText = 'color:#333;font-size:12px;margin:8px 0 2px;font-weight:600';
     box.appendChild(h);
     if (s.err) {
       box.appendChild(el('div', 'msg', S.failed(s.name, s.err)));
