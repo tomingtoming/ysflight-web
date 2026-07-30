@@ -1986,7 +1986,7 @@
       if (document.getElementById('ysfw-manual-join')) return;
       var wrap = document.createElement('div');
       wrap.id = 'ysfw-manual-join';
-      wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:8px';
+      wrap.style.cssText = 'display:contents';
       var label = document.createElement('div');
       label.style.cssText = 'font-size:13px;color:#333';
       label.textContent = TXT.joinLabel;
@@ -2028,7 +2028,7 @@
       // low-emphasis toggle reveals the (byte-for-byte identical) form on demand; the
       // ?join= invite path uses a SEPARATE form (below) and never reaches here.
       var stack = document.createElement('div');
-      stack.style.cssText = 'display:none;flex-direction:column;align-items:flex-start;gap:8px';
+      stack.style.cssText = 'display:none;flex-direction:column;align-items:flex-start;gap:8px;order:9;flex-basis:100%;width:100%;background:#FFFFE1;border:1px solid #ACA899;border-radius:2px;padding:10px 12px;box-sizing:border-box';
       stack.appendChild(label);
       stack.appendChild(roomIn);
       stack.appendChild(nameIn);
@@ -2059,9 +2059,9 @@
       var H = TXT.host;
       var wrap = document.createElement('div');
       wrap.id = 'ysfw-host-form';
-      wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:8px';
+      wrap.style.cssText = 'display:contents';
       var card = document.createElement('div');
-      card.style.cssText = 'display:none;flex-direction:column;align-items:flex-start;gap:8px;width:100%;background:#FFFFE1;border:1px solid #ACA899;border-radius:2px;padding:10px 12px;box-sizing:border-box';
+      card.style.cssText = 'display:none;flex-direction:column;align-items:flex-start;gap:8px;order:9;flex-basis:100%;width:100%;background:#FFFFE1;border:1px solid #ACA899;border-radius:2px;padding:10px 12px;box-sizing:border-box';
       var nameIn = document.createElement('input');
       nameIn.type = 'text';
       nameIn.maxLength = 200;
