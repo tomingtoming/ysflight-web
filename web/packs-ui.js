@@ -18,7 +18,7 @@ import { createMemfsLru } from './memfs-lru.js';
 import { unzipSync } from './vendor/fflate.js';
 
 const USER_DIR_DEFAULT = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
-const ACCENT = '#4da3ff';
+const ACCENT = '#0046D5';
 // MAX_PACK_BYTES (the whole-archive cap, 1.5GB) is defined in packs.js so the engine
 // core and this UI share one value; installCore forwards it to analyzePackStreaming.
 // NOTE: install still unzips the whole archive in memory (fflate unzipSync); a
@@ -63,46 +63,64 @@ const S = ({
     bulkDone: (ok, fail) => '✓ ' + ok + ' 件取り込み' + (fail ? '  ／  ⚠ ' + fail + ' 件失敗（下記）' : ''),
     notZip: '(.zip ではないのでスキップ)',
     panelTitle: '追加パック',
-    packToggle0: '手持ちのアドオンを追加',
+    packToggle0: 'アドオンの追加(P)...',
     packToggleN: (n) => '追加パック (' + n + ')',
-    quickTitle: '🛫 今すぐ飛ぶ',
-    quickHint: 'クリックでそのまま離陸（追加パック不要）',
-    touchHint: 'スマホ対応：離陸すると画面に操縦スティックが出ます',
-    tagBeginner: '👍 はじめての方向け',
-    tagIntermediate: '中級者向け',
+    quickTitle: '今すぐ飛ぶ',
+    quickHint: 'クリックでそのまま離陸。追加パック不要',
+    touchHint: 'スマホ対応 ── 離陸すると画面に操縦スティックが出ます',
+    tagBeginner: 'はじめて向け',
+    tagIntermediate: '中級',
     tagAirliner: '大型機',
-    tagAdvanced: '上級者向け',
-    missionTitle: '🎯 ミッション',
+    tagAdvanced: '上級',
+    presetAtsugi: '厚木基地',
+    presetHawaii: 'Hawaii ／ 空中スタート',
+    sbReady: '準備完了',
+    toolsTitle: 'ツール',
+    netTitle: 'ネットワーク対戦',
+    netNote: 'P2P直結。招待リンクを送るだけで友達と同じ空へ',
+    lvl1: 'レベル1',
+    lvl12: 'レベル12',
+    colMission: 'ミッション名',
+    colCond: '条件',
+    colTag: '難度',
+    missionTitle: 'ミッション',
     // Mission names use the NATIVE Japanese menu vocabulary (ja.uitxt
     // menu/simulation-*) so 20-year veterans find what they know.
-    missionHint: 'クリックで即ミッション開始（本家 Simulation メニューと同じ項目名）',
+    missionHint: '項目に合わせると説明が出ます。クリックで開始（本家 Simulation メニューと同じ項目名）',
     missionEnduranceName: '15分間耐久空中戦',
-    missionInterceptName: '基地防空ミッション',
+    missionInterceptName: '基地防空ミッション（迎撃）',
     missionLandingName: '着陸訓練',
     missionRacingName: 'レーシングモード',
     missionCasName: '近接支援ミッション',
-    missionEasySub: 'F-15J / 厚木 / 僚機2機・敵レベル3',
-    missionHardSub: 'F/A-18 / Hawaii / 単機・敵レベル5',
-    missionInterceptSub: 'F-15J / 厚木 / 来襲する爆撃編隊を阻止',
-    missionLandingEasySub: 'レベル1: Straight-In・微風 / F/A-18・青森',
-    missionLandingIfrSub: 'レベル12: 低視程 (Low Visibility) / F/A-18・青森',
-    missionRacingSub: 'F-15J / 渓谷コースをゲート通過でラップ計時',
-    missionCasSub: 'F-15J / 東北 / 味方戦車隊を敵戦車から守る',
-    missionsPageLink: '⚙️ ミッションを設定して開始（レベル・機体・マップ・編成を選ぶ）',
-    missionsPageTitle: '本家 Simulation メニューと同じ選択肢で各ミッションを設定（着陸訓練は全15レベル）',
-    retryLink: '↻ 前回のフライトに再挑戦',
+    missionEasySub: 'F-15J ／ 厚木 ／ 僚機2・敵Lv3',
+    missionHardSub: 'F/A-18 ／ Hawaii ／ 単機・敵Lv5',
+    missionInterceptSub: 'F-15J ／ 厚木',
+    missionLandingEasySub: 'Straight-In ／ 微風 ／ F/A-18・青森',
+    missionLandingIfrSub: '低視程 (Low Visibility) ／ F/A-18・青森',
+    missionRacingSub: 'F-15J ／ 渓谷コース',
+    missionCasSub: 'F-15J ／ 東北',
+    missionLandingEasyDesc: '滑走路正面からの進入で着陸の基本を練習。風は微風。はじめての一本に。',
+    missionLandingIfrDesc: '計器進入のみで滑走路へ。雲高は低く、ILS のグライドスロープに正確に乗る必要があります。',
+    missionEasyDesc: '15分間、僚機2機とともに来襲する敵編隊を迎え撃つ。敵レベル3の入門空戦。',
+    missionHardDesc: '単機で15分間の防空戦。敵レベル5・補給なし。腕試しに。',
+    missionInterceptDesc: '来襲する爆撃編隊を基地到達前に阻止する。護衛戦闘機つき。',
+    missionCasDesc: '味方戦車隊を敵戦車から守る近接航空支援。地上戦の趨勢は支援次第。',
+    missionRacingDesc: '渓谷コースをゲート通過でラップ計時。最速ラインを探そう。',
+    missionsPageLink: 'ミッション(D)...',
+    missionsPageTitle: '着陸訓練・空中戦・迎撃・近接支援・レーシング ── 本家 Simulation メニューと同じ項目・全選択肢（既定値なら1クリックで開始）',
+    retryLink: '前回のフライトに再挑戦(R)',
     retryTitle: '直前に飛んだフライトをもう一度（本家 Simulation メニューと同じ）',
-    openYfsLink: '📂 フライトファイル (.yfs) を開いて飛ぶ',
+    openYfsLink: 'フライトファイルを開く(O)...',
     openYfsTitle: '手持ちの .yfs（ミッション/保存フライト）を読み込んで飛行（本家 File > Open のweb版）',
     openYfsTooBig: '.yfs が大きすぎます（4MB まで）',
     openYfsBad: '.yfs を読み込めませんでした',
-    createFlightLink: '✈️ フライトを作る（機体・敵機・時間帯を選ぶ）',
+    createFlightLink: 'フライトを作成(C)...',
     createFlightTitle: '専用ページで機体・マップ・時間帯・AI機を組んで離陸（Create Flight のweb版）',
-    settingsLink: '⚙️ 設定（影・雲・HUD など）',
+    settingsLink: '設定(S)...',
     settingsTitle: '見た目と表示の設定（Option メニューのweb版）',
-    demoLink: '🎬 オートデモ（デモ飛行を眺める）',
+    demoLink: 'オートデモ(A)',
     demoTitle: 'AIのデモ飛行をループ再生（戻るときはブラウザの「戻る」）',
-    controlsLink: '🕹️ コントローラ設定（ジョイスティック/キー割り当て）',
+    controlsLink: 'コントローラ(J)...',
     controlsTitle: 'ゲームパッドの軸・ボタン割当とデッドゾーン（本家 Option > ジョイスティック/キー割り当て のweb版）',
     urlAdd: 'URL から追加',
     urlPlaceholder: 'パック .zip の URL',
@@ -112,15 +130,15 @@ const S = ({
     urlFail404: (s) => 'URL を取得できませんでした（' + s + '）。リンクが正しいか確認してください',
     dropZone: 'パック (.zip) を1つ以上ドロップ / クリックして選択',
     dropHint: 'zip の直下に aircraft/ scenery/ ground/ などのフォルダがある構成にしてください',
-    wbLink: '🛠 ワークベンチ — 機体とマップを作る',
+    wbLink: 'ワークベンチ(W)...',
     wbLinkTitle: '専用ページで機体を組む・.datを作る・島を描く（作ったものは次回起動から使えます）',
     looseHint: (names) => '— ' + names.join(', ') + ' : 機体のファイルはワークベンチ（🛠）で組み立てられます',
-    flyBtn: '🛫',
+    flyBtn: '離陸',
     flyTitle: 'テスト飛行 — この機体で滑走路から即離陸（ページをリロードします）',
     flyPick: '機体を選択:',
-    flyNoIdent: 'この機体は名前指定で起動できません（.dat に ASCII の IDENTIFY が無い）。プレイ開始からメニューで選んでください',
+    flyNoIdent: 'この機体は名前指定で起動できません（.dat に ASCII の IDENTIFY が無い）。本家のフルメニューから選んでください',
     diagWarn: (n, samples) => '⚠ パック内のリストが参照する ' + n + ' ファイルが見つかりません（該当エントリは飛べません）' + (samples.length ? ' 例: ' + samples.slice(0, 3).join(', ') : ''),
-    postPlayHint: 'プレイ開始後、エンジンのメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
+    postPlayHint: '本家のフルメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
     errMap: {
       noList: 'YSFLIGHT のリスト（aircraft/air*.lst など）が見つかりません。zip の直下に aircraft/ や scenery/ があるか確認してください',
       tooBig: 'パックが大きすぎます（サイズ上限を超過）',
@@ -134,9 +152,9 @@ const S = ({
       'no-redist': '再配布不可',
       'ask-author': '要許可（作者に連絡）',
     },
-    playBtn: '▶ プレイ開始',
-    playHint: '機体・マップを自分で選ぶ／対戦をホストするときはこちら（エンジンのメニューが開きます）',
-    vrPlayBtn: '🥽 VRでプレイ開始',
+    playBtn: '本家のフルメニューを開く(M)',
+    playHint: '2002年からのオリジナルのメニュー画面。全機能はここに──VRではこの画面がそのまま操作盤になります',
+    vrPlayBtn: 'VRで飛ぶ(V)',
     vrPlayHint: 'ヘッドセットのままメニュー操作から飛行まで（WebXR・実験的機能）',
     flyAgain: '↻ 続きから',
     joinFailTitle: '⚠ 必須パックを取得できませんでした',
@@ -182,19 +200,37 @@ const S = ({
     bulkDone: (ok, fail) => '✓ ' + ok + ' imported' + (fail ? '  /  ⚠ ' + fail + ' failed (below)' : ''),
     notZip: '(skipped: not a .zip)',
     panelTitle: 'Add-on packs',
-    packToggle0: 'Add your own add-ons',
+    packToggle0: 'Add add-ons (P)...',
     packToggleN: (n) => 'Add-on packs (' + n + ')',
-    quickTitle: '🛫 Quick flight',
-    quickHint: 'Click to take off right away (no add-on needed)',
-    touchHint: 'Touch-ready: an on-screen stick appears once you take off.',
-    tagBeginner: '👍 Beginner',
+    quickTitle: 'Quick flight',
+    quickHint: 'Click to take off right away. No add-on needed',
+    touchHint: 'Touch-ready — an on-screen stick appears once you take off',
+    tagBeginner: 'first flight',
     tagIntermediate: 'Intermediate',
     tagAirliner: 'Airliner',
     tagAdvanced: 'Advanced',
-    missionTitle: '🎯 Missions',
+    presetAtsugi: 'Atsugi airbase',
+    presetHawaii: 'Hawaii / airborne start',
+    sbReady: 'Ready',
+    toolsTitle: 'Tools',
+    netTitle: 'Network play',
+    netNote: 'Direct P2P. Send an invite link and share the sky',
+    lvl1: 'Level 1',
+    lvl12: 'Level 12',
+    colMission: 'Mission',
+    colCond: 'Conditions',
+    colTag: 'Difficulty',
+    missionLandingEasyDesc: 'Practice the basics on a straight-in approach in light wind. A good first landing.',
+    missionLandingIfrDesc: 'Instruments only: a low ceiling forces you to ride the ILS glideslope all the way down.',
+    missionEasyDesc: 'Hold the line for 15 minutes with two wingmen against incoming raiders. Enemy level 3.',
+    missionHardDesc: 'A solo 15-minute air defence. Enemy level 5, no resupply.',
+    missionInterceptDesc: 'Stop the incoming bomber raid before it reaches the base. Escorts included.',
+    missionCasDesc: 'Close air support: keep the friendly tank column alive against enemy armour.',
+    missionRacingDesc: 'Lap timing through the canyon gates. Find the fastest line.',
+    missionTitle: 'Missions',
     // Mission names mirror the NATIVE menu labels (en.uitxt
     // menu/simulation-*) so veterans find what they know.
-    missionHint: 'Click to start a mission (same names as the native Simulation menu)',
+    missionHint: 'Point at a mission for its description; click to start (native Simulation-menu names)',
     missionEnduranceName: 'Endurance Mode',
     missionInterceptName: 'Intercept Mission',
     missionLandingName: 'Landing Practice',
@@ -202,26 +238,26 @@ const S = ({
     missionCasName: 'Close Air Support',
     missionEasySub: 'F-15J / Atsugi / 2 wingmen, enemy Lv 3',
     missionHardSub: 'F/A-18 / Hawaii / solo, enemy Lv 5',
-    missionInterceptSub: 'F-15J / Atsugi / stop the incoming bomber raid',
-    missionLandingEasySub: 'Level 1: Straight-In, wind calm / F/A-18, Aomori',
-    missionLandingIfrSub: 'Level 12: Low Visibility / F/A-18, Aomori',
-    missionRacingSub: 'F-15J / lap the valley course through the gates',
-    missionCasSub: 'F-15J / Tohoku / defend the friendly tank column',
-    missionsPageLink: '⚙️ Configure a mission (level, aircraft, map, raid composition)',
-    missionsPageTitle: 'Every mission with the native menu’s choices (landing practice: all 15 levels)',
-    retryLink: '↻ Retry Previous Flight',
+    missionInterceptSub: 'F-15J / Atsugi',
+    missionLandingEasySub: 'Straight-In, wind calm / F/A-18, Aomori',
+    missionLandingIfrSub: 'Low Visibility / F/A-18, Aomori',
+    missionRacingSub: 'F-15J / valley course',
+    missionCasSub: 'F-15J / Tohoku',
+    missionsPageLink: 'Missions (D)...',
+    missionsPageTitle: 'Landing practice, endurance, intercept, CAS, racing — every native mission with all its choices (defaults start in one click)',
+    retryLink: 'Retry Previous Flight (R)',
     retryTitle: 'Fly your previous flight again (same as the native Simulation menu)',
-    openYfsLink: '📂 Open a flight file (.yfs) and fly',
+    openYfsLink: 'Open a flight file (O)...',
     openYfsTitle: 'Load one of your own .yfs files (missions / saved flights) — the web File > Open',
     openYfsTooBig: 'That .yfs is too large (4MB max)',
     openYfsBad: 'Could not read that .yfs',
-    createFlightLink: '✈️ Create a flight (aircraft, enemies, time of day)',
+    createFlightLink: 'Create a flight (C)...',
     createFlightTitle: 'Compose aircraft / map / time / AI on a dedicated page, then take off (web Create Flight)',
-    settingsLink: '⚙️ Settings (shadows, clouds, HUD…)',
+    settingsLink: 'Settings (S)...',
     settingsTitle: 'Look & display options (web Option menu)',
-    demoLink: '🎬 Auto demo (watch AI demo flights)',
+    demoLink: 'Auto demo (A)',
     demoTitle: 'Loop the AI demo flights (use browser Back to leave)',
-    controlsLink: '🕹️ Controller setup (pad / stick bindings)',
+    controlsLink: 'Controller (J)...',
     controlsTitle: 'Gamepad axis & button assignment and dead zones (web key-assignment menu)',
     urlAdd: 'Add from URL',
     urlPlaceholder: 'URL of a pack .zip',
@@ -231,15 +267,15 @@ const S = ({
     urlFail404: (s) => 'Could not fetch the URL (' + s + '). Check the link is correct',
     dropZone: 'Drop one or more packs (.zip) / click to choose',
     dropHint: 'The zip should have folders like aircraft/ scenery/ ground/ at its top level',
-    wbLink: '🛠 Workbench — build aircraft & maps',
+    wbLink: 'Workbench (W)...',
     wbLinkTitle: 'A dedicated page to assemble aircraft, make a .dat, and draw islands (available in-game on next load)',
     looseHint: (names) => '— ' + names.join(', ') + ' : assemble loose aircraft files in the Workbench (🛠)',
-    flyBtn: '🛫',
+    flyBtn: 'Fly',
     flyTitle: 'Test-fly — take off with this aircraft right away (reloads the page)',
     flyPick: 'Pick an aircraft:',
-    flyNoIdent: 'This aircraft can’t be launched by name (no ASCII IDENTIFY in its .dat). Press Play and pick it from the menu',
+    flyNoIdent: 'This aircraft can’t be launched by name (no ASCII IDENTIFY in its .dat). Open the native full menu and pick it there',
     diagWarn: (n, samples) => '⚠ ' + n + ' file(s) referenced by the pack’s lists are missing (those entries won’t fly)' + (samples.length ? ' e.g. ' + samples.slice(0, 3).join(', ') : ''),
-    postPlayHint: 'After Play, open Simulation → Create Flight in the engine menu to fly your installed aircraft & maps',
+    postPlayHint: 'In the native full menu, open Simulation → Create Flight to fly your installed aircraft & maps',
     errMap: {
       noList: 'No YSFLIGHT list found (aircraft/air*.lst, etc.). Make sure the zip has folders like aircraft/ or scenery/ at its top level',
       tooBig: 'The pack is too large (exceeds the size limit)',
@@ -253,9 +289,9 @@ const S = ({
       'no-redist': 'No redistribution',
       'ask-author': 'Ask the author',
     },
-    playBtn: '▶ Play',
-    playHint: 'Choose your own aircraft & maps, or host multiplayer — this opens the engine menu',
-    vrPlayBtn: '🥽 Play in VR',
+    playBtn: 'Open the native full menu (M)',
+    playHint: 'The original menu UI, unchanged since 2002 — everything lives here. In VR this screen is the control surface',
+    vrPlayBtn: 'Fly in VR (V)',
     vrPlayHint: 'Menus and flying without taking the headset off (WebXR, experimental)',
     flyAgain: '↻ Fly again',
     joinFailTitle: '⚠ Couldn’t obtain required packs',
@@ -284,7 +320,7 @@ let listEl = null;
 // Collapsible add-on section: Quick Flight + Play stay above it; this is collapsed by
 // default and auto-expanded once the visitor turns out to have installed packs (see
 // renderList).  Most visitors fly a Quick Flight or hit Play and never open it.
-let packToggleEl = null, packBodyEl = null, packCount = 0, packAutoExpanded = false;
+let packToggleEl = null, packBodyEl = null, packBodySyncEl = null, packCount = 0, packAutoExpanded = false;
 function updatePackToggleLabel() {
   if (!packToggleEl) return;
   const open = packBodyEl && packBodyEl.style.display !== 'none';
@@ -448,6 +484,7 @@ function renderList(packs) {
   if (packToggleEl) {
     if (!packAutoExpanded && packs.length > 0) {
       packBodyEl.style.display = 'block';
+      if (packBodySyncEl) packBodySyncEl();
       packToggleEl.setAttribute('aria-expanded', 'true');
       packAutoExpanded = true;
     }
@@ -458,7 +495,7 @@ function renderList(packs) {
   if (packs.length === 0) {
     const empty = document.createElement('div');
     empty.textContent = S.emptyList;
-    empty.style.cssText = 'color:#7d93b0;font-size:13px;padding:6px 0';
+    empty.style.cssText = 'color:#555;font-size:13px;padding:6px 0';
     listEl.appendChild(empty);
   } else {
     for (const p of packs) {
@@ -466,16 +503,16 @@ function renderList(packs) {
       const row = document.createElement('div');
       row.style.cssText =
         'display:flex;justify-content:space-between;align-items:center;gap:10px;' +
-        'padding:7px 10px;border:1px solid #2a3647;border-radius:6px;margin-bottom:6px;background:#0d141d;' +
+        'padding:7px 10px;border:1px solid #ACA899;border-radius:2px;margin-bottom:6px;background:#fff;' +
         (enabled ? '' : 'opacity:.5');
       const left = document.createElement('div');
       left.style.cssText = 'min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
       const nm = document.createElement('span');
       nm.textContent = p.name || p.id;
-      nm.style.cssText = 'color:#e6edf3;font-size:14px';
+      nm.style.cssText = 'color:#000;font-size:13px';
       const cat = document.createElement('span');
       cat.textContent = '  ' + (p.categories || []).join('/') + ' · ' + fmtBytes(p.bytes || 0);
-      cat.style.cssText = 'color:#8fa3bb;font-size:12px';
+      cat.style.cssText = 'color:#555;font-size:12px';
       left.appendChild(nm);
       left.appendChild(cat);
       // Attribution badge (async fill; appending to a row replaced by a
@@ -484,7 +521,7 @@ function renderList(packs) {
         if (!a) return;
         const at = document.createElement('span');
         at.textContent = '  ' + [a.author && ('© ' + a.author), S.attribPolicy[a.policy]].filter(Boolean).join(' · ');
-        at.style.cssText = 'color:#7d93b0;font-size:11px';
+        at.style.cssText = 'color:#777;font-size:11px';
         left.appendChild(at);
       });
 
@@ -499,9 +536,7 @@ function renderList(packs) {
         fly = document.createElement('button');
         fly.textContent = S.flyBtn;
         fly.title = S.flyTitle;
-        fly.style.cssText =
-          'font-size:12px;padding:4px 8px;border-radius:5px;cursor:pointer;border:1px solid ' +
-          ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT;
+        fly.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:3px;cursor:pointer;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000';
         fly.addEventListener('click', async () => {
           const existing = row.nextSibling && row.nextSibling.dataset && row.nextSibling.dataset.flyPicker === p.id
             ? row.nextSibling : null;
@@ -519,16 +554,16 @@ function renderList(packs) {
               picker.dataset.flyPicker = p.id;
               picker.style.cssText =
                 'display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding:6px 10px;margin:-2px 0 6px;' +
-                'border:1px dashed #2a3647;border-radius:6px;max-height:8em;overflow-y:auto';
+                'border:1px dashed #ACA899;border-radius:2px;max-height:8em;overflow-y:auto';
               const lab = document.createElement('span');
               lab.textContent = S.flyPick;
-              lab.style.cssText = 'color:#7d93b0;font-size:11px;flex:none';
+              lab.style.cssText = 'color:#555;font-size:11px;flex:none';
               picker.appendChild(lab);
               for (const idn of ids) {
                 const b = document.createElement('button');
                 b.textContent = idn;
                 b.style.cssText =
-                  'font-size:11px;padding:3px 8px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#cfe0f5';
+                  'font-size:11px;padding:3px 8px;border-radius:3px;cursor:pointer;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000';
                 b.addEventListener('click', () => flyFreeflight(idn));
                 picker.appendChild(b);
               }
@@ -544,10 +579,10 @@ function renderList(packs) {
       toggle.textContent = enabled ? S.enabled : S.disabled;
       toggle.title = enabled ? S.disableTitle : S.enableTitle;
       toggle.style.cssText =
-        'font-size:12px;padding:4px 9px;border-radius:5px;cursor:pointer;border:1px solid ' +
+        'font-size:12px;padding:4px 9px;border-radius:3px;cursor:pointer;border:1px solid ' +
         (enabled
-          ? ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT
-          : '#2a3647;background:#0d141d;color:#8fa3bb');
+          ? '#003C74;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;font-weight:700'
+          : '#ACA899;background:#ECE9D8;color:#777');
       const setErr = (e) => {
         const s = document.getElementById('ysfw-pack-status');
         if (s) s.textContent = S.errorPrefix + (e && e.message ? e.message : e);
@@ -568,7 +603,7 @@ function renderList(packs) {
       upd.textContent = S.updateBtn;
       upd.title = S.updateTitle;
       upd.style.cssText =
-        'font-size:12px;padding:4px 8px;border-radius:5px;border:1px solid #2a3647;background:#0d141d;color:#8fa3bb;cursor:pointer';
+        'font-size:12px;padding:4px 8px;border-radius:3px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;cursor:pointer';
       upd.addEventListener('click', () => {
         const inp = document.createElement('input');
         inp.type = 'file';
@@ -599,7 +634,7 @@ function renderList(packs) {
       del.textContent = '🗑';
       del.title = S.uninstallTitle;
       del.style.cssText =
-        'font-size:12px;padding:4px 8px;border-radius:5px;border:1px solid #2a3647;background:#0d141d;color:#c75d6a;cursor:pointer';
+        'font-size:12px;padding:4px 8px;border-radius:3px;border:1px solid #9C6A66;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#C33B1E;cursor:pointer';
       del.addEventListener('click', async () => {
         if (!self.confirm(S.confirmDelete(p.name || p.id))) return;
         del.disabled = true;
@@ -1001,68 +1036,37 @@ function renderPanel() {
 
   const panel = document.createElement('div');
   panel.id = 'ysfw-pack-panel';
-  panel.style.cssText =
-    'margin-top:22px;width:min(460px,86vw);background:#0b121b;border:1px solid #1d2633;' +
-    'border-radius:10px;padding:16px 16px 14px;text-align:left;box-shadow:0 8px 30px rgba(0,0,0,.4)';
+  panel.className = 'xp-panel';
+  panel.style.cssText = 'width:100%;text-align:left';
+  const sbReady = document.getElementById('ysfw-sb-ready');
+  if (sbReady) sbReady.textContent = S.sbReady;
 
-  // Quick Flight: one-click presets that deep-link into ?freeflight=AIRCRAFT,FIELD,
-  // STARTPOS.  Every triple is VERIFIED to ship in the base bundle (so it works
-  // offline on first load) and to reference a real .stp start position.  The most
-  // prominent thing in the panel -- a new player flies immediately, no install.
-  const quickWrap = document.createElement('div');
-  quickWrap.style.cssText = 'margin-bottom:14px';
-  const qTitle = document.createElement('div');
-  qTitle.textContent = S.quickTitle;
-  qTitle.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:2px';
-  quickWrap.appendChild(qTitle);
-  const qHint = document.createElement('div');
-  qHint.textContent = S.quickHint;
-  qHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:8px';
-  quickWrap.appendChild(qHint);
-  // On touch devices, surface the taster value (on-screen stick after takeoff) ON the
-  // top page, not only once already in flight.  Inline the coarse-pointer test (no
-  // named const) so it never collides with other coarse checks in renderPanel.
-  if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
-      navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
-    const touchHint = document.createElement('div');
-    touchHint.textContent = S.touchHint;
-    touchHint.style.cssText = 'color:#8fa3bb;font-size:11px;margin-bottom:8px';
-    quickWrap.appendChild(touchHint);
-  }
+  // ---- 今すぐ飛ぶ (group box) -----------------------------------------------
+  // One-click presets that deep-link into ?freeflight=AIRCRAFT,FIELD,STARTPOS.
+  // Every triple is VERIFIED to ship in the base bundle (so it works offline on
+  // first load) and to reference a real .stp start position.
+  const quickWrap = document.createElement('fieldset');
+  const qLegend = document.createElement('legend');
+  qLegend.textContent = S.quickTitle;
+  quickWrap.appendChild(qLegend);
   const qGrid = document.createElement('div');
-  qGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
-  // tag is a difficulty hint (localized via the S table) so a newcomer can pick the
-  // easy one; the Cessna is flagged `recommended` and gets the accent treatment so it
-  // visibly out-weighs the (demoted) join button and the harder jets.
+  qGrid.className = 'xp-tiles';
   const PRESETS = [
     { name: 'Cessna 172', sub: 'Small Map', ff: 'CESSNA_172R,SMALL_MAP,RW36_01', tag: S.tagBeginner, recommended: true },
-    { name: 'F/A-18 Hornet', sub: '厚木 / Atsugi', ff: 'F-18C_HORNET,ATSUGI_AIRBASE,RW01_01', tag: S.tagIntermediate },
-    { name: 'F-15J Eagle', sub: 'Hawaii ✈ 空中', ff: 'F-15J_EAGLE,HAWAII,NORTH10000_01', tag: S.tagIntermediate },
+    { name: 'F/A-18 Hornet', sub: S.presetAtsugi, ff: 'F-18C_HORNET,ATSUGI_AIRBASE,RW01_01', tag: '' },
+    { name: 'F-15J Eagle', sub: S.presetHawaii, ff: 'F-15J_EAGLE,HAWAII,NORTH10000_01', tag: '' },
     { name: 'Boeing 747', sub: 'Heathrow', ff: 'B747,HEATHROW,RW27R', tag: S.tagAirliner },
   ];
   const curLang = new URLSearchParams(location.search).get('lang');
   for (const p of PRESETS) {
     const card = document.createElement('button');
-    // Accent ONLY the recommended (beginner) card so it visibly leads; the harder
-    // presets keep the quiet #243244 border (accenting all four would dilute the
-    // hierarchy against the accent Play/URL buttons).
-    card.style.cssText = 'text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid ' +
-      (p.recommended ? ACCENT + ';background:rgba(77,163,255,.08)' : '#243244;background:#0d141d');
-    const nm = document.createElement('div');
-    nm.textContent = '▶ ' + p.name;
-    nm.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600';
-    const sub = document.createElement('div');
-    sub.textContent = p.sub;
-    sub.style.cssText = 'color:#8fa3bb;font-size:11px;margin-top:1px';
+    card.className = 'xp-btn tile' + (p.recommended ? ' default' : '');
+    const nm = document.createElement('b');
+    nm.textContent = p.name;
+    const sub = document.createElement('span');
+    sub.textContent = p.sub + (p.tag ? ' ／ ' + p.tag : '');
     card.appendChild(nm);
     card.appendChild(sub);
-    if (p.tag) {
-      const tag = document.createElement('div');
-      tag.textContent = p.tag;
-      tag.style.cssText = 'margin-top:5px;font-size:10px;' +
-        (p.recommended ? 'color:' + ACCENT + ';font-weight:700' : 'color:#7d93b0');
-      card.appendChild(tag);
-    }
     card.addEventListener('click', () => {
       location.assign(location.origin + location.pathname + '?freeflight=' + p.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
     });
@@ -1077,15 +1081,9 @@ function renderPanel() {
   const lastPreset = lastFlight ? PRESETS.find((p) => p.ff === lastFlight) : null;
   if (lastPreset) {
     const again = document.createElement('button');
-    again.style.cssText = 'display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:8px;border:1px solid ' + ACCENT + ';border-radius:8px;background:rgba(77,163,255,.12);cursor:pointer';
-    const an = document.createElement('div');
-    an.textContent = S.flyAgain + ' ' + lastPreset.name;
-    an.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:700';
-    const as = document.createElement('div');
-    as.textContent = lastPreset.sub;
-    as.style.cssText = 'color:#9db4d0;font-size:11px;margin-top:1px';
-    again.appendChild(an);
-    again.appendChild(as);
+    again.className = 'xp-btn';
+    again.style.cssText = 'display:block;width:100%;text-align:left;margin-bottom:8px';
+    again.textContent = S.flyAgain + ' ' + lastPreset.name + ' ── ' + lastPreset.sub;
     again.addEventListener('click', () => {
       location.assign(location.origin + location.pathname + '?freeflight=' + lastPreset.ff + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
     });
@@ -1093,83 +1091,52 @@ function renderPanel() {
   }
   quickWrap.appendChild(qGrid);
 
-  // ---- Missions: the engine's endurance mode via ?endurance= deep links -------
-  // Same card idiom as Quick Flight; a separate section so the "just fly" and
-  // "fight" entries don't blur.  Bundled aircraft/fields only (same rule as
-  // PRESETS: a deep link must never point into an uninstalled add-on).
-  const mTitle = document.createElement('div');
-  mTitle.textContent = S.missionTitle;
-  mTitle.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin:14px 0 2px';
-  quickWrap.appendChild(mTitle);
-  const mHint = document.createElement('div');
-  mHint.textContent = S.missionHint;
-  mHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-bottom:8px';
-  quickWrap.appendChild(mHint);
-  const mGrid = document.createElement('div');
-  mGrid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
-  // Card headline = the MISSION NAME in native menu vocabulary (veterans
-  // navigate by mission, not by aircraft — increment 14); aircraft and
-  // conditions live in the sub line.  Native Simulation-menu order.
-  const MISSIONS = [
-    { icon: '🛬 ', name: S.missionLandingName, sub: S.missionLandingEasySub, link: '?landing=1', tag: S.tagBeginner },
-    { icon: '🛬 ', name: S.missionLandingName, sub: S.missionLandingIfrSub, link: '?landing=12', tag: S.tagAdvanced },
-    { name: S.missionEnduranceName, sub: S.missionEasySub, link: '?endurance=F-15J_EAGLE,ATSUGI_AIRBASE,2,3,1', tag: S.tagIntermediate },
-    { name: S.missionEnduranceName, sub: S.missionHardSub, link: '?endurance=F-18C_HORNET,HAWAII,0,5,1', tag: S.tagAdvanced },
-    { name: S.missionInterceptName, sub: S.missionInterceptSub, link: '?intercept=F-15J_EAGLE,ATSUGI_AIRBASE', tag: S.tagIntermediate },
-    { icon: '🛡️ ', name: S.missionCasName, sub: S.missionCasSub, link: '?mission=cas', tag: S.tagIntermediate },
-    { icon: '🏁 ', name: S.missionRacingName, sub: S.missionRacingSub, link: '?mission=racing', tag: S.tagIntermediate },
-  ];
-  for (const m of MISSIONS) {
-    const card = document.createElement('button');
-    card.style.cssText = 'text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid #243244;background:#0d141d';
-    const nm = document.createElement('div');
-    nm.textContent = (m.icon || '🎯 ') + m.name;
-    nm.style.cssText = 'color:#e6edf3;font-size:13px;font-weight:600';
-    const sub = document.createElement('div');
-    sub.textContent = m.sub;
-    sub.style.cssText = 'color:#8fa3bb;font-size:11px;margin-top:1px';
-    card.appendChild(nm);
-    card.appendChild(sub);
-    const tag = document.createElement('div');
-    tag.textContent = m.tag;
-    tag.style.cssText = 'margin-top:5px;font-size:10px;color:#7d93b0';
-    card.appendChild(tag);
-    card.addEventListener('click', () => {
-      location.assign(location.origin + location.pathname + m.link + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
-    });
-    mGrid.appendChild(card);
-  }
-  quickWrap.appendChild(mGrid);
-
-  // Full-granularity mission setup: the cards above are quick presets; this
-  // page offers every mission with the NATIVE dialog's choices (landing
-  // practice all 15 levels, endurance wingmen/level/AAM, intercept raid
-  // composition, CAS/racing aircraft+field) — increment 14.
-  const missionsPage = document.createElement('a');
-  missionsPage.textContent = S.missionsPageLink;
-  missionsPage.title = S.missionsPageTitle;
-  missionsPage.href = 'studio-missions.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
-  missionsPage.style.cssText = 'display:block;margin-top:8px;padding:9px 11px;border:1px dashed #345;border-radius:8px;color:' + ACCENT + ';font-size:13px;text-decoration:none;text-align:center';
-  quickWrap.appendChild(missionsPage);
-
-  // Retry Previous Flight + open a .yfs — the native Sim > Retry and
-  // File > Open, as quiet one-line entries under the mission grid
-  // (increment 14).  Retry boots -flyyfs on the engine-saved prevflight.dat;
-  // with no previous flight the -autoexit path just returns here.  Open reads
-  // a user .yfs into sessionStorage and boots ?openyfs=1 (index.html preRun
-  // writes it for -flyyfs) — a bad file also falls back to the shell.
-  const retryRow = document.createElement('div');
-  retryRow.style.cssText = 'display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:8px';
+  // Create Flight + Retry as era-idiom buttons; the "..." suffix means "opens
+  // another page", the (letter) is a cosmetic access-key quotation.
+  const quickRow = document.createElement('div');
+  quickRow.className = 'xp-rowline';
+  const createLink = document.createElement('a');
+  createLink.className = 'xp-btn';
+  createLink.textContent = S.createFlightLink;
+  createLink.title = S.createFlightTitle;
+  createLink.href = 'studio-flight.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
+  quickRow.appendChild(createLink);
+  // Retry Previous Flight — the native Sim > Retry.  Boots -flyyfs on the
+  // engine-saved prevflight.dat; with no previous flight the -autoexit path
+  // just returns here.
   const retryLink = document.createElement('a');
+  retryLink.className = 'xp-btn';
   retryLink.textContent = S.retryLink;
   retryLink.title = S.retryTitle;
   retryLink.href = '?retry=1' + (curLang ? '&lang=' + encodeURIComponent(curLang) : '');
-  retryLink.style.cssText = 'color:#8fa3bb;font-size:12px;text-decoration:none;padding:5px 8px';
-  retryRow.appendChild(retryLink);
+  quickRow.appendChild(retryLink);
+  const qHint = document.createElement('span');
+  qHint.className = 'xp-note';
+  const coarseHint = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
+    navigator.maxTouchPoints > 0 || ('ontouchstart' in window);
+  qHint.textContent = coarseHint ? S.touchHint : S.quickHint;
+  quickRow.appendChild(qHint);
+  quickWrap.appendChild(quickRow);
+  panel.appendChild(quickWrap);
+
+  // ---- ミッション: 選択は専用ページで ----------------------------------------
+  // 2026-07-30: the top page stays light — the mission list (native names,
+  // all levels, raid composition) lives on studio-missions.html, where every
+  // entry starts with defaults in one click.  Same era idiom as the rest
+  // ('...' = opens another page).
+  const missionsPage = document.createElement('a');
+  missionsPage.className = 'xp-btn';
+  missionsPage.textContent = S.missionsPageLink;
+  missionsPage.title = S.missionsPageTitle;
+  missionsPage.href = 'studio-missions.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
+  quickRow.insertBefore(missionsPage, createLink);
+  // Open a .yfs — the native File > Open.  Reads a user .yfs into sessionStorage
+  // and boots ?openyfs=1 (index.html preRun writes it for -flyyfs) — a bad file
+  // falls back to the shell.
   const openYfs = document.createElement('label');
+  openYfs.className = 'xp-btn';
   openYfs.textContent = S.openYfsLink;
   openYfs.title = S.openYfsTitle;
-  openYfs.style.cssText = 'color:#8fa3bb;font-size:12px;cursor:pointer;padding:5px 8px';
   const yfsInput = document.createElement('input');
   yfsInput.type = 'file';
   yfsInput.accept = '.yfs';
@@ -1190,94 +1157,110 @@ function renderPanel() {
     } catch (e) { alert(S.openYfsBad); }
   });
   openYfs.appendChild(yfsInput);
-  retryRow.appendChild(openYfs);
-  quickWrap.appendChild(retryRow);
+  quickRow.insertBefore(openYfs, qHint);
 
-  // Create Flight: author a custom flight (aircraft/map/time/AI) on a dedicated
-  // page, then take off — the web-shell replacement for Sim > Create Flight.
-  const createLink = document.createElement('a');
-  createLink.textContent = S.createFlightLink;
-  createLink.title = S.createFlightTitle;
-  createLink.href = 'studio-flight.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
-  createLink.style.cssText = 'display:block;margin-top:12px;padding:9px 11px;border:1px dashed #345;border-radius:8px;color:' + ACCENT + ';font-size:13px;text-decoration:none;text-align:center';
-  quickWrap.appendChild(createLink);
-
-  // Settings: the web replacement for the engine's Option menu.
+  // ---- ツール (group box) ----------------------------------------------------
+  // Settings / Controller / Auto-demo / Workbench / Add-ons as one plain button
+  // row.  The add-on toggle keeps its id + collapse behavior (its body becomes
+  // the 追加パック group box below); the workbench link is appended here by the
+  // pack-section code that creates it.
+  const toolsWrap = document.createElement('fieldset');
+  const tLegend = document.createElement('legend');
+  tLegend.textContent = S.toolsTitle;
+  toolsWrap.appendChild(tLegend);
+  const toolsRow = document.createElement('div');
+  toolsRow.className = 'xp-rowline';
   const settingsLink = document.createElement('a');
+  settingsLink.className = 'xp-btn';
   settingsLink.textContent = S.settingsLink;
   settingsLink.title = S.settingsTitle;
   settingsLink.href = 'studio-settings.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
-  settingsLink.style.cssText = 'display:block;margin-top:8px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
-  quickWrap.appendChild(settingsLink);
-
-  // Controller setup: the web replacement for the engine's key-assignment
-  // menu (gamepad axes/buttons + dead zones; keyboard passes through).
+  toolsRow.appendChild(settingsLink);
   const controlsLink = document.createElement('a');
+  controlsLink.className = 'xp-btn';
   controlsLink.textContent = S.controlsLink;
   controlsLink.title = S.controlsTitle;
   controlsLink.href = 'studio-controls.html' + (curLang ? '?lang=' + encodeURIComponent(curLang) : '');
-  controlsLink.style.cssText = 'display:block;margin-top:2px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
-  quickWrap.appendChild(controlsLink);
-
-  // Auto demo: the engine's kiosk demo loop (?demo=1 -> -demoforever).  A quiet
-  // link — it is a "watch" mode that never returns on its own (leave via
-  // browser back), so it must not compete with the flying entries.
+  toolsRow.appendChild(controlsLink);
+  // Auto demo: the engine's kiosk demo loop (?demo=1 -> -demoforever).  A
+  // "watch" mode that never returns on its own (leave via browser back).
   const demoLink = document.createElement('a');
+  demoLink.className = 'xp-btn';
   demoLink.textContent = S.demoLink;
   demoLink.title = S.demoTitle;
   demoLink.href = '?demo=1' + (curLang ? '&lang=' + encodeURIComponent(curLang) : '');
-  demoLink.style.cssText = 'display:block;margin-top:2px;padding:7px 11px;color:#8fa3bb;font-size:12px;text-decoration:none;text-align:center';
-  quickWrap.appendChild(demoLink);
+  toolsRow.appendChild(demoLink);
+  toolsWrap.appendChild(toolsRow);
+  panel.appendChild(toolsWrap);
 
-  panel.appendChild(quickWrap);
+  // ---- ネットワーク対戦 (group box) ------------------------------------------
+  // The host/join forms are created by index.html (they exist before this panel
+  // renders on a manual launch); adopt them into the slot so the network entries
+  // live under one group box.  On flows where they don't exist the box just
+  // holds the note.
+  const netWrap = document.createElement('fieldset');
+  const nLegend = document.createElement('legend');
+  nLegend.textContent = S.netTitle;
+  netWrap.appendChild(nLegend);
+  const netSlot = document.createElement('div');
+  netSlot.id = 'ysfw-net-slot';
+  netSlot.className = 'xp-rowline';
+  netWrap.appendChild(netSlot);
+  const hostForm = document.getElementById('ysfw-host-form');
+  const manualJoin = document.getElementById('ysfw-manual-join');
+  if (hostForm) netSlot.appendChild(hostForm);
+  if (manualJoin) netSlot.appendChild(manualJoin);
+  const netNote = document.createElement('span');
+  netNote.className = 'xp-note';
+  netNote.textContent = S.netNote;
+  netSlot.appendChild(netNote);
+  panel.appendChild(netWrap);
 
-  // ▶ Play (primary CTA) sits directly under Quick Flight — ABOVE the add-on
-  // management — so it isn't buried at the bottom under a panel most visitors never
-  // touch.  Order: Quick Flight -> Play -> (collapsible) add-on management.
+  // ---- 本家メニュー第一級動線 ------------------------------------------------
+  // The DEFAULT button (the era's own "primary action" idiom) opens the native
+  // full menu: the original 2002 UI, everything unported, and the permanent
+  // in-VR control surface.  #ysfw-pack-play + click->start stay (smoke-vrmenu
+  // boots through this button).
+  const nativeRow = document.createElement('div');
+  nativeRow.className = 'xp-rowline';
+  nativeRow.style.cssText = 'padding:2px 0;margin-bottom:12px';
   const playBtn = document.createElement('button');
   playBtn.id = 'ysfw-pack-play';
+  playBtn.className = 'xp-btn default';
   playBtn.textContent = S.playBtn;
-  playBtn.style.cssText =
-    'margin-top:14px;width:100%;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';' +
-    'color:#04101f;font-size:15px;font-weight:700;cursor:pointer';
   playBtn.addEventListener('click', start);
-  panel.appendChild(playBtn);
-  // Disambiguate the two "start" affordances: the Quick Flight cards above take off
-  // instantly on a fixed preset, whereas Play opens the engine menu — the route to
-  // pick your own aircraft/maps or host multiplayer.  One quiet line under the button.
-  const playHint = document.createElement('div');
-  playHint.textContent = S.playHint;
-  playHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
-  panel.appendChild(playHint);
-
-  // "Play in VR": shown only once immersive-vr support is CONFIRMED (async
-  // probe below), so flat-screen visitors never see a dead button.  It boots
-  // the exact same way as Play plus a window.__ysfwVrAutostart flag —
-  // index.html's VR block picks that up once the engine reports XR support
-  // and calls vr.enter() (or shows a one-tap overlay when the click's user
-  // activation didn't survive the wasm boot).
+  nativeRow.appendChild(playBtn);
+  // "Play in VR": shown only once immersive-vr support is CONFIRMED (async probe
+  // below), so flat-screen visitors never see a dead button.  It boots the exact
+  // same way as Play plus a window.__ysfwVrAutostart flag — index.html's VR
+  // block picks that up once the engine reports XR support and calls vr.enter()
+  // (or shows a one-tap overlay when the click's user activation didn't survive
+  // the wasm boot).
   const vrPlayBtn = document.createElement('button');
   vrPlayBtn.id = 'ysfw-pack-play-vr';
+  vrPlayBtn.className = 'xp-btn';
+  vrPlayBtn.style.display = 'none';
   vrPlayBtn.textContent = S.vrPlayBtn;
-  vrPlayBtn.style.cssText =
-    'display:none;margin-top:8px;width:100%;padding:10px;border:1px solid ' + ACCENT + ';border-radius:8px;' +
-    'background:rgba(77,163,255,.10);color:#cfe0f5;font-size:14px;font-weight:700;cursor:pointer';
   vrPlayBtn.addEventListener('click', () => {
     window.__ysfwVrAutostart = true;
     start();
   });
-  panel.appendChild(vrPlayBtn);
-  const vrPlayHint = document.createElement('div');
-  vrPlayHint.textContent = S.vrPlayHint;
-  vrPlayHint.style.cssText = 'display:none;color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
-  panel.appendChild(vrPlayHint);
+  nativeRow.appendChild(vrPlayBtn);
+  const playHint = document.createElement('span');
+  playHint.className = 'xp-note';
+  playHint.style.cssText = 'flex:1;min-width:200px';
+  playHint.textContent = S.playHint;
+  nativeRow.appendChild(playHint);
+  panel.appendChild(nativeRow);
+  // 2026-07-30: the first-class lane and network play LEAD the panel — a
+  // veteran lands on the familiar door (and the friends lobby) first; the
+  // quick presets for newcomers sit right below, still above the fold.
+  panel.insertBefore(nativeRow, quickWrap);
+  panel.insertBefore(netWrap, quickWrap);
   try {
     if (navigator.xr && navigator.xr.isSessionSupported) {
       navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
-        if (ok) {
-          vrPlayBtn.style.display = '';
-          vrPlayHint.style.display = '';
-        }
+        if (ok) { vrPlayBtn.style.display = ''; }
       }).catch(() => {});
     }
   } catch (e) {}
@@ -1285,36 +1268,42 @@ function renderPanel() {
   // Add-on management, COLLAPSED by default (auto-expanded once the visitor has
   // installed packs; see renderList).  Opening it is a deliberate "I want to add or
   // manage add-ons" act — the label invites exactly that when empty.
-  const packSection = document.createElement('div');
-  packSection.style.cssText = 'margin-top:16px;border-top:1px solid #1d2633;padding-top:12px';
+  const packSection = document.createElement('fieldset');
+  packSection.style.display = 'none';
+  const packLegend = document.createElement('legend');
+  packLegend.textContent = S.panelTitle;
+  packSection.appendChild(packLegend);
+  // The toggle lives in the ツール row (kept id + aria state); its body is the
+  // 追加パック group box, whose visibility follows the body's.
   const packToggle = document.createElement('button');
   packToggle.id = 'ysfw-pack-toggle';
+  packToggle.className = 'xp-btn';
   packToggle.setAttribute('aria-expanded', 'false');
-  packToggle.style.cssText =
-    'width:100%;text-align:left;background:none;border:0;color:#cfe0f5;font-size:13px;' +
-    'font-weight:600;letter-spacing:.02em;cursor:pointer;padding:2px 0';
   const packBody = document.createElement('div');
   packBody.id = 'ysfw-pack-body';
-  packBody.style.cssText = 'display:none;margin-top:10px';
+  packBody.style.cssText = 'display:none;margin-top:2px';
+  const syncPackSection = () => { packSection.style.display = packBody.style.display === 'none' ? 'none' : ''; };
   packToggle.addEventListener('click', () => {
     const willOpen = packBody.style.display === 'none';
     packBody.style.display = willOpen ? 'block' : 'none';
+    syncPackSection();
     packToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
     packAutoExpanded = true; // user took control; a later refresh won't re-toggle
     updatePackToggleLabel();
   });
   packToggleEl = packToggle;
   packBodyEl = packBody;
-  packSection.appendChild(packToggle);
+  packBodySyncEl = syncPackSection;
+  toolsRow.appendChild(packToggle);
   packSection.appendChild(packBody);
-  panel.appendChild(packSection);
+  panel.appendChild(packSection); // after ツール, whose row holds its toggle
   updatePackToggleLabel();
 
   // Where do installed packs show up?  The biggest modder drop-off is not knowing
   // the aircraft/maps appear under the engine's Simulation -> Create Flight.
   const postPlay = document.createElement('div');
   postPlay.textContent = S.postPlayHint;
-  postPlay.style.cssText = 'color:#7d93b0;font-size:11px;margin:0 0 10px;line-height:1.5';
+  postPlay.style.cssText = 'color:#555;font-size:11px;margin:0 0 10px;line-height:1.5';
   packBody.appendChild(postPlay);
 
   // Bulk actions (hidden until packs exist).  A first release doesn't push add-ons,
@@ -1341,9 +1330,7 @@ function renderPanel() {
   };
   bulkToggleBtn = document.createElement('button');
   bulkToggleBtn.textContent = S.disableAllBtn;
-  bulkToggleBtn.style.cssText =
-    'font-size:12px;padding:5px 11px;border-radius:5px;cursor:pointer;border:1px solid ' +
-    ACCENT + ';background:rgba(77,163,255,.12);color:' + ACCENT;
+  bulkToggleBtn.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:3px;cursor:pointer;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000';
   bulkToggleBtn.addEventListener('click', () => {
     const enableAll = bulkToggleBtn.dataset.enableAll === '1';
     runBulk(() => window.ysfwPacks.setEnabledAll(enableAll),
@@ -1353,7 +1340,7 @@ function renderPanel() {
   bulkDeleteBtn.textContent = S.deleteAllBtn;
   bulkDeleteBtn.title = S.deleteAllTitle;
   bulkDeleteBtn.style.cssText =
-    'font-size:12px;padding:5px 11px;border-radius:5px;cursor:pointer;border:1px solid #2a3647;background:#0d141d;color:#c75d6a';
+    'font-size:12px;padding:5px 11px;border-radius:3px;cursor:pointer;border:1px solid #9C6A66;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#C33B1E';
   bulkDeleteBtn.addEventListener('click', () => {
     if (!self.confirm(S.confirmDeleteAll(packCount))) return;
     runBulk(() => window.ysfwPacks.uninstallAll(), (r) => S.bulkRemoved(r.removed));
@@ -1373,8 +1360,8 @@ function renderPanel() {
   // Drop zone + file picker.
   const drop = document.createElement('label');
   drop.style.cssText =
-    'display:block;margin-top:8px;padding:14px;border:1px dashed #2a3647;border-radius:8px;' +
-    'color:#8fa3bb;font-size:13px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s';
+    'display:block;margin-top:8px;padding:14px;border:1px dashed #7F9DB9;border-radius:2px;background:#fff;' +
+    'color:#555;font-size:13px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s';
   drop.textContent = S.dropZone;
   const input = document.createElement('input');
   input.type = 'file';
@@ -1393,7 +1380,7 @@ function renderPanel() {
   ['dragleave', 'drop'].forEach((ev) =>
     drop.addEventListener(ev, (e) => {
       e.preventDefault();
-      drop.style.borderColor = '#2a3647';
+      drop.style.borderColor = '#7F9DB9';
       drop.style.background = 'transparent';
     }),
   );
@@ -1403,7 +1390,7 @@ function renderPanel() {
   packBody.appendChild(drop);
   const dropHintEl = document.createElement('div');
   dropHintEl.textContent = S.dropHint;
-  dropHintEl.style.cssText = 'color:#7d93b0;font-size:10.5px;margin-top:4px;text-align:center';
+  dropHintEl.style.cssText = 'color:#777;font-size:10.5px;margin-top:4px;text-align:center';
   packBody.appendChild(dropHintEl);
 
   // Creation lives on its own page: the workbench (assemble aircraft, make a
@@ -1414,10 +1401,8 @@ function renderPanel() {
   wbLink.href = 'workbench.html' + (LANG === 'ja' ? '' : '?lang=' + LANG);
   wbLink.textContent = S.wbLink;
   wbLink.title = S.wbLinkTitle;
-  wbLink.style.cssText =
-    'display:block;margin-top:8px;padding:9px 12px;border:1px solid #2a3647;border-radius:6px;' +
-    'color:#8fa3bb;font-size:12.5px;text-decoration:none;text-align:center';
-  packBody.appendChild(wbLink);
+  wbLink.className = 'xp-btn';
+  toolsRow.appendChild(wbLink);
 
   // Install from a URL: the browser fetches the .zip directly (pure-pipe / no
   // hosting).  On a CORS / dead-link failure, fall back to "download & drop".  The
@@ -1427,11 +1412,11 @@ function renderPanel() {
   const urlIn = document.createElement('input');
   urlIn.type = 'url';
   urlIn.placeholder = S.urlPlaceholder;
-  urlIn.style.cssText = 'flex:1;min-width:0;padding:8px 10px;border:1px solid #2a3647;border-radius:6px;background:#0d141d;color:#e6edf3;font-size:12px';
+  urlIn.style.cssText = 'flex:1;min-width:0;padding:7px 9px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:12px';
   const urlBtn = document.createElement('button');
   urlBtn.textContent = S.urlBtn;
   urlBtn.title = S.urlAdd;
-  urlBtn.style.cssText = 'flex:none;padding:8px 14px;border:1px solid ' + ACCENT + ';border-radius:6px;background:rgba(77,163,255,.12);color:' + ACCENT + ';font-size:12px;cursor:pointer';
+  urlBtn.style.cssText = 'flex:none;padding:7px 14px;border:1px solid #003C74;border-radius:3px;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;font-size:12px;cursor:pointer';
   const doUrl = async () => {
     const url = urlIn.value.trim();
     if (!url) return;
@@ -1470,22 +1455,18 @@ function renderPanel() {
 
   const status = document.createElement('div');
   status.id = 'ysfw-pack-status';
-  status.style.cssText = 'color:#8fa3bb;font-size:12px;min-height:1.2em;margin-top:8px;white-space:pre-line;max-height:7.5em;overflow:auto';
+  status.style.cssText = 'color:#555;font-size:12px;min-height:1.2em;margin-top:8px;white-space:pre-line;max-height:7.5em;overflow:auto';
   packBody.appendChild(status);
 
   storageEl = document.createElement('div');
-  storageEl.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:4px';
+  storageEl.style.cssText = 'color:#777;font-size:11px;margin-top:4px';
   packBody.appendChild(storageEl);
 
-  // On touch devices, put the Quick Flight panel ABOVE the Room-ID join form so the
-  // primary action is the first thing a thumb reaches (the join form renders earlier,
-  // synchronously, from index.html).  Fine-pointer PCs keep DOM order (the panel sits
-  // below the form there, which is fine with the keyboard/legend available).
-  const coarse = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
-    navigator.maxTouchPoints > 0 || ('ontouchstart' in window);
-  const joinForm = document.getElementById('ysfw-manual-join');
-  if (coarse && joinForm) overlay.insertBefore(panel, joinForm);
-  else overlay.appendChild(panel);
+  // The panel renders inside the XP window body; the host/join forms were
+  // already adopted into the ネットワーク対戦 group box above, so no per-device
+  // reordering is needed any more.
+  const winBody = document.getElementById('ysfw-win-body');
+  (winBody || overlay).appendChild(panel);
   refresh();
 }
 
@@ -1522,17 +1503,17 @@ function showJoinFailure(failed, handlers) {
   const panel = document.createElement('div');
   panel.id = 'ysfw-join-failure';
   panel.style.cssText =
-    'margin-top:22px;width:min(460px,86vw);background:#1a1010;border:1px solid #5a2a2a;' +
-    'border-radius:10px;padding:16px 16px 14px;text-align:left;box-shadow:0 8px 30px rgba(0,0,0,.4)';
+    'margin-top:22px;width:min(460px,86vw);background:#FDF3F0;border:1px solid #C99A8E;' +
+    'border-radius:4px;padding:16px 16px 14px;text-align:left;box-shadow:0 6px 22px rgba(0,20,60,.35)';
 
   const title = document.createElement('div');
   title.textContent = S.joinFailTitle;
-  title.style.cssText = 'color:#f0c0c0;font-size:14px;font-weight:600;letter-spacing:.03em;margin-bottom:8px';
+  title.style.cssText = 'color:#A33A26;font-size:14px;font-weight:700;letter-spacing:.03em;margin-bottom:8px';
   panel.appendChild(title);
 
   const names = (failed || []).map((f) => f && (f.name || f.id)).filter(Boolean);
   const desc = document.createElement('div');
-  desc.style.cssText = 'color:#cbb;font-size:12px;line-height:1.6;margin-bottom:12px';
+  desc.style.cssText = 'color:#644;font-size:12px;line-height:1.6;margin-bottom:12px';
   desc.textContent = S.joinFailDesc(names);
   panel.appendChild(desc);
 
@@ -1559,7 +1540,7 @@ function showJoinFailure(failed, handlers) {
   }
   if (reasonLines.length) {
     const why = document.createElement('div');
-    why.style.cssText = 'color:#d8b9b9;font-size:12px;line-height:1.6;margin-bottom:12px;white-space:pre-line';
+    why.style.cssText = 'color:#755;font-size:12px;line-height:1.6;margin-bottom:12px;white-space:pre-line';
     why.textContent = reasonLines.join('\n');
     panel.appendChild(why);
   }
@@ -1571,7 +1552,7 @@ function showJoinFailure(failed, handlers) {
   retryBtn.id = 'ysfw-join-retry';
   retryBtn.textContent = S.retryBtn;
   retryBtn.style.cssText =
-    'flex:1;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';color:#04101f;font-size:14px;font-weight:700;cursor:pointer';
+    'flex:1;padding:10px;border:1px solid #003C74;border-radius:3.5px;background:linear-gradient(180deg,#FFFFFF,#E5E1CE);color:#000;font-size:14px;font-weight:700;cursor:pointer';
   retryBtn.addEventListener('click', () => {
     retryBtn.disabled = true; soloBtn.disabled = true;
     panel.remove();
@@ -1582,7 +1563,7 @@ function showJoinFailure(failed, handlers) {
   soloBtn.id = 'ysfw-join-solo';
   soloBtn.textContent = S.soloBtn;
   soloBtn.style.cssText =
-    'flex:1;padding:11px;border:1px solid #2a3647;border-radius:8px;background:#0d141d;color:#cfd8e3;font-size:14px;cursor:pointer';
+    'flex:1;padding:10px;border:1px solid #003C74;border-radius:3.5px;background:linear-gradient(180deg,#FFFFFF,#E5E1CE);color:#000;font-size:14px;cursor:pointer';
   soloBtn.addEventListener('click', () => {
     retryBtn.disabled = true; soloBtn.disabled = true;
     panel.remove();

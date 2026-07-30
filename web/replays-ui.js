@@ -15,14 +15,15 @@
 const USER_DIR = '/home/web_user/Documents/YSFLIGHT.COM/YSFLIGHT';
 const REPLAYS_DIR = USER_DIR + '/replays';
 const LAST_REPLAY = USER_DIR + '/ysfw-lastreplay.yfs';
-const ACCENT = '#4da3ff';
+const ACCENT = '#0046D5';
 
 const LANG = ((typeof window !== 'undefined' && window.ysfwLang) || 'en').indexOf('ja') === 0 ? 'ja' : 'en';
 const S = ({
   ja: {
-    title: '🎞 飛行履歴 / リプレイ',
-    hint: '直前の飛行を自動で記録。クリックで再生、🔗 で共有リンクをコピー',
-    play: '▶ リプレイ',
+    title: '飛行履歴 ／ リプレイ',
+    hint: '直前の飛行を自動で記録。クリックで再生、「共有」でリンクをコピー',
+    play: 'リプレイ:',
+    shareBtn: '共有',
     shareTitle: '共有リンクをコピー',
     shareCopied: '✓ リンクをコピーしました',
     delTitle: '削除',
@@ -30,9 +31,10 @@ const S = ({
     at: ' @ ',
   },
   en: {
-    title: '🎞 Flight log / Replays',
-    hint: 'Your last flights are recorded automatically. Click to replay, 🔗 to copy a share link.',
-    play: '▶ Replay',
+    title: 'Flight log / Replays',
+    hint: 'Your last flights are recorded automatically. Click to replay; Share copies a link.',
+    play: 'Replay:',
+    shareBtn: 'Share',
     shareTitle: 'Copy share link',
     shareCopied: '✓ Share link copied',
     delTitle: 'Delete',
@@ -162,16 +164,16 @@ function renderPanel() {
   const panel = document.createElement('div');
   panel.id = 'ysfw-replays-panel';
   panel.style.cssText =
-    'margin-top:22px;width:min(460px,86vw);background:#0b121b;border:1px solid #1d2633;' +
-    'border-radius:10px;padding:16px 16px 14px;text-align:left;box-shadow:0 8px 30px rgba(0,0,0,.4)';
+    'margin-top:0;margin-bottom:12px;width:100%;background:#F2F1E5;border:1px solid #D0D0BF;' +
+    'border-radius:5px;padding:10px 10px 12px;text-align:left;box-sizing:border-box';
 
   const title = document.createElement('div');
   title.textContent = S.title;
-  title.style.cssText = 'color:#e6edf3;font-size:14px;font-weight:600;letter-spacing:.04em;margin-bottom:2px';
+  title.style.cssText = 'color:#0046D5;font-size:13px;margin-bottom:2px';
   panel.appendChild(title);
   const hint = document.createElement('div');
   hint.textContent = S.hint;
-  hint.style.cssText = 'color:#5d7290;font-size:11px;margin-bottom:10px';
+  hint.style.cssText = 'color:#555;font-size:11px;margin-bottom:10px';
   panel.appendChild(hint);
 
   const listWrap = document.createElement('div');
@@ -180,7 +182,7 @@ function renderPanel() {
     const row = document.createElement('div');
     row.style.cssText =
       'display:flex;justify-content:space-between;align-items:center;gap:8px;' +
-      'padding:7px 10px;border:1px solid #2a3647;border-radius:6px;margin-bottom:6px;background:#0d141d';
+      'padding:7px 10px;border:1px solid #ACA899;border-radius:2px;margin-bottom:6px;background:#fff';
     const left = document.createElement('button');
     left.style.cssText = 'flex:1;min-width:0;text-align:left;background:none;border:0;cursor:pointer;padding:0';
     const nm = document.createElement('div');
@@ -188,7 +190,7 @@ function renderPanel() {
     nm.style.cssText = 'color:' + ACCENT + ';font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     const sub = document.createElement('div');
     sub.textContent = prettyWhen(it.when) + (it.size ? '  ·  ' + fmtBytes(it.size) : '');
-    sub.style.cssText = 'color:#8fa3bb;font-size:11px;margin-top:1px';
+    sub.style.cssText = 'color:#555;font-size:11px;margin-top:1px';
     left.appendChild(nm); left.appendChild(sub);
     left.addEventListener('click', () => {
       location.assign(location.origin + location.pathname + '?replay=' + encodeURIComponent(it.file) + (curLang ? '&lang=' + encodeURIComponent(curLang) : ''));
@@ -197,9 +199,9 @@ function renderPanel() {
     const ctl = document.createElement('div');
     ctl.style.cssText = 'flex:none;display:flex;gap:6px;align-items:center';
     const share = document.createElement('button');
-    share.textContent = '🔗';
+    share.textContent = S.shareBtn;
     share.title = S.shareTitle;
-    share.style.cssText = 'font-size:12px;padding:4px 8px;border-radius:5px;border:1px solid #2a3647;background:#0d141d;color:#cfd8e3;cursor:pointer';
+    share.style.cssText = 'font-size:12px;padding:4px 10px;border-radius:3px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;cursor:pointer';
     share.addEventListener('click', () => {
       const url = location.origin + '/?replay=' + encodeURIComponent(it.file);
       const done = () => { const o = share.textContent; share.textContent = '✓'; const s = document.getElementById('ysfw-replays-status'); if (s) { s.textContent = S.shareCopied; } setTimeout(() => { share.textContent = o; }, 1500); };
@@ -209,7 +211,7 @@ function renderPanel() {
     const del = document.createElement('button');
     del.textContent = '🗑';
     del.title = S.delTitle;
-    del.style.cssText = 'font-size:12px;padding:4px 8px;border-radius:5px;border:1px solid #2a3647;background:#0d141d;color:#c75d6a;cursor:pointer';
+    del.style.cssText = 'font-size:12px;padding:4px 8px;border-radius:3px;border:1px solid #9C6A66;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#C33B1E;cursor:pointer';
     del.addEventListener('click', async () => {
       if (!self.confirm(S.confirmDel((it.air || 'flight') + (it.field ? S.at + it.field : '')))) return;
       del.disabled = true;
@@ -223,13 +225,14 @@ function renderPanel() {
   panel.appendChild(listWrap);
   const status = document.createElement('div');
   status.id = 'ysfw-replays-status';
-  status.style.cssText = 'color:#5d7290;font-size:11px;min-height:1em;margin-top:4px';
+  status.style.cssText = 'color:#555;font-size:11px;min-height:1em;margin-top:4px';
   panel.appendChild(status);
 
-  // Append after the pack panel if present, else at the end of the overlay.
+  // Append after the pack panel if present, else at the end of the window body.
   const packPanel = document.getElementById('ysfw-pack-panel');
-  if (packPanel && packPanel.parentNode === overlay) overlay.insertBefore(panel, packPanel.nextSibling);
-  else overlay.appendChild(panel);
+  const host = document.getElementById('ysfw-win-body') || overlay;
+  if (packPanel && packPanel.parentNode === host) host.insertBefore(panel, packPanel.nextSibling);
+  else host.appendChild(panel);
 }
 
 // Capture any pending recording, then (on a manual top-page launch) show the history.

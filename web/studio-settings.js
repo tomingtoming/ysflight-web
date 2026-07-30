@@ -2,7 +2,7 @@
 // direction, docs/web-shell.md).  Edits a curated set of flight.cfg options and
 // stores them in localStorage; index.html merges them into the engine's
 // flight.cfg on every boot (web/settings.js mergeFlightCfg).  Engine-less.
-import { ACCENT, LANG, pageUrl } from './studio-shared.js';
+import { ACCENT, LANG, pageUrl, xpWindow } from './studio-shared.js';
 
 // settings.js is a classic script (globalThis.ysfwSettings), loaded first by
 // studio-settings.html.
@@ -11,7 +11,7 @@ const STORE_KEY = 'ysfwSettings';
 
 const S = ({
   ja: {
-    title: '⚙️ 設定',
+    title: '設定',
     sub: '見た目と表示の設定。変更は自動保存され、次の飛行から反映されます。',
     back: '← 戻る', reset: '既定に戻す',
     DRWSHADOW: '影を描画', DRAWCLOUD: '雲を描画', HRIZNGRAD: '地平線グラデーション',
@@ -33,7 +33,7 @@ const S = ({
     saved: '保存しました',
   },
   en: {
-    title: '⚙️ Settings',
+    title: 'Settings',
     sub: 'Look & display options. Changes save automatically and apply from your next flight.',
     back: '← Back', reset: 'Reset to defaults',
     DRWSHADOW: 'Draw shadows', DRAWCLOUD: 'Draw clouds', HRIZNGRAD: 'Horizon gradation',
@@ -72,16 +72,7 @@ const el = (tag, css, text) => {
 };
 
 function render(root) {
-  document.body.style.cssText = 'margin:0;background:#0b1119;color:#e6edf3;font-family:system-ui,sans-serif';
-  const wrap = el('div', 'max-width:560px;margin:0 auto;padding:20px 16px 48px');
-  root.appendChild(wrap);
-
-  const back = el('a', 'color:' + ACCENT + ';font-size:13px;text-decoration:none', S.back);
-  back.href = pageUrl('index.html');
-  wrap.appendChild(back);
-
-  wrap.appendChild(el('h1', 'font-size:22px;margin:10px 0 2px', S.title));
-  wrap.appendChild(el('div', 'color:#8fa3bb;font-size:13px;margin-bottom:18px', S.sub));
+  const wrap = xpWindow(root, S.title, S.sub);
 
   const values = load();
   const savedTag = el('div', 'color:#6ee7a8;font-size:12px;min-height:16px;margin-bottom:8px');
@@ -94,7 +85,7 @@ function render(root) {
 
   const list = el('div', 'display:flex;flex-direction:column;gap:2px');
   wrap.appendChild(list);
-  const rowCss = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid #243244;border-radius:8px;background:#0d141d';
+  const rowCss = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border:1px solid #ACA899;border-radius:2px;background:#fff';
   // Section headers, keyed by the first MANAGED key of each section.
   const HEADS = { DRWSHADOW: S.secDisplay, GBLACKOUT: S.secGameplay };
   // Rebuildable so Reset can redraw every control from the defaults.
@@ -102,7 +93,7 @@ function render(root) {
     list.textContent = '';
     for (const m of MANAGED) {
       if (HEADS[m.key]) {
-        list.appendChild(el('div', 'color:#8fa3bb;font-size:11px;margin:10px 0 4px', HEADS[m.key]));
+        list.appendChild(el('div', 'color:#555;font-size:11px;margin:10px 0 4px', HEADS[m.key]));
       }
       if (m.type === 'bool') {
         const row = el('label', rowCss + ';cursor:pointer');
@@ -117,11 +108,11 @@ function render(root) {
         const row = el('label', rowCss + ';cursor:pointer');
         row.appendChild(el('span', 'font-size:14px;white-space:nowrap', S[m.key] || m.key));
         const box = el('div', 'display:flex;align-items:center;gap:10px;flex:1;justify-content:flex-end');
-        const out = el('span', 'font-size:13px;color:#8fa3bb;min-width:56px;text-align:right', S.km(values[m.key]));
+        const out = el('span', 'font-size:13px;color:#555;min-width:56px;text-align:right', S.km(values[m.key]));
         const sl = el('input'); sl.type = 'range'; sl.id = 'ysfw-set-' + m.key;
         sl.min = String(m.min); sl.max = String(m.max); sl.step = '100';
         sl.value = String(values[m.key]);
-        sl.style.cssText = 'flex:1;max-width:220px;accent-color:' + ACCENT;
+        sl.style.cssText = 'flex:1;max-width:220px;accent-color:#316AC5';
         sl.addEventListener('input', () => {
           out.textContent = S.km(Number(sl.value));
           set(m.key, Number(sl.value));
@@ -133,7 +124,7 @@ function render(root) {
         const row = el('label', rowCss);
         row.appendChild(el('span', 'font-size:14px', S[m.key] || m.key));
         const sel = el('select'); sel.id = 'ysfw-set-' + m.key;
-        sel.style.cssText = 'font-size:13px;padding:6px 8px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;cursor:pointer';
+        sel.style.cssText = 'font-size:13px;padding:6px 8px;border-radius:6px;border:1px solid #7F9DB9;background:#fff;color:#000;cursor:pointer';
         const labels = (S.choice || {})[m.key] || {};
         for (const v of m.values) {
           const o = el('option', null, labels[v] || v);
@@ -148,7 +139,7 @@ function render(root) {
         const row = el('label', rowCss);
         row.appendChild(el('span', 'font-size:14px', S[m.key] || m.key));
         const sel = el('select'); sel.id = 'ysfw-set-' + m.key;
-        sel.style.cssText = 'font-size:13px;padding:6px 8px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;cursor:pointer';
+        sel.style.cssText = 'font-size:13px;padding:6px 8px;border-radius:6px;border:1px solid #7F9DB9;background:#fff;color:#000;cursor:pointer';
         const labels = S[m.key + '_OPTS'] || [];
         for (let i = 0; i < m.count; i++) {
           const o = el('option', null, labels[i] || String(i));
@@ -166,7 +157,7 @@ function render(root) {
   wrap.appendChild(el('div', 'height:8px'));
   wrap.appendChild(savedTag);
 
-  const reset = el('button', 'padding:8px 12px;border:1px solid #243244;border-radius:8px;background:transparent;color:#8fa3bb;cursor:pointer;font-size:13px', S.reset);
+  const reset = el('button', 'padding:8px 12px;border:1px solid #003C74;border-radius:3px;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;cursor:pointer;font-size:13px', S.reset);
   reset.addEventListener('click', () => {
     const def = normalize({});
     save(def);

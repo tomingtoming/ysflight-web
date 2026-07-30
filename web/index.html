@@ -50,24 +50,44 @@
     height: 100vh;
     outline: none;
   }
+  /* ==== XP (Luna) tone & manner ============================================
+     The shell dresses as a 2002-era desktop app (the era YSFLIGHT is from):
+     Luna-blue titlebar, dialog face #ECE9D8, groupbox captions #0046D5,
+     ListView selection #316AC5, XP-green progress, statusbar with a grip.
+     Era idioms quoted on purpose: "(letter)" access-key captions, a "..."
+     suffix meaning "opens another page", the DEFAULT (bold-ringed) button as
+     the primary action.  No emoji as icons — text buttons, like the era. */
   #overlay {
     position: fixed;
     inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    /* `safe` so that when the content (e.g. a tall pack panel) is taller than the
-       viewport it falls back to top-alignment and the overflow stays scrollable
-       instead of being clipped off the top of a centered flex container. */
+    /* `safe` so that when the content is taller than the viewport it falls back
+       to top-alignment and the overflow stays scrollable instead of being
+       clipped off the top of a centered flex container. */
     justify-content: safe center;
     overflow-y: auto;
-    padding: 16px 0;
+    padding: 22px 8px 30px;
     box-sizing: border-box;
-    background: #0a0e14;
-    color: #cfd8e3;
-    font-family: system-ui, sans-serif;
+    background: linear-gradient(180deg, #7FB2F0 0%, #4E86DD 45%, #2E64C8 100%);
+    color: #000;
+    font-family: Tahoma, 'MS UI Gothic', 'Yu Gothic UI', 'Hiragino Kaku Gothic ProN', system-ui, sans-serif;
+    font-size: 13px;
     transition: opacity 0.4s;
     z-index: 10;
+  }
+  /* Bliss nod: a green hill on the horizon.  Viewport-fixed so it stays put
+     while the overlay scrolls; painted before (= under) the window children. */
+  #overlay::before {
+    content: "";
+    position: fixed;
+    left: -20%;
+    right: -20%;
+    bottom: -14vh;
+    height: 36vh;
+    background: radial-gradient(ellipse at 50% 100%, #55B03C 0%, #3F9C35 45%, transparent 72%);
+    pointer-events: none;
   }
   #overlay.hidden {
     opacity: 0;
@@ -79,24 +99,92 @@
      sheen would run forever behind the live game. */
   #overlay.hidden #progress::after,
   #overlay.hidden #ysfw-skeleton .sk-card::after { animation: none; }
-  #overlay h1 {
-    font-weight: 600;
-    letter-spacing: 0.08em;
+
+  /* ---- the window ---- */
+  .xp-win {
+    width: min(760px, 100%);
+    flex: none;
+    border-radius: 8px 8px 4px 4px;
+    background: #ECE9D8;
+    box-shadow: 0 0 0 1px #0831D9, 4px 7px 22px rgba(0, 20, 60, 0.5);
+    overflow: hidden;
+    position: relative;
   }
+  .xp-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 6px 6px 10px;
+    background: linear-gradient(180deg, #2B76E5 0%, #215DCF 6%, #3D8FFF 42%, #245EDC 88%, #1B54B0 100%);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13.5px;
+    font-family: 'Trebuchet MS', Tahoma, sans-serif;
+    text-shadow: 1px 1px 1px rgba(10, 30, 90, 0.75);
+  }
+  .xp-titlebar svg { width: 17px; height: 17px; flex: none; }
+  .xp-titlebar .t { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .xp-cap {
+    width: 22px; height: 21px; flex: none; border-radius: 3px;
+    border: 1px solid rgba(255,255,255,.75);
+    font-size: 12px; line-height: 19px; text-align: center; color: #fff; font-family: Tahoma, monospace;
+    background: linear-gradient(180deg, #7BA5EC, #3E6FD3 45%, #2E5BC0);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.5);
+  }
+  .xp-cap.close { background: linear-gradient(180deg, #F0A088, #DD6547 40%, #C33B1E); }
+  .xp-body { padding: 12px 12px 8px; }
+  .xp-statusbar {
+    display: flex; gap: 3px; padding: 4px;
+    background: #ECE9D8; border-top: 1px solid #fff;
+    box-shadow: inset 0 1px 0 #D8D4C4; position: relative;
+  }
+  .xp-cell {
+    font-size: 11px; color: #444; padding: 3px 8px; white-space: nowrap;
+    border: 1px solid; border-color: #ACA899 #fff #fff #ACA899; border-radius: 1px;
+    overflow: hidden; text-overflow: ellipsis; min-height: 1.2em;
+  }
+  .xp-cell.grow { flex: 1; }
+  .xp-grip {
+    position: absolute; right: 3px; bottom: 3px; width: 13px; height: 13px;
+    background:
+      radial-gradient(circle at 10px 10px, #999 1.2px, transparent 1.6px),
+      radial-gradient(circle at 6px 10px, #999 1.2px, transparent 1.6px),
+      radial-gradient(circle at 10px 6px, #999 1.2px, transparent 1.6px),
+      radial-gradient(circle at 2px 10px, #999 1.2px, transparent 1.6px),
+      radial-gradient(circle at 6px 6px, #999 1.2px, transparent 1.6px),
+      radial-gradient(circle at 10px 2px, #999 1.2px, transparent 1.6px);
+  }
+
+  /* ---- download row (status + progress) ---- */
+  .xp-dl { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  #status { flex: none; font-size: 12px; color: #333; min-height: 1.2em; }
   #progress {
     position: relative;
-    width: min(420px, 80vw);
-    height: 8px;
-    background: #1d2633;
-    border-radius: 4px;
+    flex: 1;
+    height: 17px;
+    background: #fff;
+    border: 1px solid #686868;
+    border-radius: 3px;
+    box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.2);
+    padding: 2px;
     overflow: hidden;
-    margin-top: 16px;
+    box-sizing: border-box;
   }
   #progress > div {
     height: 100%;
     width: 0;
-    background: #4da3ff;
+    border-radius: 1px;
+    background: linear-gradient(180deg, #8DF13C 0%, #4FD62E 45%, #2FB821 100%);
     transition: width 0.2s;
+  }
+  /* XP block segmentation over the green fill */
+  #progress::before {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    background: repeating-linear-gradient(90deg, transparent 0 12px, #fff 12px 14px);
+    pointer-events: none;
+    z-index: 1;
   }
   /* Indeterminate sheen over the track so a slow link — or the post-download wasm
      compile phase, where the numeric width can't advance — never looks frozen. */
@@ -104,39 +192,38 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(100deg, transparent 20%, rgba(77,163,255,0.28) 50%, transparent 80%);
+    background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,0.6) 50%, transparent 80%);
     transform: translateX(-100%);
     animation: ysfw-shimmer 1.4s ease-in-out infinite;
   }
-  /* Loading skeleton: a non-interactive preview of the Quick Flight grid, painted
-     immediately during the (~25MB) .data download so the wait shows its destination
-     instead of a bare bar.  Removed by renderPanel() at manual launch, or hidden with
-     the overlay at boot (?join / ?freeflight). */
+  /* Loading skeleton: a non-interactive preview of the panel, painted immediately
+     during the (~25MB) .data download so the wait shows its destination instead of
+     a bare bar.  Removed by renderPanel() at manual launch, or hidden with the
+     overlay at boot (?join / ?freeflight). */
   #ysfw-skeleton {
-    margin-top: 22px;
-    width: min(460px, 86vw);
+    margin-top: 2px;
+    width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 0 16px;
+    gap: 8px;
     box-sizing: border-box;
   }
-  #ysfw-skeleton .sk-row { display: flex; gap: 10px; }
+  #ysfw-skeleton .sk-row { display: flex; gap: 8px; }
   #ysfw-skeleton .sk-card {
     flex: 1;
-    height: 38px;
-    border-radius: 8px;
-    background: #121a26;
-    border: 1px solid #1d2633;
+    height: 40px;
+    border-radius: 3px;
+    background: #F2F1E5;
+    border: 1px solid #D0D0BF;
     position: relative;
     overflow: hidden;
   }
-  #ysfw-skeleton .sk-hero { height: 52px; border-color: #2a3f5c; }
+  #ysfw-skeleton .sk-hero { height: 52px; border-color: #ACA899; }
   #ysfw-skeleton .sk-card::after {
     content: "";
     position: absolute;
     inset: 0;
-    background: linear-gradient(100deg, transparent 20%, rgba(77,163,255,0.10) 50%, transparent 80%);
+    background: linear-gradient(100deg, transparent 20%, rgba(49,106,197,0.10) 50%, transparent 80%);
     transform: translateX(-100%);
     animation: ysfw-shimmer 1.6s ease-in-out infinite;
   }
@@ -152,61 +239,149 @@
   @media (pointer: coarse) {
     #ysfw-br-stack > * { min-height: 44px; min-width: 44px; box-sizing: border-box; }
   }
-  #status {
-    margin-top: 12px;
-    font-size: 13px;
-    color: #8fa3bb;
-    min-height: 1.2em;
+
+  /* ---- widgets (used by index.html forms and packs-ui.js) ---- */
+  #overlay fieldset {
+    border: 1px solid #D0D0BF;
+    border-radius: 5px;
+    padding: 10px 10px 12px;
+    margin: 0 0 12px;
+    background: #F2F1E5;
+    min-width: 0;
   }
+  #overlay legend { padding: 0 6px; font-size: 13px; color: #0046D5; }
+  .xp-btn {
+    display: inline-block;
+    color: #000;
+    text-decoration: none;
+    text-align: center;
+    border: 1px solid #003C74;
+    border-radius: 3.5px;
+    background: linear-gradient(180deg, #FFFFFF 0%, #F4F2E7 55%, #E5E1CE 90%, #D8D0B8 100%);
+    box-shadow: inset 0 -2px 2px rgba(160, 140, 90, 0.22);
+    padding: 7px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    min-height: 32px;
+    box-sizing: border-box;
+  }
+  .xp-btn:hover { box-shadow: inset 0 0 0 2px rgba(248, 179, 53, 0.65), inset 0 -2px 2px rgba(160, 140, 90, 0.18); }
+  .xp-btn:active { background: linear-gradient(180deg, #E5E1CE, #F4F2E7); }
+  .xp-btn.default { box-shadow: inset 0 0 0 2px rgba(70, 120, 210, 0.55), inset 0 -2px 2px rgba(160, 140, 90, 0.18); font-weight: 700; }
+  .xp-btn.default:hover { box-shadow: inset 0 0 0 2px rgba(248, 179, 53, 0.65), inset 0 -2px 2px rgba(160, 140, 90, 0.18); }
+  .xp-btn.tile { text-align: left; padding: 8px 10px; }
+  .xp-btn.tile b { display: block; font-size: 13px; }
+  .xp-btn.tile span { display: block; font-size: 11px; color: #555; margin-top: 2px; font-weight: 400; }
+  .xp-tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+  .xp-rowline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .xp-note { font-size: 11px; color: #555; line-height: 1.5; }
+  .xp-list { background: #fff; border: 1px solid #ACA899; border-radius: 2px; margin-bottom: 8px; }
+  .xp-list .hd, .xp-list .row { display: grid; grid-template-columns: 1.1fr 1.4fr 0.55fr; gap: 8px; padding: 5px 8px; }
+  .xp-list .hd {
+    background: linear-gradient(180deg, #FFFFFF, #F0EEE1 70%, #E3E0CE);
+    border-bottom: 1px solid #ACA899;
+    font-size: 11px;
+    color: #333;
+  }
+  .xp-list .row {
+    font-size: 12.5px;
+    cursor: pointer;
+    border: 0;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    font-family: inherit;
+    color: #000;
+  }
+  .xp-list .row:hover { background: #F3F7FD; }
+  .xp-list .row.sel { background: #316AC5; color: #fff; }
+  .xp-list .c2 { color: #555; } .xp-list .sel .c2 { color: #d7e2f6; }
+  .xp-list .c3 { color: #777; font-size: 11px; } .xp-list .sel .c3 { color: #d7e2f6; }
+  .xp-desc {
+    background: #FFFFE1;
+    border: 1px solid #ACA899;
+    border-radius: 2px;
+    padding: 6px 8px;
+    font-size: 11.5px;
+    color: #333;
+    margin-bottom: 8px;
+    min-height: 30px;
+    box-sizing: border-box;
+  }
+  .xp-input {
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 1px solid #7F9DB9;
+    border-radius: 2px;
+    background: #fff;
+    color: #000;
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+  .xp-link {
+    background: none;
+    border: 0;
+    color: #0046D5;
+    font-size: 12.5px;
+    cursor: pointer;
+    padding: 4px;
+    text-decoration: underline;
+    font-family: inherit;
+  }
+  @media (max-width: 640px) {
+    .xp-tiles { grid-template-columns: 1fr 1fr; }
+    .xp-list .hd, .xp-list .row { grid-template-columns: 1fr 0.5fr; }
+    .xp-list .hd .c2, .xp-list .row .c2 { display: none; }
+  }
+
+  /* status/pitch text that predates the window frame: the titlebar carries the
+     tagline and the statusbar the load hint, so both stay in the DOM (they are
+     aria-live / referenced) but hidden. */
+  #pitch, #loadhint { display: none; }
   #note {
-    margin-top: 28px;
-    font-size: 12px;
-    color: #7d93b0;
-    max-width: 480px;
+    margin-top: 10px;
+    font-size: 10.5px;
+    color: #EAF2FF;
+    max-width: 640px;
     text-align: center;
     line-height: 1.6;
-  }
-  /* One-line value proposition under the loading bar — what this is + how to start.
-     Static DOM so it paints immediately during the (~25MB) .data download, before
-     any CTA renders.  Brighter than the attribution #note, dimmer than #status. */
-  #pitch {
-    margin-top: 14px;
-    font-size: 13.5px;
-    color: #9db4d0;
-    max-width: 460px;
-    text-align: center;
-    line-height: 1.65;
-    padding: 0 16px;
-  }
-  /* "Why am I waiting?" — first-load weight plus the payoff (instant + offline next
-     time).  Static DOM so it paints during the ~25MB .data download, dimmer than
-     #pitch and above the attribution #note. */
-  #loadhint {
-    margin-top: 8px;
-    font-size: 12px;
-    color: #7d93b0;
-    max-width: 460px;
-    text-align: center;
-    line-height: 1.5;
-    padding: 0 16px;
+    text-shadow: 0 1px 2px rgba(0, 20, 60, 0.55);
+    position: relative;
   }
 </style>
 </head>
 <body>
 <div id="overlay">
-  <h1>YSFLIGHT web</h1>
-  <div id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="loading"><div id="bar"></div></div>
-  <div id="status" role="status" aria-live="polite">loading...</div>
-  <div id="pitch"></div>
-  <div id="loadhint"></div>
-  <div id="ysfw-skeleton" aria-hidden="true">
-    <div class="sk-card sk-hero"></div>
-    <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
-    <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
+  <div class="xp-win">
+    <div class="xp-titlebar">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1l1.2 5.2L15 8l-5.8 1.8L8 15l-1.2-5.2L1 8l5.8-1.8z" fill="#fff"/></svg>
+      <span class="t"><span>YSFLIGHT web</span><span id="ysfw-tagline"></span></span>
+      <span class="xp-cap" aria-hidden="true">_</span><span class="xp-cap" aria-hidden="true">□</span><span class="xp-cap close" aria-hidden="true">×</span>
+    </div>
+    <div class="xp-body" id="ysfw-win-body">
+      <div class="xp-dl">
+        <div id="status" role="status" aria-live="polite">loading...</div>
+        <div id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="loading"><div id="bar"></div></div>
+      </div>
+      <div id="pitch"></div>
+      <div id="loadhint"></div>
+      <div id="ysfw-skeleton" aria-hidden="true">
+        <div class="sk-card sk-hero"></div>
+        <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
+        <div class="sk-row"><div class="sk-card"></div><div class="sk-card"></div></div>
+      </div>
+    </div>
+    <div class="xp-statusbar">
+      <span class="xp-cell grow" id="ysfw-sb-ready"></span>
+      <span class="xp-cell" id="ysfw-sb-hint"></span>
+      <span class="xp-cell" id="ysfw-sb-build"></span>
+      <span class="xp-grip" aria-hidden="true"></span>
+    </div>
   </div>
   <div id="note">
     YS FLIGHT SIMULATOR (c) Soji Yamakawa (CaptainYS) — an unofficial, fan-made WebAssembly port.<br>
-    <span id="note-src">元データ・ソースコード: </span><a href="https://github.com/captainys/YSFLIGHT" style="color:#4da3ff">captainys/YSFLIGHT</a>
+    <span id="note-src">元データ・ソースコード: </span><a href="https://github.com/captainys/YSFLIGHT" style="color:#fff;font-weight:700">captainys/YSFLIGHT</a>
   </div>
 </div>
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
@@ -234,6 +409,8 @@
       note: '元データ・ソースコード: ',
       pitch: 'あの YSFLIGHT が無料でブラウザに——飛行感覚は原典そのまま。手持ちのアドオンもソロで読み込めます。インストール不要、URL を開くだけ（スマホ対応）。',
       loadHint: '初回だけ約25MBを読み込みます（2回目以降は瞬時・オフラインでも起動）。',
+      tagline: ' ── あの YSFLIGHT がブラウザで、原典そのまま',
+      sbHint: '2回目以降は瞬時・オフライン起動可',
       chipCopyTitle: 'クリックで招待リンクをコピー',
       chipCopied: '✓ 招待リンクをコピーしました',
       connecting: '（接続中…）',
@@ -249,7 +426,7 @@
       badgeDirect: '🟢 マルチプレイOK',
       badgeDirectTitle: 'この回線は対戦に適しています（多くの相手と直接つながります）。クリックで再確認。',
       joinLabel: 'Room ID で参加',
-      joinToggle: '友達に招待された？ Room ID で参加',
+      joinToggle: 'Room ID で参加(I)...',
       joinNamePlaceholder: '名前（任意）',
       joinBtn: 'ルームに参加',
       errRoomEmpty: 'Room ID を入力してください',
@@ -293,10 +470,10 @@
       },
       touch: { fire: '発射', gear: 'ギア', thr: '推力', wsel: '武器切替', view: '視点', rudder: 'ラダー', flap: 'フラップ', radar: 'レーダー', ap: '自動操縦', nudge: 'お試し版 — PC / タブレットだと全機能で快適です' },
       host: {
-        toggle: '友達と対戦したい？（ホストを立てる）',
+        toggle: 'ホストを立てる(H)...',
         namePlaceholder: '名前（任意）',
         btn: 'ホスト開始',
-        hint: 'ホストが立つと画面右下に「Room: 番号 📋」が出ます。クリックで招待リンクをコピーし、友達に送って参加してもらいましょう。',
+        hint: 'ホストが立つと画面右下に「Room: 番号」が出ます。クリックで招待リンクをコピーし、友達に送って参加してもらいましょう。',
         note: '※ カスタム機体・マップで対戦するときは、参加者全員が同じアドオンを各自で事前に取り込んでください（v1では自動配信されません）。',
       },
     },
@@ -304,6 +481,8 @@
       note: 'Source & assets: ',
       pitch: 'The YSFLIGHT you know, free in your browser — same flight feel as the original. Load your own add-ons in solo. No install, just open the URL (touch-friendly).',
       loadHint: 'First load fetches about 25MB once — instant and offline-ready afterwards.',
+      tagline: ' ── the YSFLIGHT you know, in your browser',
+      sbHint: 'Instant & offline after first load',
       chipCopyTitle: 'Click to copy the invite link',
       chipCopied: '✓ Invite link copied',
       connecting: ' (connecting…)',
@@ -319,7 +498,7 @@
       badgeDirect: '🟢 Multiplayer OK',
       badgeDirectTitle: 'This network is good for multiplayer (direct connection to most peers). Click to re-check.',
       joinLabel: 'Join by Room ID',
-      joinToggle: 'Have an invite? Join by Room ID',
+      joinToggle: 'Join by Room ID (I)...',
       joinNamePlaceholder: 'Name (optional)',
       joinBtn: 'Join room',
       errRoomEmpty: 'Enter a Room ID',
@@ -363,10 +542,10 @@
       },
       touch: { fire: 'Fire', gear: 'Gear', thr: 'Thrust', wsel: 'Weapon', view: 'View', rudder: 'Rudder', flap: 'Flaps', radar: 'Radar', ap: 'A/P', nudge: 'Taster — best with all controls on PC / tablet' },
       host: {
-        toggle: 'Want to play with friends? (Host a room)',
+        toggle: 'Host a room (H)...',
         namePlaceholder: 'Name (optional)',
         btn: 'Start hosting',
-        hint: 'Once the room is up, a “Room: <id> 📋” chip appears bottom-right — click it to copy the invite link and send it to your friends.',
+        hint: 'Once the room is up, a “Room: <id>” chip appears bottom-right — click it to copy the invite link and send it to your friends.',
         note: '* For custom aircraft or maps, every player must import the same add-ons beforehand (v1 does not auto-distribute them).',
       },
     },
@@ -376,6 +555,9 @@
     var n = document.getElementById('note-src'); if (n) n.textContent = TXT.note;
     var p = document.getElementById('pitch'); if (p) p.textContent = TXT.pitch;
     var lh = document.getElementById('loadhint'); if (lh) lh.textContent = TXT.loadHint;
+    var tg = document.getElementById('ysfw-tagline'); if (tg) tg.textContent = TXT.tagline;
+    var sh = document.getElementById('ysfw-sb-hint'); if (sh) sh.textContent = TXT.sbHint;
+    var sb = document.getElementById('ysfw-sb-build'); if (sb) sb.textContent = 'build ' + (ASSET.build || 'dev');
   })();
 
   var Module = {
@@ -1804,11 +1986,11 @@
       if (document.getElementById('ysfw-manual-join')) return;
       var wrap = document.createElement('div');
       wrap.id = 'ysfw-manual-join';
-      wrap.style.cssText = 'margin-top:20px;display:flex;flex-direction:column;align-items:center;gap:8px';
+      wrap.style.cssText = 'display:contents';
       var label = document.createElement('div');
-      label.style.cssText = 'font-size:14px;color:#cfd8e3';
+      label.style.cssText = 'font-size:13px;color:#333';
       label.textContent = TXT.joinLabel;
-      var inputCss = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
+      var inputCss = 'font-size:14px;padding:7px 9px;border-radius:2px;border:1px solid #7F9DB9;background:#fff;color:#000;width:min(260px,70vw);text-align:center';
       var roomIn = document.createElement('input');
       roomIn.type = 'text';
       roomIn.inputMode = 'numeric';
@@ -1821,10 +2003,10 @@
       nameIn.placeholder = TXT.joinNamePlaceholder;
       nameIn.style.cssText = inputCss;
       var err = document.createElement('div');
-      err.style.cssText = 'font-size:12px;color:#c75d6a;min-height:1em';
+      err.style.cssText = 'font-size:12px;color:#C33B1E;min-height:1em';
       var btn = document.createElement('button');
       btn.textContent = TXT.joinBtn;
-      btn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
+      btn.style.cssText = 'font-size:13px;padding:8px 22px;border-radius:3.5px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF 0%,#F4F2E7 55%,#E5E1CE 90%,#D8D0B8 100%);color:#000;cursor:pointer;font-weight:700';
       var go = function () {
         var room = (roomIn.value || '').trim();
         if (!room) { err.textContent = TXT.errRoomEmpty; return; }
@@ -1846,7 +2028,7 @@
       // low-emphasis toggle reveals the (byte-for-byte identical) form on demand; the
       // ?join= invite path uses a SEPARATE form (below) and never reaches here.
       var stack = document.createElement('div');
-      stack.style.cssText = 'display:none;flex-direction:column;align-items:center;gap:8px';
+      stack.style.cssText = 'display:none;flex-direction:column;align-items:flex-start;gap:8px;order:9;flex-basis:100%;width:100%;background:#FFFFE1;border:1px solid #ACA899;border-radius:2px;padding:10px 12px;box-sizing:border-box';
       stack.appendChild(label);
       stack.appendChild(roomIn);
       stack.appendChild(nameIn);
@@ -1854,7 +2036,7 @@
       stack.appendChild(btn);
       var toggle = document.createElement('button');
       toggle.textContent = TXT.joinToggle;
-      toggle.style.cssText = 'background:none;border:0;color:#8fa3bb;font-size:13px;cursor:pointer;padding:4px;text-decoration:underline';
+      toggle.style.cssText = 'font-size:13px;padding:7px 14px;border-radius:3.5px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF 0%,#F4F2E7 55%,#E5E1CE 90%,#D8D0B8 100%);color:#000;cursor:pointer';
       toggle.addEventListener('click', function () {
         var open = stack.style.display !== 'none';
         stack.style.display = open ? 'none' : 'flex';
@@ -1877,17 +2059,17 @@
       var H = TXT.host;
       var wrap = document.createElement('div');
       wrap.id = 'ysfw-host-form';
-      wrap.style.cssText = 'margin-top:10px;display:flex;flex-direction:column;align-items:center;gap:8px';
+      wrap.style.cssText = 'display:contents';
       var card = document.createElement('div');
-      card.style.cssText = 'display:none;flex-direction:column;align-items:center;gap:8px;width:min(420px,86vw);background:#0b121b;border:1px solid #1d2633;border-radius:10px;padding:14px 16px;box-sizing:border-box';
+      card.style.cssText = 'display:none;flex-direction:column;align-items:flex-start;gap:8px;order:9;flex-basis:100%;width:100%;background:#FFFFE1;border:1px solid #ACA899;border-radius:2px;padding:10px 12px;box-sizing:border-box';
       var nameIn = document.createElement('input');
       nameIn.type = 'text';
       nameIn.maxLength = 200;
       nameIn.placeholder = H.namePlaceholder;
-      nameIn.style.cssText = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
+      nameIn.style.cssText = 'font-size:14px;padding:7px 9px;border-radius:2px;border:1px solid #7F9DB9;background:#fff;color:#000;width:min(260px,70vw);text-align:center';
       var btn = document.createElement('button');
       btn.textContent = H.btn;
-      btn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
+      btn.style.cssText = 'font-size:13px;padding:8px 22px;border-radius:3.5px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF 0%,#F4F2E7 55%,#E5E1CE 90%,#D8D0B8 100%);color:#000;cursor:pointer;font-weight:700';
       var go = function () {
         var name = (nameIn.value || '').trim() || ('Pilot' + Math.floor(1000 + Math.random() * 9000));
         location.href = location.origin + '/?host=1&name=' + encodeURIComponent(name);
@@ -1895,10 +2077,10 @@
       btn.addEventListener('click', go);
       nameIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
       var hintRow = document.createElement('div');
-      hintRow.style.cssText = 'color:#9fb2c8;font-size:12.5px;line-height:1.55;text-align:left';
+      hintRow.style.cssText = 'color:#333;font-size:12px;line-height:1.55;text-align:left';
       hintRow.textContent = H.hint;
       var noteRow = document.createElement('div');
-      noteRow.style.cssText = 'color:#7d93b0;font-size:11.5px;line-height:1.5;text-align:left';
+      noteRow.style.cssText = 'color:#555;font-size:11px;line-height:1.5;text-align:left';
       noteRow.textContent = H.note;
       card.appendChild(nameIn);
       card.appendChild(btn);
@@ -1906,7 +2088,7 @@
       card.appendChild(noteRow);
       var toggle = document.createElement('button');
       toggle.textContent = H.toggle;
-      toggle.style.cssText = 'background:none;border:0;color:#8fa3bb;font-size:13px;cursor:pointer;padding:4px;text-decoration:underline';
+      toggle.style.cssText = 'font-size:13px;padding:7px 14px;border-radius:3.5px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF 0%,#F4F2E7 55%,#E5E1CE 90%,#D8D0B8 100%);color:#000;cursor:pointer';
       toggle.addEventListener('click', function () {
         var open = card.style.display !== 'none';
         card.style.display = open ? 'none' : 'flex';
@@ -1925,16 +2107,16 @@
       var form = document.createElement('div');
       form.style.cssText = 'margin-top:18px;display:flex;flex-direction:column;align-items:center;gap:10px';
       var label = document.createElement('div');
-      label.style.cssText = 'font-size:14px;color:#cfd8e3';
+      label.style.cssText = 'font-size:13px;color:#333';
       label.textContent = TXT.inviteNameLabel(joinRoom);
       var input = document.createElement('input');
       input.type = 'text';
       input.maxLength = 200;
       input.placeholder = 'Pilot';
-      input.style.cssText = 'font-size:15px;padding:8px 10px;border-radius:6px;border:1px solid #2a3647;background:#0d141d;color:#e6edf3;width:min(260px,70vw);text-align:center';
+      input.style.cssText = 'font-size:14px;padding:7px 9px;border-radius:2px;border:1px solid #7F9DB9;background:#fff;color:#000;width:min(260px,70vw);text-align:center';
       var goBtn = document.createElement('button');
       goBtn.textContent = TXT.inviteJoinBtn;
-      goBtn.style.cssText = 'font-size:15px;padding:8px 22px;border-radius:6px;border:0;background:#4da3ff;color:#04101f;cursor:pointer;font-weight:600';
+      goBtn.style.cssText = 'font-size:13px;padding:8px 22px;border-radius:3.5px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF 0%,#F4F2E7 55%,#E5E1CE 90%,#D8D0B8 100%);color:#000;cursor:pointer;font-weight:700';
       var go = function () { form.remove(); statusEl.textContent = 'loading...'; startJoin(input.value); };
       goBtn.addEventListener('click', go);
       input.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });

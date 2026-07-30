@@ -6,7 +6,7 @@
 // to index.html?createflight=1.  index.html's preRun turns the spec into a
 // .yfs via web/yfs.js and boots it with -flyyfs.  Engine-less like the other
 // studio pages: it only needs the stock aircraft index for the id dropdown.
-import { ACCENT, LANG, pageUrl, stockIndex, stockFields } from './studio-shared.js';
+import { ACCENT, LANG, pageUrl, stockIndex, stockFields, xpWindow } from './studio-shared.js';
 
 // yfs.js is a classic script (globalThis.ysfwYfs), loaded by studio-flight.html
 // before this module — the same publish-on-global arrangement index.html uses.
@@ -14,26 +14,26 @@ const { buildYfs } = globalThis.ysfwYfs;
 
 const S = ({
   ja: {
-    title: '✈️ フライトを作る',
+    title: 'フライトを作る',
     sub: '機体・マップ・時間帯を選んで、そのまま離陸。追加した機体はAIとして飛びます。',
     field: 'マップ', time: '時間帯', day: '昼', night: '夜',
     weapons: '兵装', gun: '機関砲', aam: '空対空', agm: '空対地', bomb: '爆弾', rocket: 'ロケット',
     aircraft: '機体', addAi: '＋ 敵機/僚機を追加', player: 'あなた', side: '陣営',
     sideFriend: '味方', sideEnemyA: '敵A', sideEnemyB: '敵B', startPos: '開始位置',
-    remove: '削除', fly: '🛫 離陸', back: '← 戻る',
+    remove: '削除', fly: '離陸', back: '← 戻る',
     needPlayer: '「あなた」の機体を1機選んでください。',
     ground: '地上物', groundNone: 'なし',
     groundAaa: '対空砲陣地（AAA×3）', groundSam: 'SAM陣地（SAM×2＋AAA×1）',
     groundTargets: '練習ターゲット（×4）', groundAt: '配置場所',
   },
   en: {
-    title: '✈️ Create Flight',
+    title: 'Create Flight',
     sub: 'Pick an aircraft, map and time of day, then take off. Added aircraft fly as AI.',
     field: 'Map', time: 'Time', day: 'Day', night: 'Night',
     weapons: 'Weapons', gun: 'Gun', aam: 'AAM', agm: 'AGM', bomb: 'Bomb', rocket: 'Rocket',
     aircraft: 'Aircraft', addAi: '+ Add enemy / wingman', player: 'You', side: 'Side',
     sideFriend: 'Friendly', sideEnemyA: 'Enemy A', sideEnemyB: 'Enemy B', startPos: 'Start position',
-    remove: 'Remove', fly: '🛫 Take off', back: '← Back',
+    remove: 'Remove', fly: 'Take off', back: '← Back',
     needPlayer: 'Pick one aircraft for "You".',
     ground: 'Ground objects', groundNone: 'None',
     groundAaa: 'AAA site (AAA×3)', groundSam: 'SAM site (SAM×2 + AAA×1)',
@@ -82,7 +82,7 @@ let AIRCRAFT_IDS = [];
 let FIELD_STPS = {};  // { FIELD_ID: [{n,x,y,z,h}] } from stock/fields.json
 
 function aircraftSelect(value) {
-  const sel = el('select', 'padding:6px 8px;border-radius:6px;border:1px solid #243244;background:#0d141d;color:#e6edf3;font-size:13px;min-width:180px');
+  const sel = el('select', 'padding:6px 8px;border-radius:6px;border:1px solid #7F9DB9;background:#fff;color:#000;font-size:13px;min-width:180px');
   for (const id of AIRCRAFT_IDS) {
     const o = el('option', null, id);
     o.value = id;
@@ -93,32 +93,23 @@ function aircraftSelect(value) {
 }
 
 function render(root) {
-  document.body.style.cssText = 'margin:0;background:#0b1119;color:#e6edf3;font-family:system-ui,sans-serif';
-  const wrap = el('div', 'max-width:720px;margin:0 auto;padding:20px 16px 48px');
-  root.appendChild(wrap);
-
-  const back = el('a', 'color:' + ACCENT + ';font-size:13px;text-decoration:none', S.back);
-  back.href = pageUrl('index.html');
-  wrap.appendChild(back);
-
-  wrap.appendChild(el('h1', 'font-size:22px;margin:10px 0 2px', S.title));
-  wrap.appendChild(el('div', 'color:#8fa3bb;font-size:13px;margin-bottom:18px', S.sub));
+  const wrap = xpWindow(root, S.title, S.sub);
 
   // Field + time-of-day row.
   const opts = el('div', 'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px');
-  const fieldSel = el('select', 'padding:7px 9px;border-radius:6px;border:1px solid #243244;background:#0d141d;color:#e6edf3;font-size:13px;width:100%');
+  const fieldSel = el('select', 'padding:7px 9px;border-radius:6px;border:1px solid #7F9DB9;background:#fff;color:#000;font-size:13px;width:100%');
   for (const f of FIELDS) {
     const o = el('option', null, f.label); o.value = f.id; fieldSel.appendChild(o);
   }
-  const fieldBox = el('div'); fieldBox.appendChild(el('div', 'color:#8fa3bb;font-size:11px;margin-bottom:4px', S.field)); fieldBox.appendChild(fieldSel);
-  const timeSel = el('select', 'padding:7px 9px;border-radius:6px;border:1px solid #243244;background:#0d141d;color:#e6edf3;font-size:13px;width:100%');
+  const fieldBox = el('div'); fieldBox.appendChild(el('div', 'color:#555;font-size:11px;margin-bottom:4px', S.field)); fieldBox.appendChild(fieldSel);
+  const timeSel = el('select', 'padding:7px 9px;border-radius:6px;border:1px solid #7F9DB9;background:#fff;color:#000;font-size:13px;width:100%');
   for (const [v, t] of [['DAY', S.day], ['NIGHT', S.night]]) { const o = el('option', null, t); o.value = v; timeSel.appendChild(o); }
-  const timeBox = el('div'); timeBox.appendChild(el('div', 'color:#8fa3bb;font-size:11px;margin-bottom:4px', S.time)); timeBox.appendChild(timeSel);
+  const timeBox = el('div'); timeBox.appendChild(el('div', 'color:#555;font-size:11px;margin-bottom:4px', S.time)); timeBox.appendChild(timeSel);
   opts.appendChild(fieldBox); opts.appendChild(timeBox);
   wrap.appendChild(opts);
 
   // Weapon flags.
-  wrap.appendChild(el('div', 'color:#8fa3bb;font-size:11px;margin-bottom:6px', S.weapons));
+  wrap.appendChild(el('div', 'color:#555;font-size:11px;margin-bottom:6px', S.weapons));
   const wpnRow = el('div', 'display:flex;flex-wrap:wrap;gap:14px;margin-bottom:20px');
   const wpn = {};
   for (const [k, lbl] of [['gun', S.gun], ['aam', S.aam], ['agm', S.agm], ['bomb', S.bomb], ['rocket', S.rocket]]) {
@@ -130,7 +121,7 @@ function render(root) {
   wrap.appendChild(wpnRow);
 
   // Aircraft list: row 0 is always the player.
-  wrap.appendChild(el('div', 'color:#8fa3bb;font-size:11px;margin-bottom:6px', S.aircraft));
+  wrap.appendChild(el('div', 'color:#555;font-size:11px;margin-bottom:6px', S.aircraft));
   const list = el('div', 'display:flex;flex-direction:column;gap:8px;margin-bottom:12px');
   wrap.appendChild(list);
 
@@ -139,21 +130,21 @@ function render(root) {
 
   function makeRow(isPlayer) {
     const row = el('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 11px;border:1px solid ' +
-      (isPlayer ? ACCENT : '#243244') + ';border-radius:8px;background:' + (isPlayer ? 'rgba(77,163,255,.08)' : '#0d141d'));
+      (isPlayer ? '#003C74' : '#ACA899') + ';border-radius:2px;background:' + (isPlayer ? '#FFFFE1' : '#fff'));
     row.dataset.player = isPlayer ? '1' : '';
-    const tag = el('span', 'font-size:12px;font-weight:700;color:' + (isPlayer ? ACCENT : '#8fa3bb') + ';min-width:52px',
+    const tag = el('span', 'font-size:12px;font-weight:700;color:' + (isPlayer ? '#0046D5' : '#555') + ';min-width:52px',
       isPlayer ? S.player : S.side);
     row.appendChild(tag);
     const sel = aircraftSelect(isPlayer ? defaultId : defaultEnemy);
     row._aircraft = sel;
     row.appendChild(sel);
     if (!isPlayer) {
-      const sideSel = el('select', 'padding:6px 8px;border-radius:6px;border:1px solid #243244;background:#0b1119;color:#e6edf3;font-size:13px');
+      const sideSel = el('select', 'padding:6px 8px;border-radius:6px;border:1px solid #ACA899;background:#0b1119;color:#000;font-size:13px');
       for (const s of SIDES()) { const o = el('option', null, s.label); o.value = String(s.iff); sideSel.appendChild(o); }
       sideSel.value = '1';
       row._side = sideSel;
       row.appendChild(sideSel);
-      const rm = el('button', 'margin-left:auto;padding:5px 9px;border:1px solid #40222a;border-radius:6px;background:#1a0f13;color:#e78;cursor:pointer;font-size:12px', S.remove);
+      const rm = el('button', 'margin-left:auto;padding:5px 9px;border:1px solid #9C6A66;border-radius:3px;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#C33B1E;cursor:pointer;font-size:12px', S.remove);
       rm.addEventListener('click', () => row.remove());
       row.appendChild(rm);
     }
@@ -162,7 +153,7 @@ function render(root) {
 
   list.appendChild(makeRow(true));
 
-  const addBtn = el('button', 'padding:8px 12px;border:1px dashed #345;border-radius:8px;background:transparent;color:' + ACCENT + ';cursor:pointer;font-size:13px;margin-bottom:22px', S.addAi);
+  const addBtn = el('button', 'padding:8px 12px;border:1px dashed #7F9DB9;border-radius:2px;background:#fff;color:#0046D5;cursor:pointer;font-size:13px;margin-bottom:22px', S.addAi);
   addBtn.addEventListener('click', () => list.appendChild(makeRow(false)));
   wrap.appendChild(addBtn);
 
@@ -170,14 +161,14 @@ function render(root) {
   // selected field.  Hidden when stock/fields.json has no ground start for the
   // field (nowhere safe to anchor — GNDPOSIT is absolute, no terrain snap).
   const gndBox = el('div', 'margin-bottom:22px');
-  gndBox.appendChild(el('div', 'color:#8fa3bb;font-size:11px;margin-bottom:6px', S.ground));
-  const gndRow = el('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 11px;border:1px solid #243244;border-radius:8px;background:#0d141d');
-  const selCss = 'padding:6px 8px;border-radius:6px;border:1px solid #243244;background:#0b1119;color:#e6edf3;font-size:13px';
+  gndBox.appendChild(el('div', 'color:#555;font-size:11px;margin-bottom:6px', S.ground));
+  const gndRow = el('div', 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 11px;border:1px solid #ACA899;border-radius:2px;background:#fff');
+  const selCss = 'padding:6px 8px;border-radius:2px;border:1px solid #7F9DB9;background:#fff;color:#000;font-size:13px';
   const gndPreset = el('select', selCss);
   gndPreset.id = 'ysfw-ground-preset';
   { const o = el('option', null, S.groundNone); o.value = ''; gndPreset.appendChild(o); }
   for (const p of GROUND_PRESETS()) { const o = el('option', null, p.label); o.value = p.key; gndPreset.appendChild(o); }
-  const gndAtLbl = el('span', 'font-size:12px;color:#8fa3bb', S.groundAt);
+  const gndAtLbl = el('span', 'font-size:12px;color:#555', S.groundAt);
   const gndAnchor = el('select', selCss);
   gndAnchor.id = 'ysfw-ground-anchor';
   const gndSide = el('select', selCss);
@@ -197,7 +188,7 @@ function render(root) {
   refreshAnchors();
 
   // Fly.
-  const flyBtn = el('button', 'display:block;width:100%;padding:12px;border:0;border-radius:8px;background:' + ACCENT + ';color:#04101f;font-size:16px;font-weight:700;cursor:pointer', S.fly);
+  const flyBtn = el('button', 'display:block;width:100%;padding:12px;border:1px solid #003C74;border-radius:3.5px;background:linear-gradient(180deg,#FFFFFF,#E5E1CE);color:#000;font-size:15px;font-weight:700;box-shadow:inset 0 0 0 2px rgba(70,120,210,.55);cursor:pointer', S.fly);
   const err = el('div', 'color:#e78;font-size:12px;margin-top:8px;min-height:16px');
   flyBtn.addEventListener('click', () => {
     const f = FIELDS.find((x) => x.id === fieldSel.value) || FIELDS[0];

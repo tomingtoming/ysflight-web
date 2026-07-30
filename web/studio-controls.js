@@ -7,14 +7,14 @@
 // Calibration has no web counterpart on purpose: the port feeds the Gamepad
 // API's already-normalized axes to the engine (see controls.js header), so
 // REV + dead zones are the whole story here.
-import { ACCENT, LANG, pageUrl } from './studio-shared.js';
+import { ACCENT, LANG, pageUrl, xpWindow } from './studio-shared.js';
 
 const { AXIS_FUNCS, BUTTON_FUNCS, gamepadPreset, normalize } = globalThis.ysfwControls;
 const STORE_KEY = 'ysfwControls';
 
 const S = ({
   ja: {
-    title: '🕹️ コントローラ設定',
+    title: 'コントローラ設定',
     sub: 'ゲームパッド/スティックの割当。変更は自動保存され、次の飛行から反映されます。キーボード・マウスの割当はそのまま残ります。',
     back: '← 戻る', reset: '割当をすべて消す', preset: 'ゲームパッド標準を適用',
     noPad: 'コントローラが見つかりません。接続してボタンをどれか押してください。',
@@ -34,7 +34,7 @@ const S = ({
     calibNote: '※ 較正（キャリブレーション）はweb版では不要です — ブラウザのGamepad APIが正規化済みの値を返すため、反転とデッドゾーンだけで整います。キーボードとマウスの割当はエンジン既定のまま保たれます。',
   },
   en: {
-    title: '🕹️ Controller Setup',
+    title: 'Controller Setup',
     sub: 'Gamepad / stick assignments. Changes save automatically and apply from your next flight. Keyboard and mouse bindings are left untouched.',
     back: '← Back', reset: 'Clear all bindings', preset: 'Apply gamepad defaults',
     noPad: 'No controller detected. Connect one and press any button.',
@@ -78,15 +78,7 @@ function pads() {
 }
 
 function render(root) {
-  document.body.style.cssText = 'margin:0;background:#0b1119;color:#e6edf3;font-family:system-ui,sans-serif';
-  const wrap = el('div', 'max-width:640px;margin:0 auto;padding:20px 16px 48px');
-  root.appendChild(wrap);
-
-  const back = el('a', 'color:' + ACCENT + ';font-size:13px;text-decoration:none', S.back);
-  back.href = pageUrl('index.html');
-  wrap.appendChild(back);
-  wrap.appendChild(el('h1', 'font-size:22px;margin:10px 0 2px', S.title));
-  wrap.appendChild(el('div', 'color:#8fa3bb;font-size:13px;margin-bottom:14px', S.sub));
+  const wrap = xpWindow(root, S.title, S.sub);
 
   const model = load();
   const savedTag = el('div', 'color:#6ee7a8;font-size:12px;min-height:16px;margin:8px 0');
@@ -95,10 +87,10 @@ function render(root) {
 
   // ---- Device row: connected pads + live nudge to press a button ------------
   const padRow = el('div', 'display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap');
-  const padSel = el('select', 'padding:7px 9px;border-radius:6px;border:1px solid #243244;background:#0d141d;color:#e6edf3;font-size:13px;max-width:320px');
+  const padSel = el('select', 'padding:7px 9px;border-radius:6px;border:1px solid #7F9DB9;background:#fff;color:#000;font-size:13px;max-width:320px');
   padSel.id = 'ysfw-ctl-pad';
-  const padNote = el('span', 'color:#8fa3bb;font-size:12px', S.noPad);
-  padRow.appendChild(el('span', 'color:#8fa3bb;font-size:12px;white-space:nowrap', S.padLabel));
+  const padNote = el('span', 'color:#555;font-size:12px', S.noPad);
+  padRow.appendChild(el('span', 'color:#555;font-size:12px;white-space:nowrap', S.padLabel));
   padRow.appendChild(padSel);
   padRow.appendChild(padNote);
   wrap.appendChild(padRow);
@@ -167,8 +159,8 @@ function render(root) {
   setInterval(pollCapture, 50);
 
   // ---- Assignment lists -----------------------------------------------------
-  const rowCss = 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid #243244;border-radius:8px;background:#0d141d;flex-wrap:wrap';
-  const secCss = 'color:#8fa3bb;font-size:11px;margin:12px 0 4px';
+  const rowCss = 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;border:1px solid #ACA899;border-radius:2px;background:#fff;flex-wrap:wrap';
+  const secCss = 'color:#555;font-size:11px;margin:12px 0 4px';
   const axList = el('div', 'display:flex;flex-direction:column;gap:2px');
   const btList = el('div', 'display:flex;flex-direction:column;gap:2px');
   wrap.appendChild(el('div', secCss, S.axes));
@@ -185,13 +177,13 @@ function render(root) {
     row.appendChild(lab);
     const box = el('div', 'display:flex;align-items:center;gap:8px');
     if (isAxis && cur) {
-      const revLab = el('label', 'display:flex;align-items:center;gap:4px;font-size:12px;color:#8fa3bb;cursor:pointer');
+      const revLab = el('label', 'display:flex;align-items:center;gap:4px;font-size:12px;color:#555;cursor:pointer');
       const cb = el('input'); cb.type = 'checkbox'; cb.checked = !!cur.rev;
       cb.addEventListener('change', () => { cur.rev = cb.checked; persist(); });
       revLab.appendChild(cb); revLab.appendChild(el('span', null, S.rev));
       box.appendChild(revLab);
     }
-    const cap = el('button', 'font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid #2a3647;background:#13202f;color:' + ACCENT + ';cursor:pointer', S.capture);
+    const cap = el('button', 'font-size:12px;padding:5px 10px;border-radius:3px;border:1px solid #003C74;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;cursor:pointer', S.capture);
     cap.addEventListener('click', () => startCapture(isAxis ? 'axis' : 'btn', func, lab));
     box.appendChild(cap);
     if (cur) {
@@ -222,12 +214,12 @@ function render(root) {
     const row = el('label', rowCss + ';cursor:pointer');
     row.appendChild(el('span', 'font-size:14px', label));
     const box = el('div', 'display:flex;align-items:center;gap:10px;flex:1;justify-content:flex-end');
-    const out = el('span', 'font-size:12px;color:#8fa3bb;min-width:44px;text-align:right',
+    const out = el('span', 'font-size:12px;color:#555;min-width:44px;text-align:right',
       model.dz[key] != null ? model.dz[key].toFixed(3) : '—');
     const sl = el('input'); sl.type = 'range'; sl.id = 'ysfw-ctl-dz-' + key;
     sl.min = '0'; sl.max = '0.2'; sl.step = '0.005';
     sl.value = String(model.dz[key] != null ? model.dz[key] : 0.03);
-    sl.style.cssText = 'flex:1;max-width:200px;accent-color:' + ACCENT;
+    sl.style.cssText = 'flex:1;max-width:200px;accent-color:#316AC5';
     sl.addEventListener('input', () => {
       model.dz[key] = Number(sl.value);
       out.textContent = model.dz[key].toFixed(3);
@@ -242,14 +234,14 @@ function render(root) {
 
   // ---- Preset / reset -------------------------------------------------------
   const btnRow = el('div', 'display:flex;gap:10px;margin-top:6px;flex-wrap:wrap');
-  const presetBtn = el('button', 'padding:8px 12px;border:1px solid #2a3647;border-radius:8px;background:#13202f;color:' + ACCENT + ';cursor:pointer;font-size:13px', S.preset);
+  const presetBtn = el('button', 'padding:8px 12px;border:1px solid #003C74;border-radius:3px;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;cursor:pointer;font-size:13px', S.preset);
   presetBtn.id = 'ysfw-ctl-preset';
   presetBtn.addEventListener('click', () => {
     const p = gamepadPreset(curDev());
     model.axes = p.axes; model.btns = p.btns; model.dz = p.dz;
     persist(); renderLists();
   });
-  const resetBtn = el('button', 'padding:8px 12px;border:1px solid #243244;border-radius:8px;background:transparent;color:#8fa3bb;cursor:pointer;font-size:13px', S.reset);
+  const resetBtn = el('button', 'padding:8px 12px;border:1px solid #003C74;border-radius:3px;background:linear-gradient(180deg,#FFFFFF,#E7E3D3);color:#000;cursor:pointer;font-size:13px', S.reset);
   resetBtn.addEventListener('click', () => {
     model.axes = []; model.btns = []; model.dz = { elv: null, ail: null, rud: null };
     persist(); renderLists();
@@ -257,7 +249,7 @@ function render(root) {
   btnRow.appendChild(presetBtn); btnRow.appendChild(resetBtn);
   wrap.appendChild(btnRow);
 
-  wrap.appendChild(el('div', 'color:#7d93b0;font-size:11.5px;line-height:1.5;margin-top:14px', S.calibNote));
+  wrap.appendChild(el('div', 'color:#777;font-size:11.5px;line-height:1.5;margin-top:14px', S.calibNote));
 }
 
 render(document.body);

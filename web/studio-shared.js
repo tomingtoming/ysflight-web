@@ -340,3 +340,51 @@ export function studioChrome(title) {
   try { navigator.storage.persist(); } catch (e) { /* best effort */ }
   return { rail, main };
 }
+
+// ---- XP (Luna) window scaffold for studio pages (2026-07-30 tone) ----------
+// The page renders as the era's dialog: sky desktop with the hill, Luna
+// titlebar whose red × closes the window (= back to the top page), content on
+// the dialog face, and a statusbar carrying the page's one-line description.
+export function xpWindow(rootEl, title, sub) {
+  document.body.style.cssText =
+    'margin:0;min-height:100vh;box-sizing:border-box;padding:26px 10px 40px;' +
+    'display:flex;align-items:flex-start;justify-content:center;' +
+    'background:linear-gradient(180deg,#7FB2F0 0%,#4E86DD 45%,#2E64C8 100%);' +
+    "font-family:Tahoma,'MS UI Gothic','Yu Gothic UI',sans-serif;color:#000";
+  const hill = document.createElement('div');
+  hill.style.cssText = 'position:fixed;left:-20%;right:-20%;bottom:-14vh;height:36vh;pointer-events:none;' +
+    'background:radial-gradient(ellipse at 50% 100%,#55B03C 0%,#3F9C35 45%,transparent 72%)';
+  rootEl.appendChild(hill);
+  const win = document.createElement('div');
+  win.style.cssText = 'position:relative;width:min(760px,98vw);border-radius:8px 8px 4px 4px;background:#ECE9D8;' +
+    'box-shadow:0 0 0 1px #0831D9,4px 7px 22px rgba(0,20,60,.5);overflow:hidden';
+  const tb = document.createElement('div');
+  tb.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;color:#fff;font-weight:700;' +
+    "font-size:13.5px;font-family:'Trebuchet MS',Tahoma,sans-serif;text-shadow:1px 1px 1px rgba(10,30,90,.75);" +
+    'background:linear-gradient(180deg,#2B76E5 0%,#215DCF 6%,#3D8FFF 42%,#245EDC 88%,#1B54B0 100%)';
+  const t = document.createElement('span');
+  t.style.cssText = 'flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+  t.textContent = title;
+  tb.appendChild(t);
+  const close = document.createElement('a');
+  close.href = pageUrl('index.html');
+  close.textContent = '\u00d7';
+  close.title = LANG === 'ja' ? '\u9589\u3058\u308b \u2014 \u30c8\u30c3\u30d7\u3078\u623b\u308b' : 'Close \u2014 back to the top page';
+  close.style.cssText = 'width:22px;height:21px;flex:none;border-radius:3px;border:1px solid rgba(255,255,255,.75);' +
+    'font-size:12px;line-height:19px;text-align:center;color:#fff;text-decoration:none;font-family:Tahoma,monospace;' +
+    'background:linear-gradient(180deg,#F0A088,#DD6547 40%,#C33B1E);box-shadow:inset 0 1px 0 rgba(255,255,255,.5)';
+  tb.appendChild(close);
+  win.appendChild(tb);
+  const body = document.createElement('div');
+  body.style.cssText = 'padding:12px 12px 8px';
+  win.appendChild(body);
+  const sb = document.createElement('div');
+  sb.style.cssText = 'display:flex;gap:3px;padding:4px;background:#ECE9D8;border-top:1px solid #fff;box-shadow:inset 0 1px 0 #D8D4C4';
+  const cell = document.createElement('span');
+  cell.style.cssText = 'flex:1;font-size:11px;color:#444;padding:3px 8px;border:1px solid;border-color:#ACA899 #fff #fff #ACA899;border-radius:1px';
+  cell.textContent = sub || '';
+  sb.appendChild(cell);
+  win.appendChild(sb);
+  rootEl.appendChild(win);
+  return body;
+}
