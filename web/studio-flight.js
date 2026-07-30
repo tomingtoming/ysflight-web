@@ -98,7 +98,18 @@ function render(root) {
   // Field + time-of-day row.
   const opts = el('div', 'display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px');
   const fieldSel = el('select', 'padding:7px 9px;border-radius:6px;border:1px solid #7F9DB9;background:#fff;color:#000;font-size:13px;width:100%');
-  for (const f of FIELDS) {
+  // All stock fields from stock/fields.json (verified .stp start positions),
+  // with the curated FIELDS entries supplying nicer labels / preferred starts.
+  // Falls back to the curated four if fields.json failed to load (issue #83).
+  const fieldFor = (id) => {
+    const cur = FIELDS.find((x) => x.id === id);
+    if (cur) return cur;
+    const stps = FIELD_STPS[id] || [];
+    return { id, label: id, start: stps.length ? stps[0].n : '' };
+  };
+  const fieldIds = Object.keys(FIELD_STPS).filter((id) => (FIELD_STPS[id] || []).length).sort();
+  const allFields = fieldIds.length ? fieldIds.map(fieldFor) : FIELDS;
+  for (const f of allFields) {
     const o = el('option', null, f.label); o.value = f.id; fieldSel.appendChild(o);
   }
   const fieldBox = el('div'); fieldBox.appendChild(el('div', 'color:#555;font-size:11px;margin-bottom:4px', S.field)); fieldBox.appendChild(fieldSel);
@@ -191,7 +202,7 @@ function render(root) {
   const flyBtn = el('button', 'display:block;width:100%;padding:12px;border:1px solid #003C74;border-radius:3.5px;background:linear-gradient(180deg,#FFFFFF,#E5E1CE);color:#000;font-size:15px;font-weight:700;box-shadow:inset 0 0 0 2px rgba(70,120,210,.55);cursor:pointer', S.fly);
   const err = el('div', 'color:#e78;font-size:12px;margin-top:8px;min-height:16px');
   flyBtn.addEventListener('click', () => {
-    const f = FIELDS.find((x) => x.id === fieldSel.value) || FIELDS[0];
+    const f = fieldFor(fieldSel.value) || FIELDS[0];
     const rows = Array.from(list.children);
     const aircraft = rows.map((row) => {
       const isPlayer = !!row.dataset.player;
