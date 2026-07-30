@@ -6,14 +6,14 @@
 // to the (already parameter-complete) deep link.  Engine-less; aircraft come
 // from the stock index, fields from stock/fields.json (the bundled set, shown
 // by identifier exactly like the native list boxes).
-import { ACCENT, LANG, pageUrl, stockIndex, stockFields } from './studio-shared.js';
+import { ACCENT, LANG, pageUrl, stockIndex, stockFields, xpWindow } from './studio-shared.js';
 
 const S = ({
   ja: {
-    title: '🎯 ミッション',
+    title: 'ミッション',
     sub: '本家 Simulation メニューと同じ項目・同じ選択肢。設定して「開始」で即離陸します。',
     back: '← 戻る',
-    aircraft: '機体', field: 'マップ', start: '🛫 開始',
+    aircraft: '機体', field: 'マップ', start: '開始',
     landing: '着陸訓練', landingLevel: 'レベル',
     endurance: '15分間耐久空中戦', wingmen: '僚機', enemyLevel: '敵レベル', allowAam: '空対空ミサイル使用',
     intercept: '基地防空ミッション', attackers: '敵機数',
@@ -21,10 +21,10 @@ const S = ({
     cas: '近接支援ミッション', racing: 'レーシングモード', course: 'コース',
   },
   en: {
-    title: '🎯 Missions',
+    title: 'Missions',
     sub: 'The native Simulation menu — same items, same choices. Configure and press Start to take off.',
     back: '← Back',
-    aircraft: 'Aircraft', field: 'Map', start: '🛫 Start',
+    aircraft: 'Aircraft', field: 'Map', start: 'Start',
     landing: 'Landing Practice', landingLevel: 'Level',
     endurance: 'Endurance Mode', wingmen: 'Wingmen', enemyLevel: 'Enemy level', allowAam: 'Allow air-to-air missiles',
     intercept: 'Intercept Mission', attackers: 'Attackers',
@@ -59,7 +59,7 @@ const el = (tag, css, text) => {
   if (text != null) e.textContent = text;
   return e;
 };
-const selCss = 'padding:6px 8px;border-radius:6px;border:1px solid #243244;background:#0d141d;color:#e6edf3;font-size:13px';
+const selCss = 'padding:6px 8px;border-radius:2px;border:1px solid #7F9DB9;background:#fff;color:#000;font-size:13px';
 
 let AIRCRAFT_IDS = [];
 let FIELD_IDS = [];
@@ -83,13 +83,13 @@ function fieldSelect(def, id, ids) {
   return makeSelect(list, list.includes(def) ? def : list[0], id);
 }
 function labeled(label, control) {
-  const box = el('label', 'display:flex;flex-direction:column;gap:3px;font-size:11px;color:#8fa3bb');
+  const box = el('label', 'display:flex;flex-direction:column;gap:3px;font-size:11px;color:#555');
   box.appendChild(el('span', null, label));
   box.appendChild(control);
   return box;
 }
 function check(label, checked) {
-  const lab = el('label', 'display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:#e6edf3');
+  const lab = el('label', 'display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:#000');
   const cb = el('input'); cb.type = 'checkbox'; cb.checked = checked;
   lab.appendChild(cb); lab.appendChild(el('span', null, label));
   lab._cb = cb;
@@ -100,11 +100,11 @@ function go(query) {
   location.assign(location.origin + location.pathname.replace(/[^/]*$/, '') + '?' + query + (lang ? '&lang=' + encodeURIComponent(lang) : ''));
 }
 function section(title, rows, startFn, startId) {
-  const card = el('div', 'border:1px solid #243244;border-radius:10px;background:#0d141d;padding:14px 16px;margin-bottom:12px');
-  card.appendChild(el('div', 'font-size:15px;font-weight:700;margin-bottom:10px', title));
+  const card = el('div', 'border:1px solid #D0D0BF;border-radius:5px;background:#F2F1E5;padding:12px 14px;margin-bottom:12px');
+  card.appendChild(el('div', 'font-size:13px;font-weight:700;color:#0046D5;margin-bottom:10px', title));
   const grid = el('div', 'display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end');
   for (const r of rows) grid.appendChild(r);
-  const btn = el('button', 'padding:8px 18px;border:0;border-radius:8px;background:' + ACCENT + ';color:#04101f;font-size:14px;font-weight:700;cursor:pointer', S.start);
+  const btn = el('button', 'padding:8px 18px;border:1px solid #003C74;border-radius:3.5px;background:linear-gradient(180deg,#FFFFFF,#E5E1CE);color:#000;font-size:13px;font-weight:700;box-shadow:inset 0 0 0 2px rgba(70,120,210,.55);cursor:pointer', S.start);
   if (startId) btn.id = startId;
   btn.addEventListener('click', startFn);
   grid.appendChild(btn);
@@ -113,14 +113,7 @@ function section(title, rows, startFn, startId) {
 }
 
 function render(root) {
-  document.body.style.cssText = 'margin:0;background:#0b1119;color:#e6edf3;font-family:system-ui,sans-serif';
-  const wrap = el('div', 'max-width:720px;margin:0 auto;padding:20px 16px 48px');
-  root.appendChild(wrap);
-  const back = el('a', 'color:' + ACCENT + ';font-size:13px;text-decoration:none', S.back);
-  back.href = pageUrl('index.html');
-  wrap.appendChild(back);
-  wrap.appendChild(el('h1', 'font-size:22px;margin:10px 0 2px', S.title));
-  wrap.appendChild(el('div', 'color:#8fa3bb;font-size:13px;margin-bottom:16px', S.sub));
+  const wrap = xpWindow(root, S.title, S.sub);
 
   // ---- 着陸訓練: all 15 native levels + aircraft + field --------------------
   {
