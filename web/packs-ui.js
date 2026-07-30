@@ -1285,7 +1285,7 @@ function renderPanel() {
   // boots through this button).
   const nativeRow = document.createElement('div');
   nativeRow.className = 'xp-rowline';
-  nativeRow.style.cssText = 'padding:2px 0 4px';
+  nativeRow.style.cssText = 'padding:2px 0;margin-bottom:12px';
   const playBtn = document.createElement('button');
   playBtn.id = 'ysfw-pack-play';
   playBtn.className = 'xp-btn default';
@@ -1314,6 +1314,11 @@ function renderPanel() {
   playHint.textContent = S.playHint;
   nativeRow.appendChild(playHint);
   panel.appendChild(nativeRow);
+  // 2026-07-30: the first-class lane and network play LEAD the panel — a
+  // veteran lands on the familiar door (and the friends lobby) first; the
+  // quick presets for newcomers sit right below, still above the fold.
+  panel.insertBefore(nativeRow, quickWrap);
+  panel.insertBefore(netWrap, quickWrap);
   try {
     if (navigator.xr && navigator.xr.isSessionSupported) {
       navigator.xr.isSessionSupported('immersive-vr').then((ok) => {
@@ -1353,7 +1358,7 @@ function renderPanel() {
   packBodySyncEl = syncPackSection;
   toolsRow.appendChild(packToggle);
   packSection.appendChild(packBody);
-  panel.insertBefore(packSection, netWrap);
+  panel.appendChild(packSection); // after ツール, whose row holds its toggle
   updatePackToggleLabel();
 
   // Where do installed packs show up?  The biggest modder drop-off is not knowing
