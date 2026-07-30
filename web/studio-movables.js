@@ -409,7 +409,7 @@ const LANG = document.documentElement.lang === 'en' ? 'en' : 'ja';
 
 const S = {
   ja: {
-    section: '🔧 可動部・ライト',
+    section: '可動部・ライト',
     intro: 'DNMノードのクラス・ヒンジ原点(CNT)・状態(STA)を編集。ライトノードの追加・削除も可。',
     nodeList: 'ノード一覧',
     noNodes: '（外観モデル .dnm を選んでください）',
@@ -438,7 +438,7 @@ const S = {
     blinkNote: '※点滅はエンジン実装値（ビーコン1.6s周期・ストロボ1.0s周期）に近似',
   },
   en: {
-    section: '🔧 Movables & Lights',
+    section: 'Movables & Lights',
     intro: 'Edit DNM node class, hinge origin (CNT) and states (STA). Add / remove light nodes.',
     nodeList: 'Node list',
     noNodes: '(Select a visual .dnm)',
@@ -495,12 +495,12 @@ export function buildMovablesSection(rail, opts) {
 
   // --- node list ---
   const nodeListDiv = document.createElement('div');
-  nodeListDiv.style.cssText = 'margin:6px 0;max-height:220px;overflow-y:auto;border:1px solid #2a3647;border-radius:6px';
+  nodeListDiv.style.cssText = 'margin:6px 0;max-height:220px;overflow-y:auto;border:1px solid #ACA899;border-radius:2px;background:#fff';
   rail.appendChild(nodeListDiv);
 
   // --- detail panel ---
   const detailDiv = document.createElement('div');
-  detailDiv.style.cssText = 'margin:6px 0;padding:8px;border:1px solid #2a3647;border-radius:6px;display:none';
+  detailDiv.style.cssText = 'margin:6px 0;padding:8px;border:1px solid #ACA899;border-radius:2px;background:#F2F1E5;display:none';
   rail.appendChild(detailDiv);
 
   // --- lights management ---
@@ -510,7 +510,7 @@ export function buildMovablesSection(rail, opts) {
   // hint
   const hint = document.createElement('div');
   hint.className = 'msg';
-  hint.style.cssText = 'margin-top:6px;font-size:11px;color:#5a7090';
+  hint.style.cssText = 'margin-top:6px;font-size:11px;color:#777';
   hint.textContent = S.saveHint;
   rail.appendChild(hint);
 
@@ -555,14 +555,14 @@ export function buildMovablesSection(rail, opts) {
 
     // Title
     const title = document.createElement('div');
-    title.style.cssText = 'font-weight:600;margin-bottom:6px;color:#c0d4f0';
+    title.style.cssText = 'font-weight:600;margin-bottom:6px;color:#000';
     title.textContent = '"' + label + '"';
     detailDiv.appendChild(title);
 
     // CLA dropdown
     const claRow = mkRow(S.claLabel);
     const claSel = document.createElement('select');
-    claSel.style.cssText = 'flex:1;min-width:0;background:#0b1017;color:#c0d4f0;border:1px solid #2a3647;border-radius:4px;padding:2px 4px';
+    claSel.style.cssText = 'flex:1;min-width:0;background:#fff;color:#000;border:1px solid #7F9DB9;border-radius:2px;padding:2px 4px';
     for (const c of CLA_TABLE) {
       const opt = document.createElement('option');
       opt.value = c.id;
@@ -607,7 +607,7 @@ export function buildMovablesSection(rail, opts) {
         });
         blinkRow.appendChild(blinkBtn);
         const blinkNote = document.createElement('span');
-        blinkNote.style.cssText = 'font-size:10px;color:#5a7090;margin-left:6px';
+        blinkNote.style.cssText = 'font-size:10px;color:#777;margin-left:6px';
         blinkNote.textContent = S.blinkNote;
         blinkRow.appendChild(blinkNote);
         detailDiv.appendChild(blinkRow);
@@ -639,7 +639,7 @@ export function buildMovablesSection(rail, opts) {
       const staSection = document.createElement('div');
       staSection.style.cssText = 'margin:6px 0';
       const staLabel = document.createElement('div');
-      staLabel.style.cssText = 'font-size:11px;color:#7d93b0;margin-bottom:4px';
+      staLabel.style.cssText = 'font-size:11px;color:#555;margin-bottom:4px';
       staLabel.textContent = S.staLabel;
       staSection.appendChild(staLabel);
 
@@ -652,7 +652,7 @@ export function buildMovablesSection(rail, opts) {
           r.className = 'sta-row';
           r.style.cssText = 'display:flex;align-items:center;gap:3px;margin:2px 0;flex-wrap:wrap';
           const idxLab = document.createElement('span');
-          idxLab.style.cssText = 'color:#5a7090;font-size:10px;width:36px;flex:none';
+          idxLab.style.cssText = 'color:#777;font-size:10px;width:36px;flex:none';
           idxLab.textContent = S.staIdx(ri);
           r.appendChild(idxLab);
           S.staFields.forEach((field, fi) => {
@@ -660,7 +660,7 @@ export function buildMovablesSection(rail, opts) {
               type: 'number', step: fi >= 3 && fi < 6 ? '100' : '0.01',
               value: (row[fi] !== undefined ? row[fi] : (fi === 6 ? 1 : 0)),
             });
-            inp.style.cssText = 'width:52px;min-width:0;background:#0b1017;color:#c0d4f0;border:1px solid #2a3647;border-radius:3px;padding:1px 3px;font-size:11px';
+            inp.style.cssText = 'width:52px;min-width:0;background:#fff;color:#000;border:1px solid #7F9DB9;border-radius:2px;padding:1px 3px;font-size:11px';
             inp.title = field;
             inp.addEventListener('change', () => {
               row[fi] = parseFloat(inp.value) || 0;
@@ -745,7 +745,7 @@ export function buildMovablesSection(rail, opts) {
     const ent = getVisualEntry();
     if (!ent) {
       const em = document.createElement('div');
-      em.style.cssText = 'padding:8px;color:#5a7090;font-size:12px';
+      em.style.cssText = 'padding:8px;color:#777;font-size:12px';
       em.textContent = S.noNodes;
       nodeListDiv.appendChild(em);
       return;
@@ -763,26 +763,26 @@ export function buildMovablesSection(rail, opts) {
       const isLight = IS_LIGHT.has(n.cla);
 
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 8px;cursor:pointer;border-bottom:1px solid #1a2535';
-      if (selectedLabel === n.label) row.style.background = '#1a2d44';
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 8px;cursor:pointer;border-bottom:1px solid #E5E1CE';
+      if (selectedLabel === n.label) row.style.background = '#D6E5F5';
 
       const dot = document.createElement('span');
-      dot.style.cssText = 'width:8px;height:8px;border-radius:50%;flex:none;background:' + (isLight ? '#ffcc00' : '#4da3ff');
+      dot.style.cssText = 'width:8px;height:8px;border-radius:50%;flex:none;background:' + (isLight ? '#E5A11B' : '#0046D5');
       row.appendChild(dot);
 
       const nameSpan = document.createElement('span');
-      nameSpan.style.cssText = 'flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c0d4f0';
+      nameSpan.style.cssText = 'flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#000';
       nameSpan.textContent = n.label;
       row.appendChild(nameSpan);
 
       const claSpan = document.createElement('span');
-      claSpan.style.cssText = 'font-size:10px;color:#7d93b0;flex:none';
+      claSpan.style.cssText = 'font-size:10px;color:#555;flex:none';
       claSpan.textContent = claStr;
       row.appendChild(claSpan);
 
       row.addEventListener('click', () => {
         nodeListDiv.querySelectorAll('div').forEach(d => { d.style.background = ''; });
-        row.style.background = '#1a2d44';
+        row.style.background = '#D6E5F5';
         showDetail(n.label, n);
       });
       nodeListDiv.appendChild(row);
@@ -790,7 +790,7 @@ export function buildMovablesSection(rail, opts) {
 
     // Light management buttons
     const lh = document.createElement('h3');
-    lh.style.cssText = 'margin:12px 0 4px;font-size:13px;color:#c0d4f0';
+    lh.style.cssText = 'margin:12px 0 4px;font-size:13px;color:#0046D5';
     lh.textContent = S.lightsSection;
     lightDiv.appendChild(lh);
 
@@ -848,7 +848,7 @@ function mkRow(labelText) {
   const r = document.createElement('div');
   r.style.cssText = 'display:flex;align-items:center;gap:6px;margin:3px 0';
   const lab = document.createElement('span');
-  lab.style.cssText = 'flex:none;width:130px;font-size:11px;color:#7d93b0';
+  lab.style.cssText = 'flex:none;width:130px;font-size:11px;color:#555';
   lab.textContent = labelText;
   r.appendChild(lab);
   return r;
@@ -857,7 +857,7 @@ function mkRow(labelText) {
 function numInput(value) {
   return Object.assign(document.createElement('input'), {
     type: 'number', step: '0.01', value,
-    style: 'width:64px;background:#0b1017;color:#c0d4f0;border:1px solid #2a3647;border-radius:3px;padding:2px 4px;font-size:12px',
+    style: 'width:64px;background:#fff;color:#000;border:1px solid #7F9DB9;border-radius:2px;padding:2px 4px;font-size:12px',
   });
 }
 

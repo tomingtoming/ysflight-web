@@ -58,12 +58,12 @@ export const RULES = {
     nightmare: 1,
     ja: {
       title: 'N行（明示法線）の無い面',
-      why: 'エンジンはF面のNを照明とワインディング補正の基準にする（FixOrientationBasedOnAssignedNormal）。N無しはゼロ法線→両面カメラ向きフォールバックでフラット/暗転（悪夢第1項）。',
+      why: 'エンジンはF面のNを照明とワインディング補正の基準にする（FixOrientationBasedOnAssignedNormal）。N無しはゼロ法線→両面カメラ向きフォールバックでフラット/暗転する。',
       fix: '各F面に「N cx cy cz nx ny nz」を出力する。glb取り込みなら最新の変換器で再取り込み。',
     },
     en: {
       title: 'Faces without an assigned N normal',
-      why: 'The engine lights by the assigned N and corrects winding against it; a face without N keeps a zero normal and falls back to two-sided camera-facing shading (nightmare #1).',
+      why: 'The engine lights by the assigned N and corrects winding against it; a face without N keeps a zero normal and falls back to two-sided camera-facing shading.',
       fix: 'Emit "N cx cy cz nx ny nz" per face (re-import through the current glb converter if this came from Blender).',
     },
   },
@@ -71,12 +71,12 @@ export const RULES = {
     nightmare: 2,
     ja: {
       title: 'N法線と頂点順（ワインディング）の不一致',
-      why: 'エンジンはロード時にN基準で巻きを反転して自己修復するが、プレビュー/glTF側は巻きから法線を導くため食い違って陰影が裏返る（悪夢第2項）。少数は正常でもあり得る（stock b747は810:24）。',
+      why: 'エンジンはロード時にN基準で巻きを反転して自己修復するが、プレビュー/glTF側は巻きから法線を導くため食い違って陰影が裏返る。少数は正常でもあり得る（stock b747は810:24）。',
       fix: '面の頂点順をNの向きに合わせて統一する（モデラーで法線を再計算）。',
     },
     en: {
       title: 'Assigned N disagrees with the vertex winding',
-      why: 'The engine self-heals by flipping winding to match N at load, but previews/glTF derive normals from winding, so shading inverts there (nightmare #2). A few are normal (stock b747: 810:24).',
+      why: 'The engine self-heals by flipping winding to match N at load, but previews/glTF derive normals from winding, so shading inverts there. A few are normal (stock b747: 810:24).',
       fix: 'Reorder face vertices to agree with N (recompute normals in the modeler).',
     },
   },
@@ -84,12 +84,12 @@ export const RULES = {
     nightmare: 7,
     ja: {
       title: '薄板のR頂点（平均法線がエッジオン化）',
-      why: 'R頂点は隣接面の平均法線で陰影される。薄い翼のLE/TE/翼端で上下スキンを共有すると平均が打ち消されてエッジオン→真っ黒に沈む（悪夢第7項）。',
+      why: 'R頂点は隣接面の平均法線で陰影される。薄い翼のLE/TE/翼端で上下スキンを共有すると平均が打ち消されてエッジオン→真っ黒に沈む。',
       fix: '薄板の縁ではRを外す（フラットにする）か、上下スキンの頂点を分離する。',
     },
     en: {
       title: 'R (round) vertices on thin plates (edge-on averaged normal)',
-      why: 'An R vertex is shaded by the average of its adjacent face normals; where a thin wing\'s upper and lower skins share it, the average cancels to edge-on and the strip goes black (nightmare #7).',
+      why: 'An R vertex is shaded by the average of its adjacent face normals; where a thin wing\'s upper and lower skins share it, the average cancels to edge-on and the strip goes black.',
       fix: 'Drop the R flag along thin-plate edges (keep them flat) or split the shared vertices.',
     },
   },
@@ -97,12 +97,12 @@ export const RULES = {
     nightmare: 8,
     ja: {
       title: '偽R散布（曲率の無い所のR頂点）',
-      why: '隣接面の法線がほぼ同一＝滑らかにする曲率が無いのにRが付いている。glb→dnm変換の古い癖で、わずかな捻れと組むと暗斑の温床になる（悪夢第8項）。',
+      why: '隣接面の法線がほぼ同一＝滑らかにする曲率が無いのにRが付いている。glb→dnm変換の古い癖で、わずかな捻れと組むと暗斑の温床になる。',
       fix: 'フラット面のRを外す。glb由来なら最新の変換器（面内法線分散ゲート入り）で再取り込み。',
     },
     en: {
       title: 'Spurious R spray (round vertices with no curvature)',
-      why: 'Adjacent face normals are near-identical — there is nothing to smooth — yet the vertex is marked R. A legacy glb->dnm artifact that breeds dark patches once any twist appears (nightmare #8).',
+      why: 'Adjacent face normals are near-identical — there is nothing to smooth — yet the vertex is marked R. A legacy glb->dnm artifact that breeds dark patches once any twist appears.',
       fix: 'Remove R from flat regions; re-import glb files through the current converter (intra-triangle variance gate).',
     },
   },
@@ -123,12 +123,12 @@ export const RULES = {
     nightmare: null,
     ja: {
       title: '絶対座標への変換二重適用の兆候',
-      why: 'DNM頂点は機体絶対座標。原点から遠いジオメトリを静止変換がさらに動かしている＝POSの二重適用（webflightの悪夢）や、逆にPOS前提のローカル座標の混入が疑われる。',
+      why: 'DNM頂点は機体絶対座標。原点から遠いジオメトリを静止変換がさらに動かしている＝POSの二重適用や、逆にPOS前提のローカル座標の混入が疑われる。',
       fix: '静止状態で部品が正位置に見えるか確認。絶対座標ならPOSとCNTを一致させる（またはPOSを0に）。',
     },
     en: {
       title: 'Signs of double-applied absolute coordinates',
-      why: 'DNM vertices are absolute aircraft coordinates; a rest transform that displaces far-from-origin geometry suggests POS applied on top of absolute verts (the webflight nightmare) or local-coordinate geometry mixed in.',
+      why: 'DNM vertices are absolute aircraft coordinates; a rest transform that displaces far-from-origin geometry suggests POS applied on top of absolute verts, or local-coordinate geometry mixed in.',
       fix: 'Check the part sits correctly at rest; for absolute verts keep POS equal to CNT (or zero POS).',
     },
   },
@@ -175,12 +175,12 @@ export const RULES = {
     nightmare: 9,
     ja: {
       title: '色行（C）の値域・書式の壊れ',
-      why: 'Cは「r g b [a]」(0..255)か15bitパック値1個。範囲外や非数値はエンジンの読みがずれて機体が真っ赤などに化ける（悪夢第9項）。',
+      why: 'Cは「r g b [a]」(0..255)か15bitパック値1個。範囲外や非数値はエンジンの読みがずれて機体が真っ赤などに化ける。',
       fix: 'C行を 0..255 のRGBか 0..32767 のパック値に直す。',
     },
     en: {
       title: 'Broken C color lines (range/format)',
-      why: 'C is "r g b [a]" in 0..255 or one packed 15-bit value; out-of-range or non-numeric tokens skew the read and the aircraft renders solid red or worse (nightmare #9).',
+      why: 'C is "r g b [a]" in 0..255 or one packed 15-bit value; out-of-range or non-numeric tokens skew the read and the aircraft renders solid red or worse.',
       fix: 'Fix C lines to RGB in 0..255 or a packed value in 0..32767.',
     },
   },

@@ -181,15 +181,15 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
 
   // ---- outer frame ----
   const wrap = el('div');
-  wrap.style.cssText = 'border:1px solid #2a3647;border-radius:8px;overflow:hidden;margin-top:8px';
+  wrap.style.cssText = 'border:1px solid #ACA899;border-radius:2px;overflow:hidden;margin-top:8px;background:#F2F1E5';
 
   // ---- tab bar ----
   const tabBar = el('div');
-  tabBar.style.cssText = 'display:flex;border-bottom:1px solid #2a3647;background:#0d141d';
+  tabBar.style.cssText = 'display:flex;border-bottom:1px solid #ACA899;background:#ECE9D8';
   const mkTab = (label) => {
     const t = el('button', null, label);
-    t.style.cssText = 'flex:1;padding:7px 10px;border:0;border-radius:0;background:transparent;' +
-      'color:#8fa3bb;font-size:12.5px;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s';
+    t.style.cssText = 'flex:1;padding:7px 10px;border:0;border-radius:0;background:transparent;box-shadow:none;' +
+      'color:#555;font-size:12.5px;cursor:pointer;border-bottom:2px solid transparent;transition:color .15s';
     return t;
   };
   const tabForm = mkTab(L('フォーム', 'Form'));
@@ -205,8 +205,8 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
   panelRaw.style.cssText = 'display:none;padding:8px';
 
   const textarea = document.createElement('textarea');
-  textarea.style.cssText = 'width:100%;height:400px;background:#0b1017;color:#e6edf3;' +
-    'border:1px solid #2a3647;border-radius:6px;padding:8px;font-size:12px;font-family:monospace;resize:vertical';
+  textarea.style.cssText = 'width:100%;height:400px;background:#fff;color:#000;' +
+    'border:1px solid #7F9DB9;border-radius:2px;padding:8px;font-size:12px;font-family:monospace;resize:vertical';
   panelRaw.appendChild(textarea);
 
   const saveBtn = el('button', 'accent', L('保存 / Save', 'Save'));
@@ -225,13 +225,13 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
   const switchTab = (idx) => {
     activeTab = idx;
     if (idx === 0) {
-      tabForm.style.cssText = tabForm.style.cssText.replace('color:#8fa3bb', 'color:#4da3ff').replace('border-bottom:2px solid transparent', 'border-bottom:2px solid #4da3ff');
-      tabRaw.style.cssText = tabRaw.style.cssText.replace('color:#4da3ff', 'color:#8fa3bb').replace('border-bottom:2px solid #4da3ff', 'border-bottom:2px solid transparent');
+      tabForm.style.cssText = tabForm.style.cssText.replace('color:#555', 'color:#0046D5').replace('border-bottom:2px solid transparent', 'border-bottom:2px solid #0046D5');
+      tabRaw.style.cssText = tabRaw.style.cssText.replace('color:#0046D5', 'color:#555').replace('border-bottom:2px solid #0046D5', 'border-bottom:2px solid transparent');
       panelForm.style.display = '';
       panelRaw.style.display = 'none';
     } else {
-      tabRaw.style.cssText = tabRaw.style.cssText.replace('color:#8fa3bb', 'color:#4da3ff').replace('border-bottom:2px solid transparent', 'border-bottom:2px solid #4da3ff');
-      tabForm.style.cssText = tabForm.style.cssText.replace('color:#4da3ff', 'color:#8fa3bb').replace('border-bottom:2px solid #4da3ff', 'border-bottom:2px solid transparent');
+      tabRaw.style.cssText = tabRaw.style.cssText.replace('color:#555', 'color:#0046D5').replace('border-bottom:2px solid transparent', 'border-bottom:2px solid #0046D5');
+      tabForm.style.cssText = tabForm.style.cssText.replace('color:#0046D5', 'color:#555').replace('border-bottom:2px solid #0046D5', 'border-bottom:2px solid transparent');
       panelForm.style.display = 'none';
       panelRaw.style.display = '';
       // Sync form state -> textarea
@@ -240,9 +240,9 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
   };
 
   // Initialize tab styles
-  tabForm.style.color = '#4da3ff';
-  tabForm.style.borderBottom = '2px solid #4da3ff';
-  tabRaw.style.color = '#8fa3bb';
+  tabForm.style.color = '#0046D5';
+  tabForm.style.borderBottom = '2px solid #0046D5';
+  tabRaw.style.color = '#555';
   tabRaw.style.borderBottom = '2px solid transparent';
 
   tabForm.addEventListener('click', () => switchTab(0));
@@ -265,14 +265,14 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
 
   // ---- sanity table ----
   const sanityDl = el('dl');
-  sanityDl.style.cssText = 'margin:0 0 10px;padding:8px 10px;background:#0d141d;border:1px solid #2a3647;' +
-    'border-radius:6px;font-size:12px;display:grid;grid-template-columns:auto 1fr;gap:2px 12px';
+  sanityDl.style.cssText = 'margin:0 0 10px;padding:8px 10px;background:#fff;border:1px solid #ACA899;' +
+    'border-radius:2px;font-size:12px;display:grid;grid-template-columns:auto 1fr;gap:2px 12px';
 
   const mkSanity = (label) => {
     const dt = el('dt', null, label);
-    dt.style.cssText = 'color:#8fa3bb;margin:0;white-space:nowrap';
+    dt.style.cssText = 'color:#555;margin:0;white-space:nowrap';
     const dd = el('dd', null, 'N/A');
-    dd.style.cssText = 'color:#e6edf3;margin:0;font-variant-numeric:tabular-nums';
+    dd.style.cssText = 'color:#000;margin:0;font-variant-numeric:tabular-nums';
     sanityDl.appendChild(dt);
     sanityDl.appendChild(dd);
     return dd;
@@ -390,7 +390,7 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       const section = el('div');
       section.style.cssText = 'margin-bottom:12px';
       const h3 = el('h3', null, CAT_LABEL[cat]);
-      h3.style.cssText = 'font-size:12px;font-weight:600;color:#4da3ff;margin:8px 0 4px;text-transform:uppercase;letter-spacing:.5px';
+      h3.style.cssText = 'font-size:12px;font-weight:600;color:#0046D5;margin:8px 0 4px;text-transform:uppercase;letter-spacing:.5px';
       section.appendChild(h3);
 
       for (const { schema, entries } of items) {
@@ -407,18 +407,18 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       const section = el('div');
       section.style.cssText = 'margin-bottom:12px';
       const h3 = el('h3');
-      h3.style.cssText = 'font-size:12px;font-weight:600;color:#f0a030;margin:8px 0 4px';
+      h3.style.cssText = 'font-size:12px;font-weight:600;color:#B25000;margin:8px 0 4px';
       h3.textContent = L('未知のキーワード', 'Unknown keywords');
       section.appendChild(h3);
       const note = el('div', 'msg', L('以下の行は変更せず保存されます。', 'These lines are preserved unchanged.'));
-      note.style.cssText = 'color:#8fa3bb;font-size:11.5px;margin-bottom:6px';
+      note.style.cssText = 'color:#555;font-size:11.5px;margin-bottom:6px';
       section.appendChild(note);
       for (const kw of unknownKws) {
         const entries = parsed.parsed.get(kw) || [];
         for (const entry of entries) {
           const badge = el('div');
-          badge.style.cssText = 'padding:3px 8px;background:#1a1000;border:1px solid #f0a030;' +
-            'border-radius:4px;font-size:11.5px;color:#f0c060;font-family:monospace;margin-bottom:3px';
+          badge.style.cssText = 'padding:3px 8px;background:#FFF8DC;border:1px solid #C9A227;' +
+            'border-radius:2px;font-size:11.5px;color:#7A5C00;font-family:monospace;margin-bottom:3px';
           badge.textContent = entry.rawLine.trim();
           section.appendChild(badge);
         }
@@ -448,8 +448,8 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
 
     if (schema.type === 'bool') {
       const sel = document.createElement('select');
-      sel.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
-        'background:#0b1017;color:#e6edf3;font-size:12px';
+      sel.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #7F9DB9;border-radius:2px;' +
+        'background:#fff;color:#000;font-size:12px';
       [['', L('（未設定）', '(unset)')], ['TRUE', 'TRUE'], ['FALSE', 'FALSE']].forEach(([v, t]) => {
         sel.appendChild(Object.assign(document.createElement('option'), { value: v, textContent: t }));
       });
@@ -477,8 +477,8 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
         inp.type = 'number';
         inp.step = 'any';
         inp.value = parts[i].num !== null ? parts[i].num : '';
-        inp.style.cssText = 'flex:1;min-width:0;padding:5px 6px;border:1px solid #2a3647;border-radius:6px;' +
-          'background:#0b1017;color:#e6edf3;font-size:12px';
+        inp.style.cssText = 'flex:1;min-width:0;padding:5px 6px;border:1px solid #7F9DB9;border-radius:2px;' +
+          'background:#fff;color:#000;font-size:12px';
         inp.addEventListener('change', () => {
           onChange(inputs3.map((x, j) => (x.value || '0') + (suffixes[j] || '')).join(' ') +
                    (vecComment ? ' ' + vecComment : ''));
@@ -490,7 +490,7 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       const sfx = suffixes.find((s) => s) || '';
       if (sfx) {
         const lab = el('span', null, sfx);
-        lab.style.cssText = 'flex:none;color:#8fa3bb;font-size:11px;font-family:monospace';
+        lab.style.cssText = 'flex:none;color:#555;font-size:11px;font-family:monospace';
         wrap3.appendChild(lab);
       }
       inputEl = wrap3;
@@ -510,8 +510,8 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
         const inp = document.createElement('input');
         inp.type = 'text';
         inp.value = currentVal;
-        inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
-          'background:#0b1017;color:#e6edf3;font-size:12px';
+        inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #7F9DB9;border-radius:2px;' +
+          'background:#fff;color:#000;font-size:12px';
         inp.addEventListener('change', () => { onChange(inp.value); });
         inputEl = inp;
       } else {
@@ -521,15 +521,15 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
         inp.type = 'number';
         inp.step = 'any';
         inp.value = num !== null ? num : '';
-        inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
-          'background:#0b1017;color:#e6edf3;font-size:12px';
+        inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #7F9DB9;border-radius:2px;' +
+          'background:#fff;color:#000;font-size:12px';
         inp.addEventListener('change', () => {
           onChange(inp.value + suffix + (numComment ? ' ' + numComment : ''));
         });
         wrapN.appendChild(inp);
         if (suffix) {
           const lab = el('span', null, suffix);
-          lab.style.cssText = 'flex:none;color:#8fa3bb;font-size:11px;font-family:monospace';
+          lab.style.cssText = 'flex:none;color:#555;font-size:11px;font-family:monospace';
           wrapN.appendChild(lab);
         }
         inputEl = wrapN;
@@ -543,8 +543,8 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       inp.type = 'number';
       inp.step = '1';
       inp.value = intBody.trim();
-      inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
-        'background:#0b1017;color:#e6edf3;font-size:12px';
+      inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #7F9DB9;border-radius:2px;' +
+        'background:#fff;color:#000;font-size:12px';
       inp.addEventListener('change', () => {
         onChange(String(Math.round(Number(inp.value))) + (intComment ? ' ' + intComment : ''));
       });
@@ -555,8 +555,8 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       const inp = document.createElement('input');
       inp.type = 'text';
       inp.value = currentVal;
-      inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #2a3647;border-radius:6px;' +
-        'background:#0b1017;color:#e6edf3;font-size:12px';
+      inp.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #7F9DB9;border-radius:2px;' +
+        'background:#fff;color:#000;font-size:12px';
       inp.addEventListener('change', () => { onChange(inp.value); });
       inputEl = inp;
     }
@@ -564,7 +564,7 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
     // If the keyword is absent, show a faint "+ add" link instead of the input.
     if (!firstEntry && schema.args !== 0) {
       const addLink = el('a', null, L('＋追加', '+ Add'));
-      addLink.style.cssText = 'color:#4da3ff;font-size:11.5px;cursor:pointer;text-decoration:none';
+      addLink.style.cssText = 'color:#0046D5;font-size:11.5px;cursor:pointer;text-decoration:none';
       addLink.href = '#';
       addLink.addEventListener('click', (e) => {
         e.preventDefault();
@@ -575,7 +575,7 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       const rowEl = el('div');
       rowEl.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:3px';
       const kwSpan = el('span', null, schema.kw);
-      kwSpan.style.cssText = 'color:#4a5a6a;font-size:11.5px;font-family:monospace;flex:0 0 7em';
+      kwSpan.style.cssText = 'color:#999;font-size:11.5px;font-family:monospace;flex:0 0 7em';
       rowEl.appendChild(kwSpan);
       rowEl.appendChild(addLink);
       outer.appendChild(rowEl);
@@ -603,9 +603,9 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
       const rowEl = el('div');
       rowEl.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:3px';
       const kwSpan = el('span', null, schema.kw);
-      kwSpan.style.cssText = 'color:#8fa3bb;font-size:11.5px;font-family:monospace;flex:0 0 7em';
+      kwSpan.style.cssText = 'color:#555;font-size:11.5px;font-family:monospace;flex:0 0 7em';
       const hintSpan = el('span', null, hint);
-      hintSpan.style.cssText = 'color:#8fa3bb;font-size:11px';
+      hintSpan.style.cssText = 'color:#555;font-size:11px';
       rowEl.appendChild(kwSpan);
       rowEl.appendChild(chk);
       rowEl.appendChild(hintSpan);
@@ -621,7 +621,7 @@ export function mountDatEditor(container, { getBytes, setBytes, LANG, el, row })
     const rowEl = el('div');
     rowEl.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:3px';
     const kwSpan = el('span', null, label);
-    kwSpan.style.cssText = 'color:#8fa3bb;font-size:11.5px;font-family:monospace;flex:0 0 9em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    kwSpan.style.cssText = 'color:#555;font-size:11.5px;font-family:monospace;flex:0 0 9em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
     kwSpan.title = hint;
     rowEl.appendChild(kwSpan);
     rowEl.appendChild(inputEl);

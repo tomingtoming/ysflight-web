@@ -1,4 +1,4 @@
-// studio-scenery.js — Scenery Studio (🏝 マップスタジオ)
+// studio-scenery.js — Scenery Studio (マップスタジオ)
 // Full-screen map editor: the canvas fills the main work area.
 // Drawing/placement logic ported verbatim from workbench-page.js islandCard().
 
@@ -16,8 +16,9 @@ import {
 // Bilingual strings (island keys verbatim from workbench-page.js S.ja / S.en).
 const S = ({
   ja: {
-    title: '🏝 マップスタジオ',
-    isTitle: '🏝 マップ',
+    title: 'マップスタジオ',
+    sub: '海岸線を描いて島を作り、置き物・山・滑走路・開始地点を配置。保存した作品はワークベンチとゲームに並びます。',
+    isTitle: 'マップ',
     isIntro: 'ドラッグで海岸線を描くと島になります（何個でも）。島は本物の陸地＝降りられます。マップは16km四方。',
     isName: 'マップ名（英数字）',
     isSea: '海の色', isSky: '空の色', isLand: '島の色',
@@ -25,13 +26,13 @@ const S = ({
     saveTitle: '保存',
     isMake: 'マップを保存する',
     isEmptyOk: '（島ゼロでも保存できます＝ただの海）',
-    isUndo: '↩ 1つ戻す', isClear: '全部消す',
-    modeDraw: '✏️ 島を描く',
-    modeObject: '🚢 置き物',
-    modeMountain: '⛰ 山',
-    modeStart: '🛫 スタート',
-    modeRunway: '🛬 滑走路',
-    modeSelect: '🖱 選択',
+    isUndo: '元に戻す', isClear: '全部消す',
+    modeDraw: '島を描く',
+    modeObject: '置き物',
+    modeMountain: '山',
+    modeStart: 'スタート',
+    modeRunway: '滑走路',
+    modeSelect: '選択',
     modeHint: {
       select: 'クリックで選択・ドラッグで移動（島は頂点もつかめます）。数値で位置・向きを編集、複製・削除も',
       draw: 'ドラッグで海岸線を描くと島になります',
@@ -49,24 +50,25 @@ const S = ({
     stAlt: '開始高度 (m)',
     stSpeed: '開始速度 (m/s)',
     selNone: '（何も選択されていません — 地図上の要素をクリック）',
-    selKind: { island: '🏝 島', object: '🚢 置き物', mountain: '⛰ 山', start: '🛫 スタート', runway: '🛬 滑走路' },
+    selKind: { island: '島', object: '置き物', mountain: '山', start: 'スタート', runway: '滑走路' },
     selX: '東西 (m)', selZ: '南北 (m)',
     selVerts: (n) => '頂点 ' + n + ' 個',
-    selDup: '⧉ 複製', selDel: '🗑 削除',
-    rwIls: '📡 ILS（計器進入）',
+    selDup: '複製', selDel: '削除',
+    rwIls: 'ILS（計器進入）',
     rwVaid: '進入角指示灯',
     vaidNone: 'なし', vaidPapi: 'PAPI', vaidVasi: 'VASI',
     isDone: (n, k) => '✓ マップ「' + n + '」（島 ' + k + ' 個）を保存しました',
     flyWhat: 'テスト飛行の機体',
-    fly: (n) => '🛫 ' + n + ' で飛ぶ',
-    libEditingBadge: (n) => '✏️ 編集中: ' + n,
+    fly: (n) => n + ' で離陸',
+    libEditingBadge: (n) => '編集中: ' + n,
     errorPrefix: 'エラー: ',
     working: '作業中…',
     usageTitle: '使い方',
   },
   en: {
-    title: '🏝 Scenery Studio',
-    isTitle: '🏝 Map',
+    title: 'Scenery Studio',
+    sub: 'Draw coastlines into islands, then place objects, mountains, runways and start points. Saved works appear on the workbench and in the game.',
+    isTitle: 'Map',
     isIntro: 'Drag to draw coastlines — each stroke becomes an island (as many as you like). Islands are real, landable ground. The map is 16km across.',
     isName: 'Map name (ASCII)',
     isSea: 'Sea color', isSky: 'Sky color', isLand: 'Island color',
@@ -74,13 +76,13 @@ const S = ({
     saveTitle: 'Save',
     isMake: 'Save the map',
     isEmptyOk: '(Zero islands is fine too — plain sea)',
-    isUndo: '↩ Undo', isClear: 'Clear all',
-    modeDraw: '✏️ Draw islands',
-    modeObject: '🚢 Objects',
-    modeMountain: '⛰ Mountains',
-    modeStart: '🛫 Starts',
-    modeRunway: '🛬 Runways',
-    modeSelect: '🖱 Select',
+    isUndo: 'Undo', isClear: 'Clear all',
+    modeDraw: 'Draw islands',
+    modeObject: 'Objects',
+    modeMountain: 'Mountains',
+    modeStart: 'Starts',
+    modeRunway: 'Runways',
+    modeSelect: 'Select',
     modeHint: {
       select: 'Click to select, drag to move (islands: grab a vertex too). Edit numbers, duplicate or delete',
       draw: 'Drag to draw coastlines — each stroke becomes an island',
@@ -98,17 +100,17 @@ const S = ({
     stAlt: 'Start altitude (m)',
     stSpeed: 'Start speed (m/s)',
     selNone: '(nothing selected — click an element on the map)',
-    selKind: { island: '🏝 Island', object: '🚢 Object', mountain: '⛰ Mountain', start: '🛫 Start', runway: '🛬 Runway' },
+    selKind: { island: 'Island', object: 'Object', mountain: 'Mountain', start: 'Start', runway: 'Runway' },
     selX: 'East (m)', selZ: 'North (m)',
     selVerts: (n) => n + ' vertices',
-    selDup: '⧉ Duplicate', selDel: '🗑 Delete',
-    rwIls: '📡 ILS (instrument approach)',
+    selDup: 'Duplicate', selDel: 'Delete',
+    rwIls: 'ILS (instrument approach)',
     rwVaid: 'Approach slope lights',
     vaidNone: 'None', vaidPapi: 'PAPI', vaidVasi: 'VASI',
     isDone: (n, k) => '✓ Saved map "' + n + '" (' + k + ' island' + (k === 1 ? '' : 's') + ')',
     flyWhat: 'Test-fly aircraft',
-    fly: (n) => '🛫 Fly ' + n,
-    libEditingBadge: (n) => '✏️ Editing: ' + n,
+    fly: (n) => 'Fly ' + n,
+    libEditingBadge: (n) => 'Editing: ' + n,
     errorPrefix: 'Error: ',
     working: 'Working…',
     usageTitle: 'How to use',
@@ -116,7 +118,7 @@ const S = ({
 })[LANG];
 
 async function main() {
-  const { rail, main: mainEl } = studioChrome(S.title);
+  const { rail, main: mainEl } = studioChrome(S.title, S.sub);
 
   // ── rail: map settings ────────────────────────────────────────────────────────
 
@@ -151,7 +153,7 @@ async function main() {
     select: S.modeSelect, draw: S.modeDraw, object: S.modeObject, mountain: S.modeMountain, start: S.modeStart, runway: S.modeRunway,
   };
   const legend = el('div');
-  legend.style.cssText = 'color:#7d93b0;font-size:11.5px';
+  legend.style.cssText = 'color:#555;font-size:11.5px';
   for (const [k, hint] of Object.entries(S.modeHint)) {
     const li = el('div');
     li.style.marginBottom = '4px';
@@ -164,7 +166,7 @@ async function main() {
   // flex:none slim bar above the canvas; per-mode controls live here too.
 
   const toolbar = el('div');
-  toolbar.style.cssText = 'flex:none;padding:8px 12px;border-bottom:1px solid #2a3647;background:#0d141d';
+  toolbar.style.cssText = 'flex:none;padding:8px 12px;border-bottom:1px solid #ACA899;background:#ECE9D8';
 
   // Top sub-row: mode buttons | hint text (flex:1) | undo | clear
   const toolRow = el('div');
@@ -177,7 +179,7 @@ async function main() {
   modeBar.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap';
 
   const modeHintEl = el('span');
-  modeHintEl.style.cssText = 'flex:1;min-width:0;color:#7d93b0;font-size:11px;padding:0 4px';
+  modeHintEl.style.cssText = 'flex:1;min-width:0;color:#555;font-size:11px;padding:0 4px';
   modeHintEl.textContent = S.modeHint.draw;
 
   const undoBtn  = el('button', null, S.isUndo);
@@ -188,20 +190,20 @@ async function main() {
     const i = Object.assign(document.createElement('input'), {
       type: 'number', value: String(v), min: String(min), max: String(max),
     });
-    i.style.cssText = 'width:' + (w || 80) + 'px;padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+    i.style.cssText = 'width:' + (w || 80) + 'px;padding:4px 7px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:12.5px';
     return i;
   };
   const clab = (t) => {
     const s = el('span', null, t);
-    s.style.cssText = 'color:#8fa3bb;font-size:12px;white-space:nowrap';
+    s.style.cssText = 'color:#555;font-size:12px;white-space:nowrap';
     return s;
   };
 
   // Object mode controls
   const objSel = document.createElement('select');
-  objSel.style.cssText = 'padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px;max-width:180px';
+  objSel.style.cssText = 'padding:4px 7px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:12.5px;max-width:180px';
   for (const o of OBJECT_PALETTE) {
-    objSel.appendChild(Object.assign(el('option'), { value: o.nam, textContent: o.glyph + ' ' + (LANG === 'ja' ? o.ja : o.en) }));
+    objSel.appendChild(Object.assign(el('option'), { value: o.nam, textContent: LANG === 'ja' ? o.ja : o.en }));
   }
   const objHead = numIn(0, 0, 359, 70);
   const objCtl = el('div');
@@ -231,7 +233,7 @@ async function main() {
   // the select panel for an existing runway).
   const ilsCheck = (get, set) => {
     const lb = el('label');
-    lb.style.cssText = 'display:inline-flex;align-items:center;gap:4px;color:#8fa3bb;font-size:12px;white-space:nowrap;cursor:pointer';
+    lb.style.cssText = 'display:inline-flex;align-items:center;gap:4px;color:#555;font-size:12px;white-space:nowrap;cursor:pointer';
     const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !!get() });
     cb.addEventListener('change', () => set(cb.checked));
     lb.appendChild(cb);
@@ -240,7 +242,7 @@ async function main() {
   };
   const vaidSel = (get, set) => {
     const sl = document.createElement('select');
-    sl.style.cssText = 'padding:5px 8px;border:1px solid #2a3647;border-radius:5px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+    sl.style.cssText = 'padding:4px 7px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:12.5px';
     for (const [v, label] of [['', S.vaidNone], ['papi', S.vaidPapi], ['vasi', S.vaidVasi]]) {
       sl.appendChild(Object.assign(el('option'), { value: v, textContent: label }));
     }
@@ -303,13 +305,15 @@ async function main() {
   // Canvas keeps 640×640 internal resolution; CSS size tracks the container via
   // ResizeObserver so pointer math (getBoundingClientRect-normalized) stays valid.
 
+  // The map document sits on the era's gray app workspace; the canvas itself
+  // keeps drawing the user's sea/land colors (the document, not chrome).
   const canvasWrap = el('div');
-  canvasWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;padding:12px;overflow:hidden;min-height:0';
+  canvasWrap.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;padding:12px;overflow:hidden;min-height:0;background:#808080';
 
   const canvas = document.createElement('canvas');
   canvas.width  = 640;
   canvas.height = 640;
-  canvas.style.cssText = 'touch-action:none;cursor:crosshair;border:1px solid #2a3647;border-radius:8px;display:block';
+  canvas.style.cssText = 'touch-action:none;cursor:crosshair;border:1px solid;border-color:#666 #fff #fff #666;display:block';
 
   // Largest centered square that fits in the padded container.
   new ResizeObserver(() => {
@@ -418,28 +422,52 @@ async function main() {
       }
     }
 
+    // Placed objects: a white square marker with a short text label — the
+    // 2002 map-editor idiom (the emoji glyphs retired with the XP tone).
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     for (const o of objects) {
       const [x, y] = fromWorld([o.x, o.z]);
-      const glyph = (OBJECT_PALETTE.find((p) => p.nam === o.nam) || {}).glyph || '📦';
-      ctx.font = '20px sans-serif';
-      ctx.fillText(glyph, x, y);
+      const pal = OBJECT_PALETTE.find((p) => p.nam === o.nam);
+      const label = (pal && pal.mark && pal.mark[LANG]) || o.nam;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x - 3, y - 3, 6, 6);
+      ctx.strokeStyle = '#000';
+      ctx.strokeRect(x - 3.5, y - 3.5, 7, 7);
+      ctx.font = '10px sans-serif';
+      ctx.lineWidth = 3;
+      ctx.strokeText(label, x, y - 10);
+      ctx.fillText(label, x, y - 10);
+      ctx.lineWidth = 1;
     }
 
     for (const sp of starts) {
       const [x, y] = fromWorld([sp.x, sp.z]);
       // Compass 0 = north = canvas -y
-      const hx = Math.sin((sp.headingDeg || 0) * Math.PI / 180);
-      const hy = -Math.cos((sp.headingDeg || 0) * Math.PI / 180);
+      const a = (sp.headingDeg || 0) * Math.PI / 180;
+      const hx = Math.sin(a);
+      const hy = -Math.cos(a);
       ctx.strokeStyle = '#ffd34d';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(x, y);
       ctx.lineTo(x + hx * 16, y + hy * 16);
       ctx.stroke();
-      ctx.font = '16px sans-serif';
-      ctx.fillText('🛫', x, y);
+      // A yellow triangle pointing along the heading marks the spawn.
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(a);
+      ctx.fillStyle = '#ffd34d';
+      ctx.beginPath();
+      ctx.moveTo(0, -7);
+      ctx.lineTo(5, 6);
+      ctx.lineTo(-5, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
     }
     ctx.lineWidth = 1;
 
@@ -709,7 +737,7 @@ async function main() {
       const stock   = await stockIndex();
       const allIds  = [DEFAULT_FLY_AIRCRAFT, ...stock.map((a) => a.identify).filter((id) => id !== DEFAULT_FLY_AIRCRAFT)];
       const flySel  = document.createElement('select');
-      flySel.style.cssText = 'flex:1;min-width:0;padding:6px 9px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:13px';
+      flySel.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:13px';
       for (const id of allIds.slice(0, 20)) {
         flySel.appendChild(Object.assign(el('option'), { value: id, textContent: id }));
       }

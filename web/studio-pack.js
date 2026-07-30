@@ -26,17 +26,18 @@ import { zipSync } from './vendor/fflate.js';
 
 const S = ({
   ja: {
-    title: '📦 パックスタジオ',
-    availTitle: '📚 マイ作品',
+    title: 'パックスタジオ',
+    sub: '自分の作品をまとめて1つのパックに。保存すればマイ作品に並び、zipで配布もできます。',
+    availTitle: 'マイ作品',
     availIntro: '機体スタジオ・マップスタジオで作った作品。「＋」でこのパックに収録します',
-    availEmpty: '（収録できる作品がまだありません — ✈️/🏝 スタジオで作りましょう）',
-    membersTitle: '📦 このパックの収録内容',
+    availEmpty: '（収録できる作品がまだありません — 機体/マップスタジオで作りましょう）',
+    membersTitle: 'このパックの収録内容',
     membersEmpty: '（まだ空です — 左の作品を「＋」で収録）',
     add: '＋', addTitle: 'このパックに収録する',
     checkTitle: 'まとめて収録する対象に選ぶ',
     searchPh: '名前で検索…',
-    filterAll: 'すべて', filterAir: '✈️ 機体', filterSce: '🏝 マップ',
-    addSelected: (n) => '☑ 選択した ' + n + ' 件を収録',
+    filterAll: 'すべて', filterAir: '機体', filterSce: 'マップ',
+    addSelected: (n) => '選択した ' + n + ' 件を収録',
     addedN: (n) => '✓ ' + n + ' 件を収録しました',
     preselectNote: '前回保存したパックの収録セットを自動選択しています（チェックを外して調整できます）',
     noMatch: '（検索・フィルタに一致する作品がありません）',
@@ -54,15 +55,15 @@ const S = ({
     addedAtLabel: '収録日時', addedAtUnknown: '（記録なし — 旧形式のレシピ）',
     filesLabel: '含有ファイル',
     orphanNote: '元の作品は削除済み — このパック内のスナップショットだけが残っています',
-    kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
-    packTitle: '🧩 パック',
-    packIntro: '作品をまとめた「パック」も1つの作品です。保存するとマイ作品に並び、✏️ で収録を編集し直せます。',
+    kindLabel: { aircraft: '機体', scenery: 'マップ', mixed: 'パック', other: 'パック' },
+    packTitle: 'パック',
+    packIntro: '作品をまとめた「パック」も1つの作品です。保存するとマイ作品に並び、「編集」で収録を編集し直せます。',
     packName: 'パック名',
     save: '作品として保存',
     saved: (n, k) => '✓ パック「' + n + '」（' + k + ' 作品収録）を保存しました',
     needMembers: '収録する作品を選んでください',
     needName: 'パック名を入れてください',
-    attrTitle: '🏷 作者・再配布条件',
+    attrTitle: '作者・再配布条件',
     attrIntro: 'パックに「出自の記録」として同梱します（レシピとzip内README.txtに転記。配布機能ではなく、強制・検証もしません）。未入力なら何も記録しません。',
     attrAuthor: '作者名',
     attrPolicy: '再配布',
@@ -78,40 +79,41 @@ const S = ({
     },
     creditLabel: '原作者クレジット',
     creditPh: '（任意）この作品の原作者・出典のメモ',
-    exportTitle: '⬇ 配布用に書き出す',
+    exportTitle: '配布用に書き出す',
     exportIntro: '保存済みのパックをzipファイルとして手元にダウンロードします（YSFLIGHT本体でも使える形式）',
-    exportBtn: '⬇ zipをダウンロード',
+    exportBtn: 'zipをダウンロード',
     exportNeedSave: '（先に保存してください）',
     exported: (n) => '✓ ' + n + '.zip を書き出しました',
-    updTitle: '⤴️ ZIPから更新',
+    updTitle: 'ZIPから更新',
     updIntro: '編集中のパックの中身を、選んだ zip の内容で差し替えます（パック名・有効/無効・作者情報は引き継ぎ）。書き出した zip を外部で手直しした版の取り込みに。',
-    updBtn: '⤴️ zipを選んで更新',
-    updNeedEdit: '（✏️ で保存済みのパックを開いているときに使えます）',
+    updBtn: 'zipを選んで更新',
+    updNeedEdit: '（「編集」で保存済みのパックを開いているときに使えます）',
     updConfirm: (n, d, hasRecipe) => '「' + n + '」を選択した zip の内容で更新します。\n' +
       '追加 ' + d.added.length + ' ／ 削除 ' + d.removed.length + ' ／ 変更 ' + d.changed.length + ' ／ 変更なし ' + d.unchanged + '\n' +
       '（有効/無効の状態と作者情報は引き継がれます）' +
       (hasRecipe ? '' : '\n⚠ この zip にはレシピ（workbench.json）が無いため、更新後はマイ作品の棚から外れ、ゲームページの「追加パック」欄での管理になります'),
     updSame: '選択した zip は今の内容と同一です（更新は不要でした）',
     updDoneNoRecipe: '✓ 更新しました。zip にレシピが無いため、以降はゲームページの「追加パック」欄で管理されます',
-    editingBadge: (n) => '✏️ 編集中: ' + n,
+    editingBadge: (n) => '編集中: ' + n,
     working: '作業中…',
     errorPrefix: 'エラー: ',
-    fly: '🛫', flyTitle: 'テスト飛行（ゲームページに移動します）',
+    fly: '離陸', flyTitle: 'テスト飛行（ゲームページに移動します）',
     flyMemberAirTitle: (idn) => 'この機体でテスト飛行: ' + idn + '（ゲームページに移動。インストール済みの内容で飛びます）',
     flyMemberSceTitle: (idn) => 'このマップで飛ぶ: ' + idn + '（ゲームページに移動）',
   },
   en: {
-    title: '📦 Pack Studio',
-    availTitle: '📚 My creations',
+    title: 'Pack Studio',
+    sub: 'Curate your own works into one pack — a work itself, exportable as a distributable zip.',
+    availTitle: 'My creations',
     availIntro: 'Works made in the aircraft/scenery studios. “＋” adds one to this pack',
-    availEmpty: '(Nothing to include yet — make something in the ✈️/🏝 studios)',
-    membersTitle: '📦 In this pack',
+    availEmpty: '(Nothing to include yet — make something in the aircraft/scenery studios)',
+    membersTitle: 'In this pack',
     membersEmpty: '(Empty — add works from the left with “＋”)',
     add: '＋', addTitle: 'Include in this pack',
     checkTitle: 'Select for bulk add',
     searchPh: 'Search by name…',
-    filterAll: 'All', filterAir: '✈️ Aircraft', filterSce: '🏝 Maps',
-    addSelected: (n) => '☑ Add ' + n + ' selected',
+    filterAll: 'All', filterAir: 'Aircraft', filterSce: 'Maps',
+    addSelected: (n) => 'Add ' + n + ' selected',
     addedN: (n) => '✓ Added ' + n + ' work(s)',
     preselectNote: 'Your last saved pack’s set is pre-selected (uncheck to adjust)',
     noMatch: '(No works match the search / filter)',
@@ -129,15 +131,15 @@ const S = ({
     addedAtLabel: 'Added', addedAtUnknown: '(not recorded — old recipe)',
     filesLabel: 'Files',
     orphanNote: 'The source work was deleted — only this pack’s snapshot remains',
-    kindGlyph: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
-    packTitle: '🧩 Pack',
-    packIntro: 'A pack of works is a work itself: saving puts it on your shelf, and ✏️ re-opens it to re-curate.',
+    kindLabel: { aircraft: 'aircraft', scenery: 'scenery', mixed: 'pack', other: 'pack' },
+    packTitle: 'Pack',
+    packIntro: 'A pack of works is a work itself: saving puts it on your shelf, and Edit re-opens it to re-curate.',
     packName: 'Pack name',
     save: 'Save as a work',
     saved: (n, k) => '✓ Saved pack “' + n + '” (' + k + ' work' + (k === 1 ? '' : 's') + ')',
     needMembers: 'Add at least one work',
     needName: 'Enter a pack name',
-    attrTitle: '🏷 Author & redistribution terms',
+    attrTitle: 'Author & redistribution terms',
     attrIntro: 'Recorded INSIDE the pack as provenance (transcribed into the recipe and a README.txt in the zip). Not a distribution feature; nothing is enforced or verified. Leave empty to record nothing.',
     attrAuthor: 'Author',
     attrPolicy: 'Redistribution',
@@ -153,25 +155,25 @@ const S = ({
     },
     creditLabel: 'Credit (original author)',
     creditPh: '(optional) note the original author / source of this work',
-    exportTitle: '⬇ Export for sharing',
+    exportTitle: 'Export for sharing',
     exportIntro: 'Download the saved pack as a zip (also usable in desktop YSFLIGHT)',
-    exportBtn: '⬇ Download zip',
+    exportBtn: 'Download zip',
     exportNeedSave: '(Save first)',
     exported: (n) => '✓ Exported ' + n + '.zip',
-    updTitle: '⤴️ Update from ZIP',
+    updTitle: 'Update from ZIP',
     updIntro: 'Replace the edited pack\'s contents with a chosen zip (name, on/off state, and author info carry over). For re-importing an exported zip you touched up outside.',
-    updBtn: '⤴️ Choose a zip & update',
-    updNeedEdit: '(Available while editing a saved pack via ✏️)',
+    updBtn: 'Choose a zip & update',
+    updNeedEdit: '(Available while editing a saved pack via Edit)',
     updConfirm: (n, d, hasRecipe) => 'Update “' + n + '” with the selected zip?\n' +
       'Added ' + d.added.length + ' / removed ' + d.removed.length + ' / changed ' + d.changed.length + ' / unchanged ' + d.unchanged + '\n' +
       '(The on/off state and author info carry over.)' +
       (hasRecipe ? '' : '\n⚠ This zip has no recipe (workbench.json): after the update the pack leaves this shelf and is managed in the game page\'s add-on panel'),
     updSame: 'The selected zip is identical to the current contents (nothing to update)',
     updDoneNoRecipe: '✓ Updated. The zip carries no recipe, so the pack is now managed in the game page\'s add-on panel',
-    editingBadge: (n) => '✏️ Editing: ' + n,
+    editingBadge: (n) => 'Editing: ' + n,
     working: 'Working…',
     errorPrefix: 'Error: ',
-    fly: '🛫', flyTitle: 'Test-fly (moves to the game page)',
+    fly: 'Fly', flyTitle: 'Test-fly (moves to the game page)',
     flyMemberAirTitle: (idn) => 'Test-fly this aircraft: ' + idn + ' (moves to the game page; flies the installed content)',
     flyMemberSceTitle: (idn) => 'Fly on this map: ' + idn + ' (moves to the game page)',
   },
@@ -260,12 +262,12 @@ const composeZip = (packName) => zipSync(composeEntries(members, packName, attrV
 
 // --- page -------------------------------------------------------------------------
 
-const { rail, main } = studioChrome(S.title);
+const { rail, main } = studioChrome(S.title, S.sub);
 
 // main: two columns — my creations (left) | this pack's members (right).
 main.style.cssText += ';flex-direction:row;overflow:hidden';
 const availCol = el('div');
-availCol.style.cssText = 'flex:1;min-width:0;overflow-y:auto;padding:12px 14px;border-right:1px solid #2a3647';
+availCol.style.cssText = 'flex:1;min-width:0;overflow-y:auto;padding:12px 14px;border-right:1px solid #ACA899';
 const memberCol = el('div');
 memberCol.style.cssText = 'flex:1;min-width:0;overflow-y:auto;padding:12px 14px';
 main.appendChild(availCol);
@@ -273,18 +275,18 @@ main.appendChild(memberCol);
 
 const msg = el('div', 'msg');
 
-const itemRow = (glyph, name, note) => {
+const itemRow = (kindText, name, note) => {
   const r = el('div');
   r.style.cssText =
-    'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #2a3647;' +
-    'border-radius:7px;margin-bottom:6px;background:#0b1017';
-  r.appendChild(Object.assign(el('span'), { textContent: glyph, style: 'flex:none' }));
+    'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #ACA899;' +
+    'border-radius:2px;margin-bottom:6px;background:#fff';
+  r.appendChild(Object.assign(el('span'), { textContent: kindText, style: 'flex:none;color:#777;font-size:11px' }));
   const nm = el('span', null, name);
-  nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6edf3;font-size:13.5px';
+  nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#000;font-size:13.5px';
   r.appendChild(nm);
   if (note) {
     const nt = el('span', null, note);
-    nt.style.cssText = 'flex:none;color:#7d93b0;font-size:10.5px;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    nt.style.cssText = 'flex:none;color:#777;font-size:10.5px;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     r.appendChild(nt);
   }
   return r;
@@ -323,10 +325,10 @@ function renderAvailRows() {
     return;
   }
   for (const c of list) {
-    const r = itemRow(S.kindGlyph[c.kind] || '📦', c.name || c.id, c.identities[0] || c.sceneryIdent || '');
+    const r = itemRow(S.kindLabel[c.kind] || S.kindLabel.other, c.name || c.id, c.identities[0] || c.sceneryIdent || '');
     const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: selected.has(c.id) });
     cb.title = S.checkTitle;
-    cb.style.cssText = 'flex:none;accent-color:#4da3ff;margin:0';
+    cb.style.cssText = 'flex:none;accent-color:#316AC5;margin:0';
     cb.addEventListener('change', () => {
       if (cb.checked) selected.add(c.id); else selected.delete(c.id);
       updateBulkAdd();
@@ -375,7 +377,7 @@ renderAvail = () => {
   const bar = el('div');
   bar.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
   const search = Object.assign(document.createElement('input'), { type: 'search', placeholder: S.searchPh, value: availFilter.term });
-  search.style.cssText = 'flex:1;min-width:0;padding:5px 9px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+  search.style.cssText = 'flex:1;min-width:0;padding:5px 9px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:12.5px';
   search.addEventListener('input', () => { availFilter.term = search.value; renderAvailRows(); });
   const kindSel = document.createElement('select');
   for (const [v, label] of [['all', S.filterAll], ['aircraft', S.filterAir], ['scenery', S.filterSce]]) {
@@ -385,7 +387,7 @@ renderAvail = () => {
     kindSel.appendChild(o);
   }
   kindSel.value = availFilter.kind;
-  kindSel.style.cssText = 'flex:none;padding:5px 6px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:12.5px';
+  kindSel.style.cssText = 'flex:none;padding:5px 6px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:12.5px';
   kindSel.addEventListener('change', () => { availFilter.kind = kindSel.value; renderAvailRows(); });
   bar.appendChild(search);
   bar.appendChild(kindSel);
@@ -442,7 +444,7 @@ renderMembers = () => {
   // Whole-pack summary: works / files / total size.
   const sum = summarize(members);
   const sumEl = el('div', null, S.summaryLine(sum.works, sum.files, fmtBytes(sum.bytes)));
-  sumEl.style.cssText = 'color:#cfe0f5;font-size:12px;margin-bottom:8px';
+  sumEl.style.cssText = 'color:#333;font-size:12px;margin-bottom:8px';
   memberCol.appendChild(sumEl);
   // Bulk ↺: shown only when the hash diff found outdated members; the confirm
   // lists exactly what would be re-frozen before anything happens.
@@ -469,11 +471,11 @@ renderMembers = () => {
   members.forEach((m, i) => {
     const st = memberState(m, creationsCache);
     const note = st.state === 'orphan' ? S.orphanNote : (m.files.length + 'f · ' + fmtBytes(memberBytes(m)));
-    const r = itemRow(S.kindGlyph[m.kind] || '📦', m.name, note);
+    const r = itemRow(S.kindLabel[m.kind] || S.kindLabel.other, m.name, note);
     if (st.state === 'stale') {
       const badge = el('span', null, S.staleBadge);
       badge.title = S.staleTitle;
-      badge.style.cssText = 'flex:none;color:#e3b341;font-size:10.5px;border:1px solid #5c4a1a;border-radius:5px;padding:1px 6px';
+      badge.style.cssText = 'flex:none;color:#7A5C00;background:#FFF8DC;font-size:10.5px;border:1px solid #C9A227;border-radius:2px;padding:1px 6px';
       r.appendChild(badge);
     }
     const dt = smallBtn(r, m.open ? '▾' : '▸', S.detailTitle, false);
@@ -503,7 +505,7 @@ renderMembers = () => {
       });
     }
     const rm = smallBtn(r, S.remove, S.removeTitle, false);
-    rm.style.color = '#c75d6a';
+    rm.style.color = '#C00000';
     rm.addEventListener('click', () => { members.splice(i, 1); renderMembers(); });
     memberCol.appendChild(r);
     if (m.open) memberCol.appendChild(memberDetail(m));
@@ -516,16 +518,16 @@ renderMembers = () => {
 // stale hashes can't survive).
 function memberDetail(m) {
   const d = el('div');
-  d.style.cssText = 'margin:-2px 0 8px;padding:8px 10px;border:1px dashed #2a3647;border-radius:7px;font-size:11.5px;color:#8fa3bb';
+  d.style.cssText = 'margin:-2px 0 8px;padding:8px 10px;border:1px dashed #ACA899;border-radius:2px;background:#F2F1E5;font-size:11.5px;color:#555';
   d.appendChild(el('div', null,
-    (S.kindGlyph[m.kind] || '📦') + ' ' + m.kind + ' · ' + S.addedAtLabel + ': ' +
+    (S.kindLabel[m.kind] || S.kindLabel.other) + ' · ' + S.addedAtLabel + ': ' +
     (m.addedAt ? new Date(m.addedAt).toLocaleString() : S.addedAtUnknown)));
   const fl = el('div', null, S.filesLabel + ':');
   fl.style.marginTop = '4px';
   d.appendChild(fl);
   for (const f of m.files) {
     const line = el('div', null, f.path + ' · ' + fmtBytes(f.bytes.length) + ' · ');
-    line.style.cssText = 'font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;color:#7d93b0;' +
+    line.style.cssText = 'font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;color:#666;' +
       'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     const hs = el('span', null, '…');
     line.appendChild(hs);
@@ -536,9 +538,9 @@ function memberDetail(m) {
   // Per-member original-author credit (attribution) — rides in the recipe.
   const credRow = el('div');
   credRow.style.cssText = 'display:flex;gap:6px;align-items:center;margin-top:6px';
-  credRow.appendChild(Object.assign(el('span', null, S.creditLabel), { style: 'flex:none;color:#8fa3bb' }));
+  credRow.appendChild(Object.assign(el('span', null, S.creditLabel), { style: 'flex:none;color:#555' }));
   const credIn = Object.assign(document.createElement('input'), { type: 'text', value: m.credit || '', placeholder: S.creditPh });
-  credIn.style.cssText = 'flex:1;min-width:0;padding:4px 8px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:11.5px';
+  credIn.style.cssText = 'flex:1;min-width:0;padding:4px 8px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:11.5px';
   credIn.addEventListener('input', () => { m.credit = credIn.value; });
   credRow.appendChild(credIn);
   d.appendChild(credRow);
@@ -567,7 +569,7 @@ function buildRail() {
   policySel.value = 'unspecified'; // the default is ALWAYS "unspecified" — never auto-assigned
   row(rail, S.attrPolicy, policySel);
   const termsIn = Object.assign(document.createElement('textarea'), { rows: 2, placeholder: S.attrTermsPh });
-  termsIn.style.cssText = 'flex:1;min-width:0;padding:6px 9px;border:1px solid #2a3647;border-radius:6px;background:#0b1017;color:#e6edf3;font-size:12.5px;resize:vertical';
+  termsIn.style.cssText = 'flex:1;min-width:0;padding:5px 8px;border:1px solid #7F9DB9;border-radius:2px;background:#fff;color:#000;font-size:12.5px;resize:vertical;font-family:inherit';
   row(rail, S.attrTerms, termsIn);
   const urlIn = row(rail, S.attrUrl, Object.assign(document.createElement('input'), { type: 'url' }));
   attrUI = { author: authorIn, policy: policySel, terms: termsIn, url: urlIn };
