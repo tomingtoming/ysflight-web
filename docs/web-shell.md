@@ -9,8 +9,24 @@
 ──トップページ・フライト作成・ミッション・設定・パック管理・マルチロビー・
 リプレイ管理・ヘルプ──は**すべてweb側（HTML/JS）が担う**。
 
-エンジンの2Dメインメニュー（`gui/fsmenu*.cpp`）はwebのUXから退役させる
-（コードは削らずリンクしたまま残す＝上流追従のコンフリクト面を増やさない）。
+エンジンの2Dメインメニュー（`gui/fsmenu*.cpp`）は**2DのUXでは主線から退く**が、
+**退役はしない**（コードは削らずリンクしたまま残す＝上流追従のコンフリクト面を
+増やさない、だけが理由ではなくなった。下記VR条項）。
+
+**VR条項（2026-07-30裁定）**: immersiveセッション中はDOMシェルが存在できないため、
+エンジンメニューは**VR内の正規UIとして恒久現役**（WebXRレイヤー経由）。XR版の
+第二シェル（quad layerロビー）は**作らない**——VRは「2D製品の華」であり、この判断は
+実利用データ（`vr-start`/`vr-end` イベント、`web/diag.js` → `/clientlog` → Workers
+Logs）を見て再訪する。帰結として、下表の未移植残余（File > Save 完全版・
+地対空ミッション・アクロ個別デモ・Flight Record Utility・Net config）は
+**移植しない**＝エンジンメニューの恒久領域とする。
+
+**第一級動線（2026-07-30裁定）**: 2Dトップページでは、エンジンメニューへの入口
+「本家のフルメニューを開く(M)」を**第一級＝デフォルトボタン（太リング）として
+最上段に置く**。シェルのメニューが新規と日常の主線として漸進充実し、本家メニューは
+未移植残余とVRの操作盤、そして原典体験そのものへの誇りある扉。トーン&マナーは
+XP(Luna)＝原典と同時代のデスクトップアプリ（PR#82、`studio-shared.js` の
+`xpWindow` が各ページの共通額縁）。
 
 ## 成立している土台（このリポジトリで実証済み）
 
@@ -38,10 +54,10 @@
 | Sim > Endurance | `?endurance=` → `-endurance` | ✅ 増分1（本ドキュメントと同PR） |
 | Sim > Intercept | `?intercept=` → `-intercept`（fork の絶対index修正込み） | ✅ 増分3 |
 | Sim > Create Flight（機体複数・僚機/敵機・昼夜・兵装） | Create-Flightページ（`studio-flight.html`）でspec→`.yfs`生成→`-flyyfs` | ✅ 増分4＋地上物プリセット=増分8 |
-| Sim > レーシング / CAS（拡張ミッション） | `?mission=racing\|cas` → 組み込みspec→`EXTENSIO`行入り`.yfs`→`-flyyfs` | ✅ 増分12（地対空はプレイヤー=地上物のためfork待ち） |
+| Sim > レーシング / CAS（拡張ミッション） | `?mission=racing\|cas` → 組み込みspec→`EXTENSIO`行入り`.yfs`→`-flyyfs` | ✅ 増分12（地対空は移植しない＝VR条項） |
 | Sim > 着陸練習 Lv1-15 | `?landing=` → fork `-landingpractice`（`.yfs`では採点HUD/進入生成が再現できないためCLI新設が正道） | ✅ 増分10 |
 | File > Open / Mission / Recent | `-flyyfs FILE`＋IDBFSはJS管轄 | 増分4に含む |
-| File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 保留可 |
+| File > Save（飛行中の任意保存） | `-saveflight` の起動時予約で大半カバー。完全版はJS橋（rearchitecture.md 継ぎ目2） | 移植しない（VR条項） |
 | Option > Option（見た目・表示） | Settingsページ（`studio-settings.html`）→ localStorage → index.htmlが `flight.cfg` にマージ | ✅ 増分5（bool群）＋増分7（視程・機体LOD）＋増分9（煙/雲/Zバッファ・表示系・ゲームプレイ系=本家Optionダイアログとほぼパリティ。キー割当は今後） |
 | Option > キー割当（ゲームパッド） | Controlsページ（`studio-controls.html`）→ localStorage → index.htmlが `ctlassign.cfg` にマージ | ✅ 増分13（パッド軸/ボタン＋DZ。キーボード再割当UIは今後） |
 | Option > ジョイスティック較正 | **web版では構造的に不要**＝portがGamepad APIの正規化済み値を供給・YsJoyReader較正系は無効（`fsplatform_emscripten.cpp`）。REV＋DZが全て | ✅ 解消（増分13の調査で確定） |
