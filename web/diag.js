@@ -26,7 +26,10 @@
     const ev = Object.assign({ t: Date.now(), type: String(type).slice(0, 24) }, data || {});
     buf.push(ev);
     if (buf.length > 40) buf.splice(0, buf.length - 40);
-    if (type === 'error' || type === 'cerror' || type === 'unclean-end') flushSoon(2000);
+    // vr-start/vr-end ship promptly too: headset sessions are exactly the ones
+    // that can hang, so don't leave the usage event sitting in the ring buffer.
+    if (type === 'error' || type === 'cerror' || type === 'unclean-end' ||
+        type === 'vr-start' || type === 'vr-end') flushSoon(2000);
   }
 
   function snapshot() {

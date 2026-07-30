@@ -1384,9 +1384,28 @@
         setTimeout(function () { if (n.parentNode) n.remove(); }, 5000);
       });
     };
-    Module.onVrStart = function () { inVr = true; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrExit; };
+    Module.onVrStart = function () {
+      inVr = true; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrExit;
+      // VR usage signal (count in Workers Logs, filter '"type":"vr-start"'):
+      // the engine glue calls onVrStart for every entry path (corner button,
+      // portal autostart, tap overlay), so this is one event per VR session.
+      // inFlight distinguishes menu-entry from in-flight entry; the device
+      // arrives as the batch's [clientlog-meta] UA line.
+      if (globalThis.ysfwDiag) globalThis.ysfwDiag.push('vr-start', { inFlight: !!globalThis.ysfwInFlight });
+    };
     Module.onVrEnd = function () {
       inVr = false; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrEnter;
+      // Session summary next to vr-start: how long VR actually held the user
+      // (a 10s bounce and a 20min flight argue differently about investing in
+      // an in-VR lobby).  Read endReason before the branches below clear it.
+      if (globalThis.ysfwDiag) {
+        var vrStats = Module.ysfwVr && Module.ysfwVr.stats;
+        globalThis.ysfwDiag.push('vr-end', {
+          reason: (Module.ysfwVr && Module.ysfwVr.endReason) || null,
+          seconds: vrStats && vrStats.seconds ? Math.round(vrStats.seconds) : 0,
+          avgFps: vrStats && vrStats.avgFps ? Math.round(vrStats.avgFps) : 0
+        });
+      }
       // Menu-in-VR needs the WebXR layers path (XRQuadLayer). When the session
       // was auto-ended by the watchdog because the menu quad could never be
       // created (fswebxr.cpp sets endReason), explain why instead of silently
