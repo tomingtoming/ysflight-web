@@ -14,22 +14,22 @@ import { lintDnm, lintSrf } from './dnm-lint.js';
 const S = ({
   ja: {
     title: '検査',
-    intro: '組み立て中のモデルを「悪夢リンター」にかけます。実飛行で画面に化けて出た病理（N法線欠落・薄板の黒縁・ヒンジ線のZファイト…）を機械検出。',
+    intro: '組み立て中のモデルの形状を検査します。実飛行で表示くずれになりやすい問題（法線の欠落・薄い板の黒縁・ヒンジ線のちらつき など）を機械検出。',
     run: '検査する',
     none: '検査対象がありません（外観 .dnm などを割り当ててください）',
     clean: (name) => '✓ ' + name + ' — 問題なし',
     summary: (e, w, i) => '検査結果: error ' + e + ' / warn ' + w + ' / info ' + i,
-    nightmare: (n) => '悪夢第' + n + '項',
+    nightmare: (n) => '既知事例 #' + n,
     failed: (name, m) => '⚠ ' + name + ' を検査できませんでした: ' + m,
   },
   en: {
     title: 'Inspect',
-    intro: 'Run the assembled model through the "nightmare linter" — machine checks for the pathologies real flights surfaced (missing N normals, black thin-plate edges, hinge-line z-fighting...).',
+    intro: 'Check the assembled model for geometry problems that show up as rendering artifacts in flight (missing N normals, black thin-plate edges, hinge-line flicker...).',
     run: 'Inspect',
     none: 'Nothing to inspect (assign a visual .dnm first)',
     clean: (name) => '✓ ' + name + ' — clean',
     summary: (e, w, i) => 'Result: ' + e + ' error / ' + w + ' warn / ' + i + ' info',
-    nightmare: (n) => 'nightmare #' + n,
+    nightmare: (n) => 'known case #' + n,
     failed: (name, m) => '⚠ could not inspect ' + name + ': ' + m,
   },
 })[LANG];
