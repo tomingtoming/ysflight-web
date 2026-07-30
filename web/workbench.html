@@ -6,52 +6,51 @@
 <title>YSFLIGHT Web — Workbench</title>
 <meta name="robots" content="noindex">
 <style>
-  :root { color-scheme: dark; }
+  /* XP (Luna) tone — see studio-shared.js xpWindow, which frames this page. */
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 18px 14px 60px;
-    background: #0b1017; color: #e6edf3;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 14px; line-height: 1.55;
+    margin: 0; font-size: 13.5px; line-height: 1.55;
   }
-  main { max-width: 860px; margin: 0 auto; }
-  h1 { font-size: 19px; margin: 0 0 2px; }
-  h2 { font-size: 15px; margin: 0 0 2px; color: #cfe0f5; }
-  .sub { color: #7d93b0; font-size: 12px; margin: 0 0 16px; }
+  main#app { display: contents; }
+  h2 { font-size: 14px; margin: 0 0 2px; color: #0046D5; }
+  .sub { color: #555; font-size: 12px; margin: 0 0 14px; }
   .card {
-    border: 1px solid #2a3647; border-radius: 10px; background: #0d141d;
-    padding: 14px; margin-bottom: 16px;
+    border: 1px solid #D0D0BF; border-radius: 5px; background: #F2F1E5;
+    padding: 12px 14px; margin-bottom: 14px;
   }
-  .intro { color: #7d93b0; font-size: 12px; margin: 0 0 10px; }
+  .intro { color: #555; font-size: 12px; margin: 0 0 10px; }
   .row { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
-  .row > .lab { flex: none; width: 44%; max-width: 240px; color: #8fa3bb; font-size: 12.5px; }
+  .row > .lab { flex: none; width: 44%; max-width: 240px; color: #555; font-size: 12.5px; }
   .row > input[type=text], .row > input[type=number], .row > select {
-    flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid #2a3647; border-radius: 6px;
-    background: #0b1017; color: #e6edf3; font-size: 13px;
+    flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid #7F9DB9; border-radius: 2px;
+    background: #fff; color: #000; font-size: 13px;
   }
-  .row > input[type=color] { flex: none; width: 52px; height: 30px; padding: 1px; border: 1px solid #2a3647; border-radius: 6px; background: #0b1017; }
-  .row > input[type=range] { flex: 1; min-width: 0; }
-  .row .val { flex: none; width: 40px; text-align: right; color: #cfe0f5; font-size: 12px; }
+  .row > input[type=color] { flex: none; width: 52px; height: 30px; padding: 1px; border: 1px solid #7F9DB9; border-radius: 2px; background: #fff; }
+  .row > input[type=range] { flex: 1; min-width: 0; accent-color: #316AC5; }
+  .row .val { flex: none; width: 40px; text-align: right; color: #333; font-size: 12px; }
   button {
-    font-size: 13px; padding: 7px 14px; border-radius: 6px; cursor: pointer;
-    border: 1px solid #2a3647; background: #0d141d; color: #8fa3bb;
+    font-size: 13px; padding: 7px 14px; border-radius: 3.5px; cursor: pointer;
+    border: 1px solid #003C74; color: #000; font-family: inherit;
+    background: linear-gradient(180deg, #FFFFFF 0%, #F4F2E7 55%, #E5E1CE 90%, #D8D0B8 100%);
+    box-shadow: inset 0 -2px 2px rgba(160, 140, 90, 0.22);
   }
-  button.accent { border-color: #4da3ff; background: rgba(77,163,255,.14); color: #4da3ff; }
+  button:hover { box-shadow: inset 0 0 0 2px rgba(248, 179, 53, 0.65), inset 0 -2px 2px rgba(160, 140, 90, 0.18); }
+  button.accent { box-shadow: inset 0 0 0 2px rgba(70, 120, 210, 0.55), inset 0 -2px 2px rgba(160, 140, 90, 0.18); font-weight: 700; }
   button:disabled { opacity: .5; cursor: default; }
   .btnrow { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; margin-top: 8px; }
-  .msg { color: #8fa3bb; font-size: 12.5px; white-space: pre-line; min-height: 1.2em; margin-top: 8px; }
+  .msg { color: #555; font-size: 12.5px; white-space: pre-line; min-height: 1.2em; margin-top: 8px; }
   .drop {
-    display: block; padding: 18px 12px; border: 1px dashed #2a3647; border-radius: 8px;
-    color: #8fa3bb; font-size: 13px; text-align: center; cursor: pointer;
+    display: block; padding: 18px 12px; border: 1px dashed #7F9DB9; border-radius: 2px;
+    background: #fff; color: #555; font-size: 13px; text-align: center; cursor: pointer;
     transition: border-color .15s, background .15s;
   }
-  .drop.hot { border-color: #4da3ff; background: rgba(77,163,255,.06); }
+  .drop.hot { border-color: #F8B335; background: #FFFFE1; }
   canvas#island-canvas {
     display: block; width: 100%; max-width: 640px; aspect-ratio: 1;
-    border: 1px solid #2a3647; border-radius: 8px; touch-action: none; cursor: crosshair;
+    border: 1px solid #ACA899; border-radius: 2px; touch-action: none; cursor: crosshair;
     margin: 6px 0;
   }
-  a { color: #4da3ff; }
+  a { color: #0046D5; }
   .top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 </style>
 </head>

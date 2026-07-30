@@ -15,7 +15,7 @@ import {
   extractDnmColors, repaintDnm,
 } from './workbench.js';
 import {
-  LANG, el, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT,
+  LANG, el, pageUrl, flyUrl, DEFAULT_FLY_AIRCRAFT, xpWindow,
   installZip, saveOrReplace, listCreations, loadRecipe, stockIndex, packPayload,
 } from './studio-shared.js';
 import { dnmToGlb } from './dnm-gltf.js';
@@ -24,68 +24,68 @@ import { listStaged, getStaged, putStaged, removeStaged } from './staging.js';
 
 const S = ({
   ja: {
-    title: '🛠 ワークベンチ',
+    title: 'ワークベンチ',
     sub: '機体とマップを作る場所。作ったものは自動で保存され、ゲームを開くと使えます。',
     backToGame: '← ゲームへ戻る',
     studios: [
       {
-        page: 'studio-aircraft.html', glyph: '✈️', title: '機体スタジオ',
+        page: 'studio-aircraft.html', title: '機体スタジオ',
         desc: 'stockの見た目を借りて塗装し、性能を .dat ウィザードでいじって、3Dプレビューで確かめる。Blenderで作った .glb の取り込みもここ。',
       },
       {
-        page: 'studio-scenery.html', glyph: '🏝', title: 'マップスタジオ',
+        page: 'studio-scenery.html', title: 'マップスタジオ',
         desc: '画面いっぱいのキャンバスに海岸線を描いて島を作る。空母・滑走路・山・スタート地点も配置できる。',
       },
       {
-        page: 'studio-pack.html', glyph: '📦', title: 'パックスタジオ',
+        page: 'studio-pack.html', title: 'パックスタジオ',
         desc: '自分の機体とマップを選んでまとめた「パック」を作る。パックも1つの作品として棚に並び、配布用zipに書き出せる。',
       },
     ],
     open: '開く',
-    libTitle: '📦 マイ作品',
-    libIntro: 'このワークベンチで作った物だけが並びます（zipで取り込んだパックは 📦 パックスタジオで）。✏️ でスタジオを開いて続きから編集できます',
+    libTitle: 'マイ作品',
+    libIntro: 'このワークベンチで作った物だけが並びます（zipで取り込んだパックはパックスタジオで）。「編集」でスタジオを開いて続きから',
     libEmpty: '（まだ何もありません — 上のスタジオで作りましょう）',
-    libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
+    libKind: { aircraft: '機体', scenery: 'マップ', mixed: 'パック', other: 'パック' },
     libOn: '有効', libOff: '無効',
-    libFly: '🛫', libFlyTitle: 'テスト飛行（ゲームページに移動します）',
-    libGlb: '🟠', libGlbTitle: 'Blender用に書き出す (.glb)',
-    libEdit: '✏️', libEditTitle: 'スタジオで続きから編集',
-    libDel: '🗑', libDelTitle: '削除',
+    libFly: '離陸', libFlyTitle: 'テスト飛行（ゲームページに移動します）',
+    libGlb: 'GLB', libGlbTitle: 'Blender用に書き出す (.glb)',
+    libEdit: '編集', libEditTitle: 'スタジオで続きから編集',
+    libDel: '削除', libDelTitle: '削除',
     libDelConfirm: (n) => '「' + n + '」を削除しますか？',
   },
   en: {
-    title: '🛠 Workbench',
+    title: 'Workbench',
     sub: 'The place to build aircraft and maps. Everything saves automatically and is available next time the game loads.',
     backToGame: '← Back to the game',
     studios: [
       {
-        page: 'studio-aircraft.html', glyph: '✈️', title: 'Aircraft Studio',
+        page: 'studio-aircraft.html', title: 'Aircraft Studio',
         desc: 'Borrow a stock airframe, paint it, tune the .dat, and check it in a live 3D preview. Blender-made .glb files import here too.',
       },
       {
-        page: 'studio-scenery.html', glyph: '🏝', title: 'Scenery Studio',
+        page: 'studio-scenery.html', title: 'Scenery Studio',
         desc: 'Draw coastlines on a full-screen canvas to make islands; place carriers, runways, mountains and start points.',
       },
       {
-        page: 'studio-pack.html', glyph: '📦', title: 'Pack Studio',
+        page: 'studio-pack.html', title: 'Pack Studio',
         desc: 'Curate your own aircraft and maps into a pack — itself a work on your shelf, exportable as a distributable zip.',
       },
     ],
     open: 'Open',
-    libTitle: '📦 My creations',
-    libIntro: 'Only things MADE in this workbench appear here (imported zip packs live in the 📦 Pack Studio). ✏️ opens the right studio to continue editing',
+    libTitle: 'My creations',
+    libIntro: 'Only things MADE in this workbench appear here (imported zip packs live in the Pack Studio). Edit opens the right studio to continue',
     libEmpty: '(Nothing yet — make something in a studio above)',
-    libKind: { aircraft: '✈️', scenery: '🏝', mixed: '📦', other: '📦' },
+    libKind: { aircraft: 'aircraft', scenery: 'scenery', mixed: 'pack', other: 'pack' },
     libOn: 'On', libOff: 'Off',
-    libFly: '🛫', libFlyTitle: 'Test-fly (moves to the game page)',
-    libGlb: '🟠', libGlbTitle: 'Export for Blender (.glb)',
-    libEdit: '✏️', libEditTitle: 'Continue editing in its studio',
-    libDel: '🗑', libDelTitle: 'Delete',
+    libFly: 'Fly', libFlyTitle: 'Test-fly (moves to the game page)',
+    libGlb: 'GLB', libGlbTitle: 'Export for Blender (.glb)',
+    libEdit: 'Edit', libEditTitle: 'Continue editing in its studio',
+    libDel: 'Delete', libDelTitle: 'Delete',
     libDelConfirm: (n) => 'Delete “' + n + '”?',
   },
 })[LANG];
 
-const app = document.getElementById('app');
+let app = document.getElementById('app');
 
 function header() {
   const top = el('div', 'top');
@@ -107,14 +107,14 @@ function studioCards() {
     const card = el('a', 'card');
     card.href = pageUrl(st.page);
     card.style.cssText = 'display:block;margin:0;text-decoration:none;color:inherit;cursor:pointer';
-    const h = el('h2', null, st.glyph + ' ' + st.title);
+    const h = el('h2', null, st.title);
     h.style.fontSize = '16px';
     card.appendChild(h);
     const d = el('p', 'intro', st.desc);
     d.style.margin = '6px 0 10px';
     card.appendChild(d);
     const go = el('span', null, S.open + ' →');
-    go.style.cssText = 'color:#4da3ff;font-size:13px';
+    go.style.cssText = 'color:#0046D5;font-size:13px';
     card.appendChild(go);
     wrap.appendChild(card);
   }
@@ -144,14 +144,14 @@ function creationsCard() {
     for (const it of items) {
       const rowEl = el('div');
       rowEl.style.cssText =
-        'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #2a3647;' +
-        'border-radius:7px;margin-bottom:6px;background:#0b1017' + (it.enabled ? '' : ';opacity:.5');
-      const badge = el('span', null, S.libKind[it.kind] || '📦');
-      badge.style.cssText = 'flex:none';
+        'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #ACA899;' +
+        'border-radius:2px;margin-bottom:6px;background:#fff' + (it.enabled ? '' : ';opacity:.5');
+      const badge = el('span', null, S.libKind[it.kind] || S.libKind.other);
+      badge.style.cssText = 'flex:none;color:#777;font-size:11px';
       const nm = el('span', null, it.name || it.id);
-      nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e6edf3;font-size:13.5px';
+      nm.style.cssText = 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#000;font-size:13.5px';
       const sub = el('span', null, it.identities[0] || it.sceneryIdent || '');
-      sub.style.cssText = 'flex:none;color:#7d93b0;font-size:11px;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+      sub.style.cssText = 'flex:none;color:#777;font-size:11px;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
       rowEl.appendChild(badge);
       rowEl.appendChild(nm);
       rowEl.appendChild(sub);
@@ -214,7 +214,7 @@ function creationsCard() {
         });
       }
       const del = btn(S.libDel, S.libDelTitle, false);
-      del.style.color = '#c75d6a';
+      del.style.color = '#C33B1E';
       del.addEventListener('click', async () => {
         if (!self.confirm(S.libDelConfirm(it.name || it.id))) return;
         await opfs.removeRecord(it.id);
@@ -231,7 +231,7 @@ function creationsCard() {
 
 async function main() {
   try { await navigator.storage.persist(); } catch (e) { /* best effort */ }
-  header();
+  app = xpWindow(app, S.title, S.sub);
   studioCards();
   creationsCard();
   // Driven by the smoke test (and handy in the console).  The two create APIs
