@@ -118,9 +118,9 @@ const S = ({
     flyBtn: '🛫',
     flyTitle: 'テスト飛行 — この機体で滑走路から即離陸（ページをリロードします）',
     flyPick: '機体を選択:',
-    flyNoIdent: 'この機体は名前指定で起動できません（.dat に ASCII の IDENTIFY が無い）。プレイ開始からメニューで選んでください',
+    flyNoIdent: 'この機体は名前指定で起動できません（.dat に ASCII の IDENTIFY が無い）。本家のフルメニューから選んでください',
     diagWarn: (n, samples) => '⚠ パック内のリストが参照する ' + n + ' ファイルが見つかりません（該当エントリは飛べません）' + (samples.length ? ' 例: ' + samples.slice(0, 3).join(', ') : ''),
-    postPlayHint: 'プレイ開始後、エンジンのメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
+    postPlayHint: '本家のフルメニューで Simulation → Create Flight を開くと、取り込んだ機体・マップが選べます',
     errMap: {
       noList: 'YSFLIGHT のリスト（aircraft/air*.lst など）が見つかりません。zip の直下に aircraft/ や scenery/ があるか確認してください',
       tooBig: 'パックが大きすぎます（サイズ上限を超過）',
@@ -134,8 +134,8 @@ const S = ({
       'no-redist': '再配布不可',
       'ask-author': '要許可（作者に連絡）',
     },
-    playBtn: '▶ プレイ開始',
-    playHint: '機体・マップを自分で選ぶ／対戦をホストするときはこちら（エンジンのメニューが開きます）',
+    playBtn: '🎛 本家のフルメニューを開く（全機能）',
+    playHint: '上のカード・ページに無い残りはすべてここに（File保存・地対空ミッション・アクロ個別デモ・飛行記録編集など）',
     vrPlayBtn: '🥽 VRでプレイ開始',
     vrPlayHint: 'ヘッドセットのままメニュー操作から飛行まで（WebXR・実験的機能）',
     flyAgain: '↻ 続きから',
@@ -237,9 +237,9 @@ const S = ({
     flyBtn: '🛫',
     flyTitle: 'Test-fly — take off with this aircraft right away (reloads the page)',
     flyPick: 'Pick an aircraft:',
-    flyNoIdent: 'This aircraft can’t be launched by name (no ASCII IDENTIFY in its .dat). Press Play and pick it from the menu',
+    flyNoIdent: 'This aircraft can’t be launched by name (no ASCII IDENTIFY in its .dat). Open the native full menu and pick it there',
     diagWarn: (n, samples) => '⚠ ' + n + ' file(s) referenced by the pack’s lists are missing (those entries won’t fly)' + (samples.length ? ' e.g. ' + samples.slice(0, 3).join(', ') : ''),
-    postPlayHint: 'After Play, open Simulation → Create Flight in the engine menu to fly your installed aircraft & maps',
+    postPlayHint: 'In the native full menu, open Simulation → Create Flight to fly your installed aircraft & maps',
     errMap: {
       noList: 'No YSFLIGHT list found (aircraft/air*.lst, etc.). Make sure the zip has folders like aircraft/ or scenery/ at its top level',
       tooBig: 'The pack is too large (exceeds the size limit)',
@@ -253,8 +253,8 @@ const S = ({
       'no-redist': 'No redistribution',
       'ask-author': 'Ask the author',
     },
-    playBtn: '▶ Play',
-    playHint: 'Choose your own aircraft & maps, or host multiplayer — this opens the engine menu',
+    playBtn: '🎛 Open the native full menu (everything)',
+    playHint: 'Everything not covered above lives here — File save, ground-to-air mission, aerobatic demo picker, flight-record editing…',
     vrPlayBtn: '🥽 Play in VR',
     vrPlayHint: 'Menus and flying without taking the headset off (WebXR, experimental)',
     flyAgain: '↻ Fly again',
@@ -1231,20 +1231,22 @@ function renderPanel() {
 
   panel.appendChild(quickWrap);
 
-  // ▶ Play (primary CTA) sits directly under Quick Flight — ABOVE the add-on
-  // management — so it isn't buried at the bottom under a panel most visitors never
-  // touch.  Order: Quick Flight -> Play -> (collapsible) add-on management.
+  // The native-full-menu door (was the primary "▶ Play" CTA).  VR条項
+  // (2026-07-30, docs/web-shell.md): on 2D the shell cards/pages ARE the menu,
+  // and the engine menu's 2D job is only the unported tail (File save,
+  // ground-to-air, aerobatic demo picker, record editing) — so this is a
+  // labeled exit, not a rival protagonist.  Quiet bordered style on purpose;
+  // #ysfw-pack-play and click->start stay (smoke-vrmenu boots through this
+  // button, and in VR the menu it opens is the permanent in-headset UI).
   const playBtn = document.createElement('button');
   playBtn.id = 'ysfw-pack-play';
   playBtn.textContent = S.playBtn;
   playBtn.style.cssText =
-    'margin-top:14px;width:100%;padding:11px;border:0;border-radius:8px;background:' + ACCENT + ';' +
-    'color:#04101f;font-size:15px;font-weight:700;cursor:pointer';
+    'margin-top:14px;width:100%;padding:10px;border:1px solid #345;border-radius:8px;background:#0d141d;' +
+    'color:#cfe0f5;font-size:13px;font-weight:600;cursor:pointer';
   playBtn.addEventListener('click', start);
   panel.appendChild(playBtn);
-  // Disambiguate the two "start" affordances: the Quick Flight cards above take off
-  // instantly on a fixed preset, whereas Play opens the engine menu — the route to
-  // pick your own aircraft/maps or host multiplayer.  One quiet line under the button.
+  // What lives behind the door — one quiet line under the button.
   const playHint = document.createElement('div');
   playHint.textContent = S.playHint;
   playHint.style.cssText = 'color:#7d93b0;font-size:11px;margin-top:6px;text-align:center;line-height:1.45';
