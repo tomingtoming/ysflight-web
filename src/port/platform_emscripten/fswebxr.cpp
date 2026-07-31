@@ -1193,6 +1193,31 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// the player's head moves (anchorMenuQuad; see also vrRecenter hook).
 	var MENU_MAX_TEXTURE_PX=2048;
 	var MENU_QUAD_WIDTH_M=1.6;
+	// Quest's compositor displays an XRQuadLayer at TWICE its declared
+	// width/height -- it treats them as half-extents, while the Layers spec
+	// reads as full meters ("the width and height of the layer in meters",
+	// position = quad center).  Measured on device 2026-07-31 with the
+	// ?vrlayerscale A/B: declaring half the metric size made the aim rings
+	// meet the rays across the whole board (they used to agree only at the
+	// center and drift outward proportionally -- the half-vs-full signature).
+	// Every RAY-COUPLED quad (menu, cursor overlay, beams, keyboard) declares
+	// through quadDecl() so the app-side models stay in honest metric units.
+	// Display-only quads whose size was TUNED BY EYE on device with the 2x in
+	// effect (dials, help placards, perf, gui panel) keep their raw declared
+	// numbers -- their approved look already bakes the factor in.
+	// ?vrlayerscale multiplies on top for future on-device probes
+	// (?vrlayerscale=2 reproduces the pre-fix drift for regression demos).
+	var QUAD_DECL_FACTOR=0.5;
+	function menuLayerScale()
+	{
+		var o=Module.ysfwVrOptions||{};
+		var f=parseFloat(o.layerScale);
+		return (isFinite(f)&&f>0) ? f : 1;
+	}
+	function quadDecl(m)
+	{
+		return m*QUAD_DECL_FACTOR*menuLayerScale();
+	}
 	function fitMenuTextureSize(srcW,srcH,maxPx)
 	{
 		srcW=Math.max(1,Math.round(srcW||1));
@@ -1291,8 +1316,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 					viewPixelWidth:W,
 					viewPixelHeight:H,
 					layout:'mono',
-					width:quadSize.w,
-					height:quadSize.h
+					width:quadDecl(quadSize.w),
+					height:quadDecl(quadSize.h)
 				});
 				// Placeholder; overwritten by anchorMenuQuad before the quad
 				// ever enters the layers list.
@@ -1614,8 +1639,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 				viewPixelWidth:fitted.w,
 				viewPixelHeight:fitted.h,
 				layout:'mono',
-				width:vr.menuRes.quadW,
-				height:vr.menuRes.quadH
+				width:quadDecl(vr.menuRes.quadW),
+				height:quadDecl(vr.menuRes.quadH)
 			});
 			try
 			{
@@ -1781,12 +1806,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 					viewPixelWidth:canvas.width,
 					viewPixelHeight:canvas.height,
 					layout:'mono',
-					width:BEAM_WIDTH_M,
+					width:quadDecl(BEAM_WIDTH_M),
 					// FIXED span, never mutated: the compositor does not
 					// honour per-frame width/height writes (see
 					// drawBeamCanvas's doc comment) -- the variable lit
 					// length lives in the texture alpha instead.
-					height:BEAM_MAX_LEN_M,
+					height:quadDecl(BEAM_MAX_LEN_M),
 					transform:new XRRigidTransform({x:0,y:0,z:0})
 				});
 				try
@@ -2182,8 +2207,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 					viewPixelWidth:KBD_CANVAS_W,
 					viewPixelHeight:KBD_CANVAS_H,
 					layout:'mono',
-					width:sz.w,
-					height:sz.h
+					width:quadDecl(sz.w),
+					height:quadDecl(sz.h)
 				});
 				try{ if('blendTextureSourceAlpha' in quad){ quad.blendTextureSourceAlpha=true; } }catch(e){}
 			}
