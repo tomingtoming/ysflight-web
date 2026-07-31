@@ -1544,6 +1544,13 @@
       // three stick axes (default 1.0 = off, see DEFAULT_STICK_EXPO).
       if (q.get('vryawdz') !== null && q.get('vryawdz') !== '') o.yawDeadzoneDeg = parseFloat(q.get('vryawdz'));
       if (q.get('vrexpo') !== null && q.get('vrexpo') !== '') o.stickExpo = parseFloat(q.get('vrexpo'));
+      // ?vrlayerscale=<f> DIAGNOSTIC (issue: menu-board ring drift on real
+      // Quest): multiplies ONLY the width/height DECLARED to the compositor
+      // for the menu + cursor-overlay quad layers, leaving the app's
+      // ray-intersection model untouched.  If rings meet the rays everywhere
+      // at 0.5, the compositor displays quads at twice the declared metric
+      // size and the declaration is the bug's home.
+      if (q.get('vrlayerscale') !== null && q.get('vrlayerscale') !== '') o.layerScale = parseFloat(q.get('vrlayerscale'));
       Module.ysfwVrOptions = o;
     })();
     var vrBtn = document.createElement('button');

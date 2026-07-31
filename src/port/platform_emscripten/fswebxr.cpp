@@ -1193,6 +1193,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 	// the player's head moves (anchorMenuQuad; see also vrRecenter hook).
 	var MENU_MAX_TEXTURE_PX=2048;
 	var MENU_QUAD_WIDTH_M=1.6;
+	// DIAGNOSTIC (?vrlayerscale=<f>, see web/index.html): scales ONLY the
+	// metric size DECLARED to the compositor for the menu/cursor quad layers.
+	// The ray-intersection model (vr.menuRes.quadW/H) stays unscaled, so an
+	// on-device A/B splits "compositor displays the declared size differently"
+	// from every app-side hypothesis.  1 = off (production behavior).
+	function menuLayerScale()
+	{
+		var o=Module.ysfwVrOptions||{};
+		var f=parseFloat(o.layerScale);
+		return (isFinite(f)&&f>0) ? f : 1;
+	}
 	function fitMenuTextureSize(srcW,srcH,maxPx)
 	{
 		srcW=Math.max(1,Math.round(srcW||1));
@@ -1291,8 +1302,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 					viewPixelWidth:W,
 					viewPixelHeight:H,
 					layout:'mono',
-					width:quadSize.w,
-					height:quadSize.h
+					width:quadSize.w*menuLayerScale(),
+					height:quadSize.h*menuLayerScale()
 				});
 				// Placeholder; overwritten by anchorMenuQuad before the quad
 				// ever enters the layers list.
@@ -1614,8 +1625,8 @@ EM_JS(void,YsfwInstallWebXR,(),
 				viewPixelWidth:fitted.w,
 				viewPixelHeight:fitted.h,
 				layout:'mono',
-				width:vr.menuRes.quadW,
-				height:vr.menuRes.quadH
+				width:vr.menuRes.quadW*menuLayerScale(),
+				height:vr.menuRes.quadH*menuLayerScale()
 			});
 			try
 			{
