@@ -1559,6 +1559,16 @@
     vrBtn.title = TXT.help.vrTitle;
     vrBtn.style.cssText = 'order:1;pointer-events:auto;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid #2a3647;background:rgba(13,20,29,.85);color:#cfd8e3;cursor:pointer;display:none';
     var inVr = false;
+    // Red notice toast shared by every VR entry point's failure path (issue
+    // #79: the tap-overlay retry and the autostart used to swallow setup
+    // failures silently -- every catch must end in something visible).
+    function vrFailToast() {
+      var n = document.createElement('div');
+      n.textContent = TXT.help.vrFail;
+      n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(60,16,16,.92);color:#f5d5d5;border:1px solid #5a2a2a;border-radius:8px;padding:8px 14px;font-size:12px';
+      document.body.appendChild(n);
+      setTimeout(function () { if (n.parentNode) n.remove(); }, 5000);
+    }
     vrBtn.onclick = function () {
       var vr = Module.ysfwVr;
       if (!vr) return;
@@ -1566,11 +1576,7 @@
       vrBtn.disabled = true;
       vr.enter().catch(function () {
         vrBtn.disabled = false;
-        var n = document.createElement('div');
-        n.textContent = TXT.help.vrFail;
-        n.style.cssText = 'position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:100001;background:rgba(60,16,16,.92);color:#f5d5d5;border:1px solid #5a2a2a;border-radius:8px;padding:8px 14px;font-size:12px';
-        document.body.appendChild(n);
-        setTimeout(function () { if (n.parentNode) n.remove(); }, 5000);
+        vrFailToast();
       });
     };
     Module.onVrStart = function () {
@@ -1673,7 +1679,9 @@
       btn.onclick = function () {
         wrap.remove();
         var vr = Module.ysfwVr;
-        if (vr && !vr.session) { vr.enter().catch(function () {}); }
+        // The retry has real user activation, so a failure here is a genuine
+        // setup failure -- say so instead of bouncing silently (issue #79).
+        if (vr && !vr.session) { vr.enter().catch(vrFailToast); }
       };
       wrap.addEventListener('click', function (e) { if (e.target === wrap) wrap.remove(); });
       wrap.appendChild(btn);
@@ -1686,7 +1694,15 @@
       if (show && window.__ysfwVrAutostart && !vrAutostartTried && !vr.session) {
         vrAutostartTried = true;
         window.__ysfwVrAutostart = false;
-        vr.enter().catch(function () { showVrTapOverlay(); });
+        // Lost user activation (the expected autostart failure) gets the
+        // one-tap overlay; anything else is a real setup failure where
+        // another tap cannot help -- show the failure toast instead
+        // (issue #79: the overlay used to swallow both cases).
+        vr.enter().catch(function (err) {
+          var name = err && err.name;
+          if (name === 'NotAllowedError' || name === 'SecurityError') { showVrTapOverlay(); }
+          else { vrFailToast(); }
+        });
       }
     }, 500);
   })();

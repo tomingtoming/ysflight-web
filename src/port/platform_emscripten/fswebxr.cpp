@@ -6282,6 +6282,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 			});
 		}).catch(function(err)
 		{
+			// Record WHY before tearing down (issue #79: this path used to end
+			// the session with endReason=null, so neither the vr-end diag
+			// event nor any user-visible explanation carried the failure).
+			// The rethrow still reaches the shell's per-entry-point catches
+			// (button / autostart / tap overlay), which own the toast.
+			if(!vr.endReason)
+			{
+				vr.endReason='enter-failed: '+((err&&err.message) ? err.message : err);
+			}
+			console.error('[vr] enter failed:',err);
 			var session=vr.session;
 			vr.session=null;
 			if(session)
