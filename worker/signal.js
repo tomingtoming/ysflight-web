@@ -203,6 +203,7 @@ async function metric(request, env) {
   const build = str(batch.build, 24);
   const host = url.hostname;
   const country = (request.cf && request.cf.country) || '';
+  let written = 0;
   for (const ev of batch.events.slice(0, 20)) {
     if (!ev || typeof ev !== 'object') continue;
     const name = str(ev.e, 24);
@@ -217,8 +218,17 @@ async function metric(request, env) {
         ],
         doubles: [num(ev.secs), num(ev.visits), num(ev.fps), num(ev.days)]
       });
-    } catch (e) {}
+      written++;
+    } catch (e) {
+      // A counter must never fail quietly: a dataset that stopped receiving
+      // reads exactly like nobody playing.  observability is on, so this lands
+      // in Workers Logs next to the [clientlog] lines.
+      console.error('[metric] writeDataPoint failed:', String((e && e.message) || e));
+    }
   }
+  // One line per batch, for the same reason -- and it is the only way to tell a
+  // live pipeline from a dead one without an Analytics Engine read token.
+  console.log('[metric]', JSON.stringify({ n: written, host: host, cc: country, aud: audience, build: build }));
   return new Response(null, { status: 204 });
 }
 

@@ -334,3 +334,27 @@ test('no dataset binding (local dev / older config) accepts and drops', async ()
   const res = await worker.fetch(post(BATCH), {});
   assert.equal(res.status, 204);
 });
+
+test('a dataset that rejects a write is loud, and the rest of the batch still lands', async () => {
+  let calls = 0;
+  const written = [];
+  const env = {
+    PLAY: {
+      writeDataPoint: (p) => {
+        if (++calls === 1) throw new Error('dataset unavailable');
+        written.push(p);
+      }
+    }
+  };
+  const errors = [];
+  const realError = console.error;
+  console.error = (...a) => errors.push(a.join(' '));
+  try {
+    const res = await worker.fetch(post({ ...BATCH, events: [{ e: 'session' }, { e: 'flight-start' }] }), env);
+    assert.equal(res.status, 204);
+  } finally {
+    console.error = realError;
+  }
+  assert.equal(written.length, 1, 'the second event still went through');
+  assert.match(errors.join('\n'), /\[metric\] writeDataPoint failed/);
+});
