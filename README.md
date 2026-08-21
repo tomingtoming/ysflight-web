@@ -218,6 +218,18 @@ Details: [docs/multiplayer.md](docs/multiplayer.md) (Japanese).
 > side can connect directly. Two IPv6 peers can usually connect directly.
 > Setup and cost: [docs/multiplayer.md](docs/multiplayer.md).
 
+## Usage counting
+
+The deployed site counts how much it is actually played: one event when a page
+is opened, and one at each end of a flight (its length, and whether it was
+flown solo, hosted, joined, or in VR). No account, no cookie, no personal data;
+a random id in `localStorage` is what separates ten visits by one person from
+ten people.
+
+Opt out for good on this browser with **`?metrics=off`**.
+
+Where it goes and how it is read: [docs/metrics.md](docs/metrics.md) (Japanese).
+
 ## Known limitations
 
 - Sound is implemented via OpenAL (Web Audio). ATC voice is not implemented

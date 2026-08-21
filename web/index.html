@@ -28,6 +28,10 @@
      postmortems -- see web/diag.js. -->
 <script src="diag.js"></script>
 <script src="deeplink.js"></script>
+<!-- metrics.js: usage counting (Analytics Engine via /metric).  After diag.js,
+     whose event stream it subscribes to, and after deeplink.js, whose
+     launchTargets() it reads at construction -- see docs/metrics.md. -->
+<script src="metrics.js"></script>
 <script src="yfs.js"></script>
 <script src="settings.js"></script>
 <script src="controls.js"></script>

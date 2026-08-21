@@ -112,6 +112,19 @@ jobs:
           sleep 2
           node scripts/smoke-settings.mjs "http://localhost:8926/index.html"
 
+      # Metrics smoke (PR only): a flight in a real browser produces the
+      # flight-start / flight-end data points that docs/metrics.md's SQL counts,
+      # and ?metrics=off posts nothing at all.  This is the guard against the
+      # failure mode that matters for a counter -- it stops counting and nothing
+      # looks wrong, because zero players and a broken pipeline read the same.
+      # No engine boot (the flight flag is flipped directly), so it is cheap.
+      - name: Metrics smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          node "${{ github.workspace }}/scripts/serve.mjs" 8931 "${{ github.workspace }}/dist" &
+          sleep 2
+          node scripts/smoke-metrics.mjs "http://localhost:8931/index.html"
+
       # Host smoke (PR only): boots ?host=1&name= and asserts the engine reaches
       # multiplayer server mode and claims the signaling room against a local
       # sig-stub — guards the web host entry (web/deeplink.js -> -server ->

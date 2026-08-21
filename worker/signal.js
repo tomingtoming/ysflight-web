@@ -75,6 +75,9 @@ export default {
     if (url.pathname === '/clientlog') {
       return clientLog(request);
     }
+    if (url.pathname === '/metric') {
+      return metric(request, env);
+    }
     // Non-signaling paths: serve the static game assets (dist/).
     return env.ASSETS.fetch(request);
   }
@@ -118,6 +121,104 @@ async function clientLog(request) {
   }
   const ua = (request.headers.get('User-Agent') || '').slice(0, 120);
   console.log('[clientlog-meta]', sid, JSON.stringify({ n: batch.events.length, ua }));
+  return new Response(null, { status: 204 });
+}
+
+// Usage metrics sink (web/metrics.js POSTs here): writes one Analytics Engine
+// data point per event.  This is the "how many people actually play" counter --
+// see docs/metrics.md for the schema, the SQL cookbook and the read token.
+//
+// Why not just read the logs?  /clientlog above lands in Workers Logs, which
+// keeps 7 days and answers questions one grep at a time.  Analytics Engine
+// keeps three months and answers them in SQL, so a flight flown today is still
+// countable next quarter.  The two are complementary: logs for postmortems,
+// this for counting.
+//
+// The last four columns are stamped SERVER-side (audience is the client's, but
+// host and country are not the client's to claim): host separates production
+// from staging in one shared dataset, and country is the closest thing to
+// "who" that this project will ever store.
+//
+//   index1  visitor id (random, localStorage; the sampling key)
+//   blob1   event      'session' | 'flight-start' | 'flight-end' | 'vr-end'
+//   blob2   launch     deep-link kind, or 'menu' (picked inside the engine)
+//   blob3   aircraft   when the URL carried it (deeplink.js launchTargets)
+//   blob4   field
+//   blob5   role       'solo' | 'host' | 'join'
+//   blob6   device     'desktop' | 'touch' | 'vr'
+//   blob7   lang
+//   blob8   referrer   hostname, session events only
+//   blob9   reason     flight/VR end reason ('ended' | 'left' | VR endReason)
+//   blob10  audience   'public' | 'dev'  (the maintainer's own QA loads)
+//   blob11  sid        page-load id: groups one visit's events together
+//   blob12  build      client build id
+//   blob13  host       SERVER: request hostname (prod vs staging)
+//   blob14  country    SERVER: request.cf.country
+//   double1 secs       flight / VR duration
+//   double2 visits     this browser's visit number (1 = first ever, 0 = no storage)
+//   double3 fps        VR average
+//   double4 days       days since this browser's first visit
+//
+// Guards mirror /turn and /clientlog: POST-only, same-origin when a browser
+// sends Origin, 8 KB body cap, at most 20 events per batch, every string
+// truncated.  Per-IP rate limit via METRIC_RATE; a missing binding fails OPEN
+// (an older deploy config must not turn the counter off silently) while the
+// free-tier write budget (100k/day against a handful per visit) absorbs the
+// rest.  No binding at all -> 204: local `wrangler dev` and the static smoke
+// server should not make the client retry.
+async function metric(request, env) {
+  if (request.method !== 'POST') {
+    return new Response('POST only', { status: 405, headers: { 'Allow': 'POST' } });
+  }
+  const url = new URL(request.url);
+  const origin = request.headers.get('Origin');
+  if (origin && origin !== url.origin) {
+    return new Response(null, { status: 403 });
+  }
+  if (env.METRIC_RATE && typeof env.METRIC_RATE.limit === 'function') {
+    try {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      const { success } = await env.METRIC_RATE.limit({ key: ip });
+      if (!success) return new Response(null, { status: 429, headers: { 'Retry-After': '60' } });
+    } catch (e) {}
+  }
+  let text = '';
+  try { text = await request.text(); } catch (e) { return new Response(null, { status: 400 }); }
+  if (text.length > 8192) return new Response(null, { status: 413 });
+  let batch = null;
+  try { batch = JSON.parse(text); } catch (e) {}
+  if (!batch || !Array.isArray(batch.events)) {
+    return new Response(null, { status: 400 });
+  }
+  if (!env.PLAY) return new Response(null, { status: 204 });
+
+  const str = (v, n) => (typeof v === 'string' ? v : '').slice(0, n || 64);
+  const num = (v) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : 0;
+  };
+  const vid = str(batch.vid, 64) || 'anon';
+  const sid = str(batch.sid, 32);
+  const audience = batch.aud === 'dev' ? 'dev' : 'public';
+  const build = str(batch.build, 24);
+  const host = url.hostname;
+  const country = (request.cf && request.cf.country) || '';
+  for (const ev of batch.events.slice(0, 20)) {
+    if (!ev || typeof ev !== 'object') continue;
+    const name = str(ev.e, 24);
+    if (!name) continue;
+    try {
+      env.PLAY.writeDataPoint({
+        indexes: [vid],
+        blobs: [
+          name, str(ev.launch, 24), str(ev.aircraft, 48), str(ev.field, 48),
+          str(ev.role, 8), str(ev.device, 8), str(ev.lang, 8), str(ev.ref, 64),
+          str(ev.reason, 32), audience, sid, build, host, String(country).slice(0, 8)
+        ],
+        doubles: [num(ev.secs), num(ev.visits), num(ev.fps), num(ev.days)]
+      });
+    } catch (e) {}
+  }
   return new Response(null, { status: 204 });
 }
 

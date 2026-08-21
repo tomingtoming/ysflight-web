@@ -59,9 +59,28 @@
         "type": "ratelimit",
         "namespace_id": "1001",
         "simple": { "limit": 10, "period": 60 }
+      },
+      // Per-IP rate limit for /metric (worker/signal.js metric).  A real visit
+      // posts a handful of batches; 30/min/IP leaves room for a LAN party
+      // behind one NAT while a script cannot burn the dataset's free-tier
+      // write budget (100k data points/day) from one address.
+      {
+        "name": "METRIC_RATE",
+        "type": "ratelimit",
+        "namespace_id": "1002",
+        "simple": { "limit": 30, "period": 60 }
       }
     ]
   },
+  // Usage metrics (worker/signal.js /metric <- web/metrics.js): how many people
+  // actually play, how long they fly, and whether they come back.  Analytics
+  // Engine keeps three months and is read with SQL, which neither Web Analytics
+  // (page views only) nor Workers Logs (7 days, no aggregation) can do.  Free
+  // plan: 100,000 data points written per day, 10,000 read queries per day.
+  // Reading needs an API token with Account Analytics Read -- see docs/metrics.md.
+  "analytics_engine_datasets": [
+    { "binding": "PLAY", "dataset": "ysfw_play" }
+  ],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SignalHub"] }
   ]
