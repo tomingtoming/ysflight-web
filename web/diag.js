@@ -20,10 +20,20 @@
   'use strict';
   const SID = Math.random().toString(36).slice(2, 10);
   const buf = [];
+  const subs = [];
   let flushTimer = null;
 
   function push(type, data) {
     const ev = Object.assign({ t: Date.now(), type: String(type).slice(0, 24) }, data || {});
+    // Fan out to subscribers BEFORE the ring buffer can drop anything.  This is
+    // how web/metrics.js sees flight/VR transitions: diag already owns the one
+    // poller that watches ysfwInFlight / ysfwReplaying / Module.ysfwVr, so a
+    // second watcher would be a second definition of "a flight started" and the
+    // two would drift.  Subscribers are isolated -- a throwing listener must not
+    // take diagnostics down with it.
+    for (let i = 0; i < subs.length; ++i) {
+      try { subs[i](ev); } catch (e) {}
+    }
     buf.push(ev);
     if (buf.length > 40) buf.splice(0, buf.length - 40);
     // vr-start/vr-end ship promptly too: headset sessions are exactly the ones
@@ -137,5 +147,12 @@
     }
   }, 10000);
 
-  globalThis.ysfwDiag = { push: push, flush: flush, sid: SID };
+  globalThis.ysfwDiag = {
+    push: push,
+    flush: flush,
+    sid: SID,
+    // Listen in on every event (web/metrics.js).  Fires for the caller's own
+    // pushes too; subscribe before the page starts pushing to see them all.
+    subscribe: function (fn) { if (typeof fn === 'function') subs.push(fn); }
+  };
 })();

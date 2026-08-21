@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import '../web/deeplink.js';
 
-const { buildEngineArgs, deepLinkKind, isDirectBoot, USER_DIR } = globalThis.ysfwDeepLink;
+const { buildEngineArgs, deepLinkKind, isDirectBoot, launchTargets, USER_DIR } = globalThis.ysfwDeepLink;
 
 test('no params -> empty argv (manual launch)', () => {
   assert.deepEqual(buildEngineArgs(''), []);
@@ -188,4 +188,45 @@ test('openreplay: a recorded .yfs plays back via -replayrecord', () => {
     ['-replayrecord', USER_DIR + '/__openflight.yfs', '-autoexit']);
   assert.equal(deepLinkKind('?openreplay=1'), 'openreplay');
   assert.equal(isDirectBoot('?openreplay=1'), true);
+});
+
+// ---- launchTargets: what the engine will actually fly (web/metrics.js) ------
+// Read off buildEngineArgs's output on purpose, so the defaults are never
+// duplicated: a usage metric that reported "no field" for a bare
+// ?freeflight=CESSNA_172R would be describing a flight that never happened.
+
+test('launchTargets: nothing to report for a manual launch', () => {
+  assert.deepEqual(launchTargets(''), { aircraft: '', field: '' });
+});
+
+test('launchTargets: freeflight, with the default field filled in', () => {
+  assert.deepEqual(launchTargets('?freeflight=CESSNA_172R'),
+    { aircraft: 'CESSNA_172R', field: 'ATSUGI_AIRBASE' });
+  assert.deepEqual(launchTargets('?freeflight=F-18C_HORNET,HEATHROW,RW27R'),
+    { aircraft: 'F-18C_HORNET', field: 'HEATHROW' });
+});
+
+test('launchTargets: the other engine missions', () => {
+  assert.deepEqual(launchTargets('?endurance=F-18C_HORNET,AOMORI,2,3,1'),
+    { aircraft: 'F-18C_HORNET', field: 'AOMORI' });
+  assert.deepEqual(launchTargets('?intercept=F-18C_HORNET,AOMORI'),
+    { aircraft: 'F-18C_HORNET', field: 'AOMORI' });
+  // -landingpractice LEVEL AIRPLANE FIELD -- the level sits where the aircraft
+  // does in the others, so the offsets are not interchangeable.
+  assert.deepEqual(launchTargets('?landing=7'),
+    { aircraft: 'F-18C_HORNET', field: 'AOMORI' });
+  assert.deepEqual(launchTargets('?landing=3,CESSNA_172R,HEATHROW'),
+    { aircraft: 'CESSNA_172R', field: 'HEATHROW' });
+});
+
+test('launchTargets: hosting reports the field, never the pilot name', () => {
+  assert.deepEqual(launchTargets('?host=1&name=toming'), { aircraft: '', field: '' });
+  assert.deepEqual(launchTargets('?host=1&name=toming&field=AOMORI'),
+    { aircraft: '', field: 'AOMORI' });
+});
+
+test('launchTargets: the .yfs kinds hide the aircraft in a file, and say so', () => {
+  for (const q of ['?createflight=1', '?mission=racing', '?retry=1', '?openyfs=1', '?replay=x.yfs']) {
+    assert.deepEqual(launchTargets(q), { aircraft: '', field: '' }, q);
+  }
 });

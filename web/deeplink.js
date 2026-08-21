@@ -233,10 +233,45 @@ globalThis.ysfwDeepLink = (function () {
     return null !== deepLinkKind(search);
   }
 
+  // What this deep link actually flies: the aircraft and field the ENGINE will
+  // use, defaults included.  Read off buildEngineArgs's OUTPUT rather than the
+  // raw query so the defaults keep living in exactly one place -- a bare
+  // ?freeflight=CESSNA_172R really does fly at ATSUGI_AIRBASE, and a usage
+  // metric that reported an empty field there would be lying.
+  //
+  // Empty strings when the URL genuinely does not carry them: the .yfs kinds
+  // (createflight / mission / retry / openyfs) hide the aircraft inside a
+  // generated file, and a manual launch picks it inside the engine's own menu.
+  // Consumer: web/metrics.js (see docs/metrics.md).  Pure, like the rest.
+  var TARGET_ARGS = [
+    ['-freeflight', 1, 2],       // -freeflight AIRPLANE FIELD POSITION
+    ['-endurance', 1, 2],        // -endurance  AIRPLANE FIELD WINGMEN LEVEL AAM
+    ['-intercept', 1, 2],        // -intercept  AIRPLANE FIELD ...
+    ['-landingpractice', 2, 3],  // -landingpractice LEVEL AIRPLANE FIELD
+  ];
+  // An argv slot holds a real value only when it exists and is not the next flag.
+  function argWord(v) {
+    return (typeof v === 'string' && v.charAt(0) !== '-') ? v : '';
+  }
+  function launchTargets(search) {
+    var a = buildEngineArgs(search);
+    for (var k = 0; k < TARGET_ARGS.length; ++k) {
+      var i = a.indexOf(TARGET_ARGS[k][0]);
+      if (i < 0) continue;
+      return { aircraft: argWord(a[i + TARGET_ARGS[k][1]]), field: argWord(a[i + TARGET_ARGS[k][2]]) };
+    }
+    // -server NAME [FIELD]: the pilot name is not an aircraft, and FIELD is
+    // optional (the engine falls back to its net-config default).
+    var s = a.indexOf('-server');
+    if (s >= 0) return { aircraft: '', field: argWord(a[s + 2]) };
+    return { aircraft: '', field: '' };
+  }
+
   return {
     USER_DIR: USER_DIR,
     buildEngineArgs: buildEngineArgs,
     deepLinkKind: deepLinkKind,
     isDirectBoot: isDirectBoot,
+    launchTargets: launchTargets,
   };
 })();
