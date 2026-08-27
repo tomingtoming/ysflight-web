@@ -115,6 +115,13 @@ test('touch devices are tagged (over half of all visits arrive on a phone)', () 
   assert.equal(classify('', { ...ctx, touch: true }).device, 'touch');
 });
 
+test('the whole language tag survives, script subtag and all', () => {
+  // 8 chars cut 'zh-Hans-CN' down to 'zh-Hans-'; simplified vs traditional is
+  // exactly the split this column exists to show.
+  assert.equal(classify('', { ...ctx, language: 'zh-Hans-CN' }).lang, 'zh-Hans-CN');
+  assert.equal(classify('?lang=en', ctx).lang, 'en');
+});
+
 // ---- the recorder ----------------------------------------------------------
 
 function drive(search, opts = {}) {
@@ -144,6 +151,19 @@ test('load -> fly -> land: one start, one end, duration in seconds', () => {
   assert.equal(events[2].reason, 'ended');
   assert.equal(events[2].aircraft, 'F-18C_HORNET');
   assert.equal(rec.flying(), false);
+});
+
+test('every event carries the language, not just the session', () => {
+  // Regression: classify() computed lang and fields() dropped it, so blob7 was
+  // empty on all 342 rows of the first week -- a column that never varies is
+  // indistinguishable from a world where everybody is the same.
+  const { rec, events, tick } = drive('?freeflight=B747', { ctx: { language: 'zh-CN' } });
+  rec.session({ visits: 1, days: 0 });
+  rec.onDiag({ type: 'mode', inFlight: true });
+  tick(60000);
+  rec.onDiag({ type: 'mode', inFlight: false });
+  assert.equal(events.length, 3);
+  for (const e of events) assert.equal(e.lang, 'zh-CN', `${e.e} lost the language`);
 });
 
 test('closing the tab mid-flight still reports the duration', () => {

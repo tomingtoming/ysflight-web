@@ -135,7 +135,7 @@ globalThis.ysfwMetrics = (function () {
       aircraft: targets.aircraft || '',
       field: targets.field || '',
       role: role,
-      lang: (q.get('lang') || (ctx && ctx.language) || '').slice(0, 8),
+      lang: (q.get('lang') || (ctx && ctx.language) || '').slice(0, 16),
       device: (ctx && ctx.touch) ? 'touch' : 'desktop'
     };
   }
@@ -165,6 +165,10 @@ globalThis.ysfwMetrics = (function () {
         aircraft: base.aircraft,
         field: base.field,
         role: base.role,
+        // On every event, not just 'session': the question this column exists
+        // to answer is "do zh-Hans players fly differently from en ones", and
+        // that is a filter on flight rows.
+        lang: base.lang,
         device: sawVr ? 'vr' : base.device
       };
       for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) f[k] = extra[k];

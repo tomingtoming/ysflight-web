@@ -213,7 +213,7 @@ async function metric(request, env) {
         indexes: [vid],
         blobs: [
           name, str(ev.launch, 24), str(ev.aircraft, 48), str(ev.field, 48),
-          str(ev.role, 8), str(ev.device, 8), str(ev.lang, 8), str(ev.ref, 64),
+          str(ev.role, 8), str(ev.device, 8), str(ev.lang, 16), str(ev.ref, 64),
           str(ev.reason, 32), audience, sid, build, host, String(country).slice(0, 8)
         ],
         doubles: [num(ev.secs), num(ev.visits), num(ev.fps), num(ev.days)]
