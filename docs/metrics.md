@@ -66,96 +66,144 @@ Freeプランで**書き込み10万点/日・読み1万クエリ/日**（実績�
 
 ## 読み方
 
-読み出しは SQL API。**Account Analytics Read を持つAPIトークンが要る**
-（wranglerのOAuthトークンでは通らない＝`Authentication error`）。
+読み出しは SQL API。**wrangler が持っているトークンでそのまま読める**——Analytics Engine を
+アカウントで有効化した時点（2026-08-21）で通るようになった。専用の API トークンは要らない。
 
-### 1回だけの準備 ── 読み取りトークンを作る
-
-1. ダッシュボード → My Profile → API Tokens → Create Token → Custom token
-2. Permissions: **Account** → **Account Analytics** → **Read**
-3. Account Resources: `tomingtoming` のみ
-4. 作られたトークンを手元に保存（例: `~/.config/cf-analytics-token`, `chmod 600`）
+> 有効化**前**は同じトークンで `Authentication error` が返っていた。あれは権限不足ではなく
+> 「製品が有効になっていない」の意味だった＝**エラーメッセージの額面を信じると1手遠回りする**。
 
 ```sh
-TOK=$(cat ~/.config/cf-analytics-token)
+# 期限切れなら `npx wrangler whoami` を1回叩けば更新される
+TOK=$(grep '^oauth_token' ~/.wrangler/config/default.toml | sed 's/.*= *"//;s/"//')
 ACC=809e6a1cf10d5cd0491c6dff583a88fe
 q() { curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$ACC/analytics_engine/sql" \
         -H "Authorization: Bearer $TOK" -H 'Content-Type: text/plain' --data "$1"; }
 ```
 
-### 日次: 何人が来て、何人が飛んで、どれだけ飛んだか
+### 方言（先に読むこと）
+
+AEのSQLは**ClickHouseのサブセット**で、よく使う関数がいくつも無い。
+
+| やりたいこと | ❌ 無い | ✅ 使えるもの |
+|---|---|---|
+| ユニーク数 | `uniq(x)` | `count(DISTINCT x)` |
+| 条件付きユニーク | `uniqIf(x, cond)` | 無い。**WHERE で絞った別クエリにする** |
+| 分位数 | `quantile(0.5)(x)` | `quantileExactWeighted(0.5)(x, _sample_interval)` |
+| 条件付き集計 | — | `countIf` / `sumIf` / `avgIf` は使える |
+| 文字列の代表値 | `max(文字列)` | 型エラー。`argMax(文字列, timestamp)` か GROUP BY に含める |
+
+以下のSQLは**全て実物に通してある**（2026-08-23）。
+
+### 日次: 何人が来て、何人が飛んで、何分飛んだか
 
 ```sql
 SELECT toDate(timestamp) AS day,
-       uniq(index1)                                        AS people,
-       uniqIf(index1, blob1 = 'flight-start')              AS people_who_flew,
-       countIf(blob1 = 'flight-end')                       AS flights,
-       round(sumIf(double1, blob1 = 'flight-end') / 60, 1) AS minutes_flown
+       count(DISTINCT index1)                             AS people,
+       countIf(blob1 = 'session')                         AS sessions,
+       countIf(blob1 = 'flight-start')                    AS starts,
+       countIf(blob1 = 'flight-end')                      AS ends,
+       round(sumIf(double1, blob1 = 'flight-end') / 60, 1) AS minutes
 FROM ysfw_play
-WHERE timestamp > now() - INTERVAL '30' DAY
-  AND blob10 = 'public'          -- tomingのQAを除く
-  AND blob13 = 'ysflight-web.toming.app'  -- stagingを除く
+WHERE blob10 = 'public'                        -- tomingのQAを除く
+  AND blob13 = 'ysflight-web.toming.app'       -- stagingを除く
 GROUP BY day ORDER BY day
 ```
 
-### 到達漏斗（トップに来た人のうち、実際に飛ぶのは何割か）
+### 到達漏斗（`uniqIf` が無いので2本に割る）
 
 ```sql
-SELECT uniq(index1)                            AS visitors,
-       uniqIf(index1, blob1 = 'flight-start')  AS flew,
-       uniqIf(index1, blob1 = 'flight-end' AND double1 >= 60) AS flew_over_a_minute
-FROM ysfw_play
-WHERE timestamp > now() - INTERVAL '7' DAY AND blob10 = 'public'
-```
+SELECT count(DISTINCT index1) AS visitors FROM ysfw_play
+WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app';
 
-### リピート率（`double2` = その端末の通算訪問回数）
-
-```sql
-SELECT countIf(double2 = 1) AS first_timers,
-       countIf(double2 > 1) AS returning,
-       countIf(double2 = 0) AS storage_blocked
-FROM ysfw_play
-WHERE blob1 = 'session' AND timestamp > now() - INTERVAL '30' DAY AND blob10 = 'public'
+SELECT count(DISTINCT index1) AS people_who_flew FROM ysfw_play
+WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app' AND blob1 = 'flight-start';
 ```
 
 ### 飛行時間の分布（平均は外れ値1本で嘘をつく）
 
 ```sql
-SELECT quantile(0.5)(double1)  AS median_secs,
-       quantile(0.9)(double1)  AS p90_secs,
-       max(double1)            AS longest
+SELECT count() AS flights,
+       round(quantileExactWeighted(0.5)(double1, _sample_interval)) AS median_secs,
+       round(quantileExactWeighted(0.9)(double1, _sample_interval)) AS p90_secs,
+       round(max(double1)) AS longest_secs,
+       round(avg(double1)) AS mean_secs
 FROM ysfw_play
-WHERE blob1 = 'flight-end' AND double1 > 0
-  AND timestamp > now() - INTERVAL '30' DAY AND blob10 = 'public'
+WHERE blob1 = 'flight-end' AND blob10 = 'public'
+```
+
+### 訪問者ごと（誰が本当に遊んでいるか）
+
+```sql
+SELECT index1 AS visitor, blob14 AS cc, blob6 AS device,
+       countIf(blob1 = 'session')      AS visits,
+       countIf(blob1 = 'flight-start') AS starts,
+       round(sumIf(double1, blob1 = 'flight-end') / 60, 1) AS minutes
+FROM ysfw_play
+WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app'
+GROUP BY visitor, cc, device ORDER BY visits DESC LIMIT 20
+```
+
+### リピート率（`double2` = その端末の通算訪問回数）
+
+```sql
+SELECT countIf(double2 = 1) AS first_time,
+       countIf(double2 > 1) AS returning,
+       countIf(double2 = 0) AS storage_blocked,
+       round(max(double2))  AS most_visits_by_one_browser
+FROM ysfw_play
+WHERE blob1 = 'session' AND blob10 = 'public'
 ```
 
 ### モバイルは本当に遊べているのか
 
-訪問の過半はモバイル（Web Analytics実測 2026-08-21）だが、23MBのDLと
-操作系を考えると離脱している可能性が高い——それを裁く問い。
-
 ```sql
-SELECT blob6 AS device, uniq(index1) AS people,
-       countIf(blob1 = 'flight-start') AS flights,
+SELECT blob6 AS device, count(DISTINCT index1) AS people,
+       countIf(blob1 = 'session') AS sessions,
+       countIf(blob1 = 'flight-start') AS starts,
        round(avgIf(double1, blob1 = 'flight-end')) AS avg_secs
 FROM ysfw_play
-WHERE timestamp > now() - INTERVAL '30' DAY AND blob10 = 'public'
-GROUP BY device
+WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app'
+GROUP BY device ORDER BY sessions DESC
 ```
 
-### 機体とフィールドの人気（URLが持っていた分だけ）
+### 機体・フィールド／飛行の終わり方／流入元
 
 ```sql
-SELECT blob3 AS aircraft, blob4 AS field, count() AS flights
-FROM ysfw_play
-WHERE blob1 = 'flight-start' AND blob3 != ''
-  AND timestamp > now() - INTERVAL '90' DAY AND blob10 = 'public'
-GROUP BY aircraft, field ORDER BY flights DESC LIMIT 20
+SELECT blob3 AS aircraft, blob4 AS field, count() AS starts FROM ysfw_play
+WHERE blob1 = 'flight-start' AND blob3 != '' AND blob10 = 'public'
+GROUP BY aircraft, field ORDER BY starts DESC LIMIT 20;
+
+SELECT blob9 AS reason, count() AS n, round(avg(double1)) AS avg_secs FROM ysfw_play
+WHERE blob1 = 'flight-end' AND blob10 = 'public' GROUP BY reason;
+
+SELECT blob8 AS referrer, count() AS sessions FROM ysfw_play
+WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY sessions DESC
 ```
+
+### 初回の実測（2026-08-21 09:20 UTC 導入 〜 08-23、約2.2日・tomingのdev分を除く）
+
+参考値として残す。**n が小さいので比率を主張しない**。
+
+- 訪問者20（ブラウザ単位）・68セッション・**うち8人が実際に飛んだ**
+- 飛行19回開始／15回終了、飛行時間は中央値108秒・p90 663秒・**最長1327秒（22分）**
+- 終わり方は `ended` 5回（平均348秒）に対し **`left` 10回（平均188秒）＝3分の2は飛行中に離脱**
+- 機体は CESSNA_172R / SMALL_MAP が7回で最多、以下 F-18C/厚木4・F-15J/ハワイ4・B747/ヒースロー3
+- 起動は `freeflight` 18・`createflight` 1、**`menu` 0＝エンジン本家メニュー発の飛行はゼロ**
+- 国は CN 15人・US 3人・CH 1人・HU 1人。最も遊んでいるのは CH のdesktop（15訪問8飛行）と CN のtouch（11訪問・計38.6分）
+
+### 2週目の実測（導入〜2026-08-27、約6.5日・prodのみ・dev除外）
+
+- 訪問者82・218セッション・**21人が飛んだ（26%）**・飛行67開始/45終了・合計128.5分
+- 飛行時間は中央値99秒・p90 323秒・最長1327秒。終わり方は `ended` 20 / `left` 25
+- **`menu` 発の飛行は14回・5人**——初回実測の「menu 0」は n=19 では出ていなかっただけで、**エンジン本家メニューは使われている**
+- **touch のほうが長く飛ぶ**（平均212秒 / desktop 104秒）。ただし**完走報告率は touch 60%・desktop 85%** なので、touch側の合計分数は過小に出る
+- 国は CN 69人（84%）。流入は direct 199・google 9・`m.baidu.com` 4・**`doubao.com` 3**・`weixin110.qq.com` 1
+- **`vr-end` は6.5日間ゼロ**。VRに入った人がいないのか、計器が着弾していないのかは**この数字では区別できない**（実機で1回入って確かめること）
+- 層①（Web Analytics）の同期間は pv 230 / 訪問138 で、AEのセッション218とほぼ一致＝独立した2つの計器が同じ絵を出している
 
 ## 運用
 
-- **tomingの端末は1回だけ `?metrics=dev` を付けて開く**（端末ごと・ブラウザごと）。
+- **tomingの端末は1回だけ `?metrics=dev` を付けて開く**（端末ごと・ブラウザごと。2026-08-23に toming-desktop / toming-server / macbook / Quest 3S / Pixel 9 Pro で実施済み——集計に `aud='dev'` として現れることを確認した）。
   以後その端末の全イベントに `blob10='dev'` が付き、上のSQLの `blob10='public'` から外れる。
   戻すのは `?metrics=public`。この規模では自分のQAが数字を支配するので、**これをやらないと計器は自分を測る**。
 - **オプトアウト**は `?metrics=off`（その端末で以後いっさい送らない）。
@@ -168,5 +216,7 @@ GROUP BY aircraft, field ORDER BY flights DESC LIMIT 20
 3. **「人」ではなく「ブラウザ」を数えている**。同じ人の別端末は別人に見え、共有PCの2人は1人に見える。localStorageを消せば新規訪問者になる。
 4. **localStorageが使えない環境は `double2 = 0`**。初訪問（1）と区別できるようにしてある。「分からなかった」を「初訪問」に混ぜない。
 5. **XRiftのワールドは対象外**（`app.xrift.net` にホストされるので、こちらのアカウントからは原理的に見えない）。
-6. **計測しているのは `index.html`（ゲーム本体のページ）だけ**。ワークベンチ・各スタジオページの利用は入っていない（必要になったらそこにも `metrics.js` を載せる。1行）。
-7. **アドブロッカーで落ちる分がある**。`/metric` は自ドメイン・同一オリジンなので Web Analytics のビーコンよりは通りやすいが、ゼロではない。∴ **絶対数の下限**として読む。
+6. **botを弾いていない**。Cloudflare Web Analytics には bot 列があるがこのデータセットには無く、**JSを実行するクローラは人として数えられる**。訪問回数だけ多くて `flight-start` がゼロの `index1` はそれを疑う（訪問者ごとのSQLがそのための窓）。
+7. **計測しているのは `index.html`（ゲーム本体のページ）だけ**。ワークベンチ・各スタジオページの利用は入っていない（必要になったらそこにも `metrics.js` を載せる。1行）。
+8. **`blob7`（lang）は 2026-08-28 より前の行では常に空**。`classify()` は拾っていたのに `fields()` が載せていなかった（＝クライアントからサーバへ一度も出ていない）。導入初週の342行は全部空なので、**言語で切るクエリは `blob7 != ''` で母数を絞る**か日付で切ること。同じ値しか返さない列は「世界が一様」と見分けがつかない、の実例。
+9. **アドブロッカーで落ちる分がある**。`/metric` は自ドメイン・同一オリジンなので Web Analytics のビーコンよりは通りやすいが、ゼロではない。∴ **絶対数の下限**として読む。
