@@ -343,6 +343,14 @@ const MAX_MANIFEST_BYTES = 256 * 1024;
 //   blob3   reason   'no-room' | 'hostless' | 'grace-expired' | ''
 //   blob4   host     request hostname, stamped at connect (prod vs staging)
 //   blob5   country  request.cf.country of the socket that caused the event
+//   blob6   audience 'public' | 'dev' -- the maintainer's own QA rooms.  There is
+//                    no visitor id on this side, so the tag has to ride the
+//                    SOCKET: ?aud=dev on the signaling URL (web/index.html builds
+//                    it from the sticky ?metrics=dev audience).  The URL is the
+//                    only seam both channels share -- the game channel's
+//                    {t:'host'} is built by the engine in C++, the pack channel's
+//                    by web/pack-net.js.  Without it, one evening of testing
+//                    multiplayer outweighs a week of real rooms.
 //   double1 peers    peers in the room at that moment
 //   double2 peak     most peers the room ever held (0 = nobody ever joined)
 //   double3 secs     room lifetime, at close
@@ -382,6 +390,7 @@ export class SignalHub {
   }
 
   async fetch(request) {
+    const url = new URL(request.url);
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
@@ -392,8 +401,9 @@ export class SignalHub {
     // client cannot be trusted to say which deployment it is on.
     const conn = {
       role: null, room: null, peerId: 0, closed: false,
-      site: new URL(request.url).hostname,
-      cc: (request.cf && request.cf.country) || ''
+      site: url.hostname,
+      cc: (request.cf && request.cf.country) || '',
+      aud: url.searchParams.get('aud') === 'dev' ? 'dev' : 'public'
     };
     server.addEventListener('message', (ev) => this.onMessage(server, conn, ev.data));
     server.addEventListener('close', () => this.onClose(server, conn));
@@ -451,7 +461,7 @@ export class SignalHub {
         indexes: [roomKey(room)],
         blobs: [
           str(ev, 24), room.endsWith('~p') ? 'pack' : 'game', str(e.reason, 32),
-          str(e.site, 64), str(e.cc, 8)
+          str(e.site, 64), str(e.cc, 8), e.aud === 'dev' ? 'dev' : 'public'
         ],
         doubles: [num(e.peers), num(e.peak), num(e.secs), num(e.packs)]
       });
@@ -534,7 +544,7 @@ export class SignalHub {
         }
         this.send(ws, { t: 'host-taken' });
         this.log('host-taken', m.room);
-        this.room('room-taken', m.room, { peers: existing.peers.size, peak: existing.peak, site: conn.site, cc: conn.cc });
+        this.room('room-taken', m.room, { peers: existing.peers.size, peak: existing.peak, site: conn.site, cc: conn.cc, aud: conn.aud });
         return;
       }
       conn.role = 'host';
@@ -544,13 +554,13 @@ export class SignalHub {
         // For the room dataset: peak answers "did anyone ever arrive" even for
         // a room whose peers all left before it closed, and openedMs survives
         // the host socket so expireRoom can report a lifetime.
-        openedMs: Date.now(), peak: 0, site: conn.site, cc: conn.cc });
+        openedMs: Date.now(), peak: 0, site: conn.site, cc: conn.cc, aud: conn.aud });
       this.send(ws, hostOk(m.room));
       // packs: how many add-on packs the host advertised; dropped: the manifest
       // exceeded the hub cap and was discarded (a prime suspect when a joiner
       // never pulls anything despite the host having packs enabled).
       this.log('host', m.room, { packs, bytes, dropped });
-      this.room('room-open', m.room, { packs, site: conn.site, cc: conn.cc });
+      this.room('room-open', m.room, { packs, site: conn.site, cc: conn.cc, aud: conn.aud });
 
     } else if (m.t === 'join' && typeof m.room === 'string') {
       const r = this.rooms.get(m.room);
@@ -560,7 +570,7 @@ export class SignalHub {
         // The most informative row in the set: somebody followed an invite and
         // the room was not there.  Zero joins and zero join-fails means nobody
         // tried; zero joins with join-fails means the links are going stale.
-        this.room('room-join-fail', m.room, { reason: 'no-room', site: conn.site, cc: conn.cc });
+        this.room('room-join-fail', m.room, { reason: 'no-room', site: conn.site, cc: conn.cc, aud: conn.aud });
         return;
       }
       conn.role = 'peer';
@@ -581,7 +591,7 @@ export class SignalHub {
       if (r.peers.size > (r.peak || 0)) r.peak = r.peers.size;
       this.log('join', m.room, { result: 'join-ok', peer: conn.peerId, hostless: r.host ? undefined : true, packs: Array.isArray(r.manifest) ? r.manifest.length : 0 });
       this.room('room-join', m.room, { peers: r.peers.size, peak: r.peak,
-        reason: r.host ? '' : 'hostless', packs: packsOf(r), site: conn.site, cc: conn.cc });
+        reason: r.host ? '' : 'hostless', packs: packsOf(r), site: conn.site, cc: conn.cc, aud: conn.aud });
 
     } else if ((m.t === 'sdp' || m.t === 'ice') && conn.room) {
       const r = this.rooms.get(conn.room);
@@ -657,7 +667,7 @@ export class SignalHub {
     this.room('room-close', room, {
       peers: r.peers.size, peak: r.peak || 0, packs: packsOf(r),
       secs: Math.max(0, Math.round((Date.now() - (r.openedMs || Date.now())) / 1000)),
-      reason: 'grace-expired', site: r.site, cc: r.cc
+      reason: 'grace-expired', site: r.site, cc: r.cc, aud: r.aud
     });
   }
 }

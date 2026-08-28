@@ -219,6 +219,7 @@ WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY session
 | `blob3` | `no-room` / `hostless` / `grace-expired` / 空 |
 | `blob4` | ホスト名（本番とstagingの分離） |
 | `blob5` | 国 |
+| `blob6` | `public` / `dev`（**tomingのQA部屋**。`?metrics=dev` を固着させたブラウザは、シグナリングURLに `?aud=dev` を付けて接続する。部屋側には訪問者IDが無いのでタグは**ソケットに乗せるしかなく**、ゲームチャネルの `{t:'host'}` はエンジン側のC++が作るので**URLが両チャネル共通の唯一の継ぎ目**。週13ソケットの規模では、一晩のマルチプレイ検証が1週間の実データを上回る） |
 | `double1` | その時点のpeer数 |
 | `double2` | **peak**＝その部屋が持った最大peer数（**0＝誰も来なかった**） |
 | `double3` | 部屋の寿命（秒・close時） |
@@ -236,7 +237,7 @@ SELECT toDate(timestamp) AS day,
        countIf(blob1 = 'room-join-fail') AS stale_invites,
        countIf(blob1 = 'room-taken')     AS collisions
 FROM ysfw_room
-WHERE blob2 = 'game' AND blob4 = 'ysflight-web.toming.app'
+WHERE blob2 = 'game' AND blob4 = 'ysflight-web.toming.app' AND blob6 = 'public'
 GROUP BY day ORDER BY day
 ```
 
@@ -248,6 +249,7 @@ SELECT count() AS rooms,
        round(quantileExactWeighted(0.5)(double3, _sample_interval)) AS median_secs
 FROM ysfw_room
 WHERE blob1 = 'room-close' AND blob2 = 'game' AND blob4 = 'ysflight-web.toming.app'
+  AND blob6 = 'public'
 ```
 
 **読み分け**——`joins` も `stale_invites` も0なら**誰も招待リンクを踏んでいない**（＝共有されていない）。`joins` が0で `stale_invites` が立つなら**踏まれてはいるが部屋が消えている**（招待リンクの寿命の問題）。この2つは `ysfw_play` からは同じ「join 0」に見える。
@@ -258,7 +260,8 @@ WHERE blob1 = 'room-close' AND blob2 = 'game' AND blob4 = 'ysflight-web.toming.a
   以後その端末の全イベントに `blob10='dev'` が付き、上のSQLの `blob10='public'` から外れる。
   戻すのは `?metrics=public`。この規模では自分のQAが数字を支配するので、**これをやらないと計器は自分を測る**。
 - **オプトアウト**は `?metrics=off`（その端末で以後いっさい送らない）。
-- **stagingへのデプロイは同じデータセットに書く**。SQLで `blob13` を本番に絞ること。
+- **stagingへのデプロイは同じデータセットに書く**。SQLで `blob13`（`ysfw_room` は `blob4`）を本番に絞ること。
+- **`?metrics=dev` はマルチプレイの部屋にも効く**（2026-08-28〜）。dev固着済みのブラウザからホスト／参加すると、シグナリングのソケットに `?aud=dev` が付き、`ysfw_room` の行が `blob6='dev'` になる。**端末ごとに1回 `?metrics=dev` を開く作法は同じ**で、追加の手順は無い。⚠ `?signal=` で外部のシグナリングを指定したときは付かない（他人のエンドポイントに自分のタグを送らない）。
 
 ## 限界（数字を読むときに忘れないこと）
 

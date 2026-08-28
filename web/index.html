@@ -573,8 +573,16 @@
     //   ?room=12345678           fixes the host's room code (8-digit numeric)
     //   ?join=12345678           pre-fills the Room ID to join (invite links)
     //   ?host=1&name=X           hosts a room directly (deeplink.js -> -server)
+    //
+    // ?aud=dev rides along when this browser is tagged as the maintainer's (the
+    // sticky ?metrics=dev audience), so the room counter can drop QA rooms the
+    // way /metric already drops QA visits.  It has to go on the URL rather than
+    // in the {t:'host'} message: the game channel's messages are built by the
+    // engine in C++, so the socket URL is the only seam both channels share.
+    // Never appended to a ?signal= override -- that endpoint is someone else's.
     ysfwSignalUrl: new URLSearchParams(location.search).get('signal') ||
-      ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal'),
+      ((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signal' +
+        ((globalThis.ysfwMetrics && globalThis.ysfwMetrics.audience === 'dev') ? '?aud=dev' : '')),
     ysfwRoomCode: new URLSearchParams(location.search).get('room') || undefined,
     ysfwJoinRoom: new URLSearchParams(location.search).get('join') || undefined,
     locateFile: function (path) {

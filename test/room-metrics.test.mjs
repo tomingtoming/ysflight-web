@@ -21,7 +21,7 @@ function makeHub(dataset) {
 
 const sock = () => ({ sent: [], send(s) { this.sent.push(JSON.parse(s)); } });
 const conn = (extra) => Object.assign(
-  { role: null, room: null, peerId: 0, closed: false, site: 'ysflight-web.toming.app', cc: 'JP' },
+  { role: null, room: null, peerId: 0, closed: false, site: 'ysflight-web.toming.app', cc: 'JP', aud: 'public' },
   extra || {});
 
 const send = (hub, ws, c, msg) => hub.onMessage(ws, c, JSON.stringify(msg));
@@ -35,7 +35,7 @@ test('opening a room writes one row with the documented column order', () => {
   assert.equal(p.indexes.length, 1);
   assert.match(p.indexes[0], /^[0-9a-f]{8}$/);           // hashed, never the key itself
   assert.notEqual(p.indexes[0], 'ROOM0001');
-  assert.deepEqual(p.blobs, ['room-open', 'game', '', 'ysflight-web.toming.app', 'JP']);
+  assert.deepEqual(p.blobs, ['room-open', 'game', '', 'ysflight-web.toming.app', 'JP', 'public']);
   assert.deepEqual(p.doubles, [0, 0, 0, 2]);             // peers, peak, secs, packs
 });
 
@@ -105,6 +105,7 @@ test('a room whose peers all left still reports that somebody came', () => {
   assert.equal(c[0].doubles[1], 1, 'peak must survive the peer leaving');
   assert.equal(c[0].blobs[2], 'grace-expired');
   assert.equal(c[0].blobs[3], 'ysflight-web.toming.app', 'the room keeps its own provenance');
+  assert.equal(c[0].blobs[5], 'public');
 });
 
 test('a room nobody joined closes with peak 0', () => {
@@ -132,6 +133,70 @@ test('the pack count follows a host takeover instead of freezing at the first ho
   send(hub, sock(), conn(), { t: 'host', room: 'ROOM0008', token: 'b', manifest: [{ id: 'x' }] });
   send(hub, sock(), conn(), { t: 'join', room: 'ROOM0008' });
   assert.equal(by(points, 'room-join')[0].doubles[3], 1);
+});
+
+test("the maintainer's own rooms are tagged, all the way to the close row", () => {
+  // A socket opened from a ?metrics=dev browser carries ?aud=dev, so an evening
+  // of testing multiplayer does not outweigh a week of real rooms.  The tag has
+  // to survive onto room-close, which fires from a timer long after the socket
+  // (and its conn) is gone -- hence the room record keeps its own copy.
+  const { hub, points } = makeHub();
+  const dev = conn({ aud: 'dev' });
+  send(hub, sock(), dev, { t: 'host', room: 'DEVROOM1', token: 't' });
+  send(hub, sock(), conn({ aud: 'dev' }), { t: 'join', room: 'DEVROOM1' });
+  send(hub, sock(), conn({ aud: 'dev' }), { t: 'join', room: 'NOSUCH01' });
+  hub.rooms.get('DEVROOM1').host = null;
+  hub.expireRoom('DEVROOM1');
+  assert.deepEqual(points.map((p) => p.blobs[5]), ['dev', 'dev', 'dev', 'dev']);
+});
+
+test('anything that is not exactly dev counts as public', () => {
+  const { hub, points } = makeHub();
+  send(hub, sock(), conn({ aud: 'DEV' }), { t: 'host', room: 'ROOM0011', token: 't' });
+  send(hub, sock(), conn({ aud: undefined }), { t: 'host', room: 'ROOM0012', token: 't' });
+  assert.deepEqual(points.map((p) => p.blobs[5]), ['public', 'public']);
+});
+
+test('the socket URL is where the dev tag is read, and it defaults to public', () => {
+  // The one place the query string is parsed.  WebSocketPair/Response(101) only
+  // exist in the Workers runtime, so both are stubbed -- what is under test is
+  // that fetch() reads ?aud off the URL and stamps the connection with it.
+  const realPair = globalThis.WebSocketPair;
+  const realResponse = globalThis.Response;
+  globalThis.WebSocketPair = function () {
+    const mk = () => ({ accept() {}, addEventListener() {}, send() {} });
+    return [mk(), mk()];
+  };
+  globalThis.Response = function (body, init) { this.body = body; this.init = init; };
+  try {
+    const { hub } = makeHub();
+    const seen = [];
+    hub.onMessage = (ws, c) => seen.push(c.aud);
+    hub.trackConn = () => {};
+    const req = (u) => ({ url: u, cf: { country: 'JP' } });
+    // fetch() wires the handlers rather than calling onMessage, so reach the conn
+    // through the listener it registers.
+    let captured = null;
+    globalThis.WebSocketPair = function () {
+      const mk = () => ({
+        accept() {}, send() {},
+        addEventListener(kind, fn) { if (kind === 'message') this._fn = fn; }
+      });
+      const a = mk(), b = mk();
+      captured = b;
+      return [a, b];
+    };
+    hub.fetch(req('https://ysflight-web.toming.app/signal?aud=dev'));
+    captured._fn({ data: JSON.stringify({ t: 'ping' }) });
+    hub.fetch(req('https://ysflight-web.toming.app/signal'));
+    captured._fn({ data: JSON.stringify({ t: 'ping' }) });
+    hub.fetch(req('https://ysflight-web.toming.app/signal?aud=nonsense'));
+    captured._fn({ data: JSON.stringify({ t: 'ping' }) });
+    assert.deepEqual(seen, ['dev', 'public', 'public']);
+  } finally {
+    globalThis.WebSocketPair = realPair;
+    globalThis.Response = realResponse;
+  }
 });
 
 test('no dataset binding (local dev, older config) counts nothing and throws nothing', () => {

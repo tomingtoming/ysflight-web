@@ -226,7 +226,13 @@ flown solo, hosted, joined, or in VR). No account, no cookie, no personal data;
 a random id in `localStorage` is what separates ten visits by one person from
 ten people.
 
-Opt out for good on this browser with **`?metrics=off`**.
+The signaling hub separately counts *rooms* -- opened, joined, closed -- so the
+project can tell "nobody joined" from "the counter stopped at the browser". A
+room key is stored only as a hash, never as itself: the key is what an invite
+link hands out, and a three-month store should not hold live invite codes.
+
+Opt out for good on this browser with **`?metrics=off`**. (Room counting has no
+visitor id at all -- it counts rooms, not people -- so it is unaffected.)
 
 Where it goes and how it is read: [docs/metrics.md](docs/metrics.md) (Japanese).
 
