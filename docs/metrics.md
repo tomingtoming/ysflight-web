@@ -30,7 +30,7 @@ Freeプランで**書き込み10万点/日・読み1万クエリ/日**（実績�
 | `session` | ページロード1回につき1つ | `visits`（この端末の通算訪問回数・1なら初訪問）・`days`（初訪問からの日数）・`ref`（流入元ホスト） |
 | `flight-start` | 飛行に入った瞬間 | 機体・フィールド・launch種別・role |
 | `flight-end` | 飛行から出た瞬間／離脱時 | `secs`（飛行秒数）・`reason`（`ended` = メニューへ戻った／`left` = タブを閉じた・遷移した） |
-| `vr-end` | VRセッション終了 | `secs`・`fps`（平均）・`reason` |
+| `vr-end` | VRセッション終了 | `secs`・`fps`（平均）・`reason`・`hz`（許可レート）・`cpu`（ms/frame）・`fpsSeries`（30秒毎） |
 
 **両端を記録するのが肝**。飛行中にタブを閉じた人は `flight-start` だけを残し、
 その差分そのものが「最後まで飛ぶか」の答えになる（`pagehide` では `reason='left'` で
@@ -56,10 +56,13 @@ Freeプランで**書き込み10万点/日・読み1万クエリ/日**（実績�
 | `blob12` | ビルドID |
 | `blob13` | **サーバ側**: リクエストのホスト名（本番とstagingの区別） |
 | `blob14` | **サーバ側**: 国コード |
+| `blob15` | VRの30秒毎fps系列（`44,46,43,...`・`vr-end` のみ。平均1点では「起動直後が重い」と「時間で落ちる」を区別できない） |
 | `double1` | 秒数（飛行 / VR） |
 | `double2` | この端末の通算訪問回数（1=初回、0=localStorage不可） |
 | `double3` | VR平均FPS |
 | `double4` | 初訪問からの日数 |
+| `double5` | VRセッションにcompositorが**許可した**レート（Hz・`vr-end` のみ）。平均fpsがこれを大きく割っていればコマ落ち、60fps@60Hzなら完走 |
+| `double6` | VR中のエンジンCPU ms/frame（EMA・`vr-end` のみ）。フレーム周期（1000/hz）に近ければCPU律速、遠ければGPU/熱側 |
 
 最後の2列（host・country）はクライアントに名乗らせず**サーバで刻む**。
 `blob13` があるので本番とstagingが同じデータセットに同居しても混ざらない。
@@ -205,6 +208,23 @@ SELECT blob8 AS referrer, sum(_sample_interval) AS sessions FROM ysfw_play
 WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY sessions DESC
 ```
 
+### VRセッションの診断（低fpsの正体を1行で割る・2026-08-28追加）
+
+平均44fpsだけでは「72Hzでコマ落ち」か「60Hz許可で完走」か、「起動直後が重い」のか
+「時間で落ちる」のか、CPU律速かGPU/熱かが割れない。`hz`・`cpu`・`fps_series_30s` の
+3列がそれぞれの問いに答える（列の意味は上の表。**この3列は2026-08-28のビルドから**
+で、それ以前の `vr-end` 行は空/0のまま）。
+
+```sql
+SELECT timestamp, blob14 AS cc, double1 AS secs, double3 AS avg_fps,
+       double5 AS granted_hz, double6 AS cpu_ms, blob15 AS fps_series_30s,
+       blob9 AS reason
+FROM ysfw_play
+WHERE blob1 = 'vr-end' AND blob10 = 'public'
+  AND blob13 = 'ysflight-web.toming.app'
+ORDER BY timestamp
+```
+
 ### 初回の実測（2026-08-21 09:20 UTC 導入 〜 08-23、約2.2日・tomingのdev分を除く）
 
 参考値として残す。**n が小さいので比率を主張しない**。
@@ -223,7 +243,7 @@ WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY session
 - **`menu` 発の飛行は14回・5人**——初回実測の「menu 0」は n=19 では出ていなかっただけで、**エンジン本家メニューは使われている**
 - **touch のほうが長く飛ぶ**（平均212秒 / desktop 104秒）。ただし**完走報告率は touch 60%・desktop 85%** なので、touch側の合計分数は過小に出る
 - 国は CN 69人（84%）。流入は direct 199・google 9・`m.baidu.com` 4・**`doubao.com` 3**・`weixin110.qq.com` 1
-- **`vr-end` は6.5日間ゼロ**。VRに入った人がいないのか、計器が着弾していないのかは**この数字では区別できない**（実機で1回入って確かめること）
+- **`vr-end` は6.5日間ゼロ**。VRに入った人がいないのか、計器が着弾していないのかは**この数字では区別できない**（実機で1回入って確かめること）→ **08-28にQuest 3S実機で2本着弾を確認**（161秒/44fps・99秒/60fps・`reason=exit`・`device` の `touch`→`vr` 切替も設計どおり）＝計器は生きている。ゼロは導線の不在（「VRで遊べます」の案内を一度も出していない）
 - 層①（Web Analytics）の同期間は pv 230 / 訪問138 で、AEのセッション218とほぼ一致＝独立した2つの計器が同じ絵を出している
 
 ## 部屋を数える（`ysfw_room`・2026-08-28追加）

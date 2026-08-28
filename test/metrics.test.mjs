@@ -199,13 +199,41 @@ test('a flight flown in the headset is tagged vr, and the VR session is its own 
   rec.onDiag({ type: 'mode', inFlight: true });
   rec.onDiag({ type: 'vr-start', inFlight: true });
   tick(600000);
-  rec.onDiag({ type: 'vr-end', seconds: 600.4, avgFps: 71.6, reason: 'exit' });
+  rec.onDiag({
+    type: 'vr-end', seconds: 600.4, avgFps: 71.6, reason: 'exit',
+    grantedHz: 72, cpuMs: 7.04, fpsSeries: [44.6, 71, 72.2]
+  });
   rec.onDiag({ type: 'mode', inFlight: false });
   const vr = events.find((e) => e.e === 'vr-end');
   assert.equal(vr.secs, 600);
   assert.equal(vr.fps, 72);
   assert.equal(vr.reason, 'exit');
+  assert.equal(vr.hz, 72);
+  assert.equal(vr.cpu, 7);
+  assert.equal(vr.fpsSeries, '45,71,72');
   assert.equal(events.find((e) => e.e === 'flight-end').device, 'vr');
+});
+
+test('a vr-end from a build without the diagnosis trio still produces a valid row', () => {
+  // Rollout order guard: the engine wasm and the shell can be cached at
+  // different versions, so the recorder must not turn absent fields into NaN
+  // (a NaN double throws at writeDataPoint and the whole row is lost).
+  const { rec, events } = drive('');
+  rec.onDiag({ type: 'vr-end', seconds: 30, avgFps: 44, reason: 'exit' });
+  const vr = events.find((e) => e.e === 'vr-end');
+  assert.equal(vr.hz, 0);
+  assert.equal(vr.cpu, 0);
+  assert.equal(vr.fpsSeries, '');
+});
+
+test('an hour-long fps series is truncated to the blob budget, not shipped unbounded', () => {
+  const { rec, events } = drive('');
+  const series = [];
+  for (let i = 0; i < 500; ++i) series.push(120);
+  rec.onDiag({ type: 'vr-end', seconds: 9000, avgFps: 120, reason: 'exit', fpsSeries: series });
+  const vr = events.find((e) => e.e === 'vr-end');
+  assert.ok(vr.fpsSeries.length <= 400);
+  assert.ok(vr.fpsSeries.startsWith('120,120'));
 });
 
 test('replay playback is not a flight', () => {
@@ -256,9 +284,23 @@ test('a good batch becomes one data point with the documented column order', asy
   assert.deepEqual(p.blobs, [
     'flight-end', 'freeflight', 'F-18C_HORNET', 'ATSUGI_AIRBASE',
     'solo', 'desktop', 'ja', '', 'ended',
-    'public', 'sid12345', 'dfb26b9d81f2', 'ysflight-web.toming.app', 'JP'
+    'public', 'sid12345', 'dfb26b9d81f2', 'ysflight-web.toming.app', 'JP', ''
   ]);
-  assert.deepEqual(p.doubles, [412, 2, 0, 5]);
+  assert.deepEqual(p.doubles, [412, 2, 0, 5, 0, 0]);
+});
+
+test('a vr-end carries the diagnosis trio in the documented columns', async () => {
+  const { env, written } = fakeEnv();
+  await worker.fetch(post({
+    ...BATCH,
+    events: [{
+      e: 'vr-end', launch: 'freeflight', role: 'solo', device: 'vr', lang: 'ja',
+      reason: 'exit', secs: 161, visits: 1, fps: 44, days: 0,
+      hz: 72, cpu: 7.4, fpsSeries: '40,45,46,44,45'
+    }]
+  }), env);
+  assert.equal(written[0].blobs[14], '40,45,46,44,45');
+  assert.deepEqual(written[0].doubles, [161, 1, 44, 0, 72, 7.4]);
 });
 
 test('host and country come from the request, not the client', async () => {
@@ -285,8 +327,8 @@ test('missing visitor id still counts as a data point', async () => {
 
 test('junk values cannot poison the numeric columns', async () => {
   const { env, written } = fakeEnv();
-  await worker.fetch(post({ ...BATCH, events: [{ e: 'session', secs: 'NaN', visits: null, fps: {}, days: Infinity }] }), env);
-  assert.deepEqual(written[0].doubles, [0, 0, 0, 0]);
+  await worker.fetch(post({ ...BATCH, events: [{ e: 'session', secs: 'NaN', visits: null, fps: {}, days: Infinity, hz: 'x', cpu: [] }] }), env);
+  assert.deepEqual(written[0].doubles, [0, 0, 0, 0, 0, 0]);
 });
 
 test('oversized strings are truncated rather than rejected', async () => {
