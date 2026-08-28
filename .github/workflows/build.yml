@@ -156,9 +156,11 @@ jobs:
           node scripts/smoke-vrmenu.mjs "http://localhost:8923/index.html" "."
 
       # Real-shape controller model smoke (PR only): tracked ungrabbed hands
-      # must draw misc/vrctl_*.dnm at the live grip pose.  A/B/A luminance
-      # gate on the multiview layers plus the tracked-flag ([9]/[10])
-      # white-box -- see scripts/smoke-vrctlmodel.mjs.
+      # must draw misc/vrctl_*.dnm at the live grip pose.  On this runner the
+      # headless GL exposes no OVR_multiview2 (same reason smoke-mv.mjs is
+      # not in CI), so the script degrades to the tracked-flag ([9]/[10])
+      # white-box; the layer-luminance A/B/A render gate runs in real-GPU
+      # environments -- see scripts/smoke-vrctlmodel.mjs's DEGRADED MODE note.
       - name: VR controller model smoke (PR only)
         if: github.event_name == 'pull_request'
         run: |

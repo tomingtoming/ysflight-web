@@ -14,6 +14,13 @@
 // Pass criteria: tracked flags follow the pokes (white-box), the ON frame
 // differs from both OFF frames on BOTH layers (render), no fatal GL output.
 //
+// DEGRADED MODE: on a runner whose headless GL exposes no OVR_multiview2
+// (GitHub Actions with --use-angle=gl -- the same reason smoke-mv.mjs is not
+// in CI), forceMultiview fails and the render gates are SKIPPED; the
+// tracked-flag white-box (the web-side logic this PR adds) still runs and
+// still gates.  The full render check needs a real-GPU environment
+// (locally: swap in --use-angle=vulkan, see the ops notes).
+//
 //   node scripts/smoke-vrctlmodel.mjs [url] [outDir]
 import { chromium } from 'playwright';
 
@@ -74,10 +81,14 @@ const forced = await page.evaluate(([W, H]) => {
   vr.pokeEye(1, [1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -0.032, 0, 0, 1, 0, 0, W, H]);
   return vr.forceMultiview(W, H);
 }, [W, H]);
-if (forced !== 'ok') {
-  console.error('FAILED to force multiview mode: ' + forced);
+if (forced === 'hooks-missing') {
+  console.error('FAILED: test hooks missing (pokeEye/forceMultiview/pokeControllerFrame)');
   await browser.close();
   process.exit(1);
+}
+const mvOk = (forced === 'ok');
+if (!mvOk) {
+  console.log('SKIP render gates: forceMultiview said "' + forced + '" -- white-box flags only');
 }
 await page.waitForTimeout(2000);
 
@@ -105,7 +116,7 @@ async function sampleLum(label) {
   return s;
 }
 
-const base = await sampleLum('baseline (no hands)');
+const base = mvOk ? await sampleLum('baseline (no hands)') : null;
 
 const flagsOn = await page.evaluate((hands) => {
   const vr = globalThis.Module.ysfwVr;
@@ -113,8 +124,8 @@ const flagsOn = await page.evaluate((hands) => {
   const cb = vr.readControlBlock();
   return { right: cb[9], left: cb[10], stickGrabbed: cb[0], throttleGrabbed: cb[4] };
 }, HANDS);
-const on = await sampleLum('hands tracked (models expected)');
-await page.screenshot({ path: outDir + '/vrctlmodel-1-on.png' });
+const on = mvOk ? await sampleLum('hands tracked (models expected)') : null;
+if (mvOk) await page.screenshot({ path: outDir + '/vrctlmodel-1-on.png' });
 
 const flagsOff = await page.evaluate(() => {
   const vr = globalThis.Module.ysfwVr;
@@ -122,7 +133,7 @@ const flagsOff = await page.evaluate(() => {
   const cb = vr.readControlBlock();
   return { right: cb[9], left: cb[10] };
 }, []);
-const off = await sampleLum('hands cleared');
+const off = mvOk ? await sampleLum('hands cleared') : null;
 
 let failed = false;
 function check(name, ok, detail) {
@@ -135,22 +146,24 @@ check('poked hands are ungrabbed (the path under test)',
   0 === flagsOn.stickGrabbed && 0 === flagsOn.throttleGrabbed, JSON.stringify(flagsOn));
 check('tracked flags drop on an empty frame',
   0 === flagsOff.right && 0 === flagsOff.left, JSON.stringify(flagsOff));
-// The clear-side gate is RELATIVE to the measured on-side shift: the absolute
-// shift depends on scene content under the models (runway vs sky vs panel),
-// but removing them must undo most of whatever appearing did.  A fixed
-// absolute threshold here was measured flaky-by-margin on first run
-// (on=1.95/1.77, off=1.59/1.41 against a 1.5 cutoff).
-const dOn0 = Math.abs(on.l0 - base.l0), dOn1 = Math.abs(on.l1 - base.l1);
-const dOff0 = Math.abs(off.l0 - on.l0), dOff1 = Math.abs(off.l1 - on.l1);
-check('models change both layers when tracked',
-  dOn0 >= 1.0 && dOn1 >= 1.0, 'd0=' + dOn0.toFixed(2) + ' d1=' + dOn1.toFixed(2));
-check('models leave both layers when cleared',
-  dOff0 >= 0.5 * dOn0 && dOff1 >= 0.5 * dOn1,
-  'off d0=' + dOff0.toFixed(2) + '/' + dOff1.toFixed(2) + ' vs on d0=' + dOn0.toFixed(2) + '/' + dOn1.toFixed(2));
+if (mvOk) {
+  // The clear-side gate is RELATIVE to the measured on-side shift: the
+  // absolute shift depends on scene content under the models (runway vs sky
+  // vs panel), but removing them must undo most of whatever appearing did.
+  // A fixed absolute threshold here was measured flaky-by-margin on first
+  // run (on=1.95/1.77, off=1.59/1.41 against a 1.5 cutoff).
+  const dOn0 = Math.abs(on.l0 - base.l0), dOn1 = Math.abs(on.l1 - base.l1);
+  const dOff0 = Math.abs(off.l0 - on.l0), dOff1 = Math.abs(off.l1 - on.l1);
+  check('models change both layers when tracked',
+    dOn0 >= 1.0 && dOn1 >= 1.0, 'd0=' + dOn0.toFixed(2) + ' d1=' + dOn1.toFixed(2));
+  check('models leave both layers when cleared',
+    dOff0 >= 0.5 * dOn0 && dOff1 >= 0.5 * dOn1,
+    'off d0=' + dOff0.toFixed(2) + '/' + dOff1.toFixed(2) + ' vs on d0=' + dOn0.toFixed(2) + '/' + dOn1.toFixed(2));
+}
 if (fatal.length) {
   console.error('FATAL console output:'); fatal.forEach((f) => console.error('  ' + f));
   failed = true;
 }
 await browser.close();
 if (failed) { console.error('VRCTL MODEL TEST FAILED'); process.exit(1); }
-console.log('VRCTL MODEL TEST PASSED');
+console.log(mvOk ? 'VRCTL MODEL TEST PASSED' : 'VRCTL MODEL TEST PASSED (white-box only, no multiview here)');
