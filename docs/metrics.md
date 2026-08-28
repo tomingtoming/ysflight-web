@@ -201,6 +201,57 @@ WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY session
 - **`vr-end` は6.5日間ゼロ**。VRに入った人がいないのか、計器が着弾していないのかは**この数字では区別できない**（実機で1回入って確かめること）
 - 層①（Web Analytics）の同期間は pv 230 / 訪問138 で、AEのセッション218とほぼ一致＝独立した2つの計器が同じ絵を出している
 
+## 部屋を数える（`ysfw_room`・2026-08-28追加）
+
+`ysfw_play` の `blob5`（role）は **`?host=1` のページを開いた瞬間**に立つ＝**意図**であって部屋ではない。導入初週の実測でこれが効いた: 08-24の05:04〜05:08に3人が別々にホストのURLを開いたのに、**シグナリングhubが見たソケットはその日ゼロ**。`ysfw_play` だけでは「繋がらなかった」のか「計器がクライアントで止まっている」のかを**区別できない**。
+
+`ysfw_room` は**hubが実際に見た事実**を書く。worker は同じ事象を `log()` でWorkers Logsにも吐いているが、あちらは7日で消え、しかも**この端末のトークンでは読めない**（限界5）。
+
+**別データセットにしたのは意図的**——`ysfw_play` の `index1` はブラウザ、`ysfw_room` の `index1` は部屋。混ぜると、既に書いた `count(DISTINCT index1)` のクエリが**部屋を人として数える**。
+
+### 列
+
+| 列 | 中身 |
+|---|---|
+| `index1` | 部屋キーの**8桁ハッシュ**。⚠ **キーそのものは書かない**——`{t:'join',room}` が入室の全てなので部屋キーは**入室capability**であり、3ヶ月残る場所に生の招待コードを置かない。ハッシュは安定なので「同じ部屋」の grouping は効く |
+| `blob1` | `room-open` / `room-join` / `room-join-fail` / `room-taken` / `room-close` |
+| `blob2` | `game` / `pack`（`~p` 付きのパック配布部屋。1セッションが両方作るので、この列で割らないと部屋が倍に見える） |
+| `blob3` | `no-room` / `hostless` / `grace-expired` / 空 |
+| `blob4` | ホスト名（本番とstagingの分離） |
+| `blob5` | 国 |
+| `double1` | その時点のpeer数 |
+| `double2` | **peak**＝その部屋が持った最大peer数（**0＝誰も来なかった**） |
+| `double3` | 部屋の寿命（秒・close時） |
+| `double4` | ホストが提示したアドオンパック数 |
+
+⚠ **peak が要る理由**: 閉じる時点では peers は必ず空なので、`double1` だけ見ると「2人で遊んだ部屋」と「誰も来なかった部屋」が同じ行になる。
+
+### 引き方
+
+```sql
+-- 部屋は立ったか、2人目は来たか（本番のゲーム部屋だけ）
+SELECT toDate(timestamp) AS day,
+       countIf(blob1 = 'room-open')      AS rooms,
+       countIf(blob1 = 'room-join')      AS joins,
+       countIf(blob1 = 'room-join-fail') AS stale_invites,
+       countIf(blob1 = 'room-taken')     AS collisions
+FROM ysfw_room
+WHERE blob2 = 'game' AND blob4 = 'ysflight-web.toming.app'
+GROUP BY day ORDER BY day
+```
+
+```sql
+-- 閉じた部屋の顛末（peak 0 = 誰も来なかった / secs = 待っていた時間）
+SELECT count() AS rooms,
+       countIf(double2 = 0) AS nobody_came,
+       countIf(double2 > 0) AS had_company,
+       round(quantileExactWeighted(0.5)(double3, _sample_interval)) AS median_secs
+FROM ysfw_room
+WHERE blob1 = 'room-close' AND blob2 = 'game' AND blob4 = 'ysflight-web.toming.app'
+```
+
+**読み分け**——`joins` も `stale_invites` も0なら**誰も招待リンクを踏んでいない**（＝共有されていない）。`joins` が0で `stale_invites` が立つなら**踏まれてはいるが部屋が消えている**（招待リンクの寿命の問題）。この2つは `ysfw_play` からは同じ「join 0」に見える。
+
 ## 運用
 
 - **tomingの端末は1回だけ `?metrics=dev` を付けて開く**（端末ごと・ブラウザごと。2026-08-23に toming-desktop / toming-server / macbook / Quest 3S / Pixel 9 Pro で実施済み——集計に `aud='dev'` として現れることを確認した）。

@@ -124,6 +124,15 @@ async function clientLog(request) {
   return new Response(null, { status: 204 });
 }
 
+// Shared sanitizers for everything that reaches an Analytics Engine column: a
+// blob must be a bounded string and a double must be a real number, or the write
+// throws and the row is lost.  Used by both sinks (/metric and the room events).
+const str = (v, n) => (typeof v === 'string' ? v : '').slice(0, n || 64);
+const num = (v) => {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
+};
+
 // Usage metrics sink (web/metrics.js POSTs here): writes one Analytics Engine
 // data point per event.  This is the "how many people actually play" counter --
 // see docs/metrics.md for the schema, the SQL cookbook and the read token.
@@ -192,11 +201,6 @@ async function metric(request, env) {
   }
   if (!env.PLAY) return new Response(null, { status: 204 });
 
-  const str = (v, n) => (typeof v === 'string' ? v : '').slice(0, n || 64);
-  const num = (v) => {
-    const x = Number(v);
-    return Number.isFinite(x) ? x : 0;
-  };
   const vid = str(batch.vid, 64) || 'anon';
   const sid = str(batch.sid, 32);
   const audience = batch.aud === 'dev' ? 'dev' : 'public';
@@ -311,9 +315,60 @@ async function turnCredentials(request, env) {
 // surface it (silent drop here was the bug behind "host fine, joiners get nothing").
 const MAX_MANIFEST_BYTES = 256 * 1024;
 
+// Analytics Engine data point layout for the SIGNALING rooms (dataset ysfw_room,
+// binding ROOM).  Deliberately a SECOND dataset, not more columns on ysfw_play:
+// the grain is different (one row per room event, not per visitor event), and a
+// row whose index1 is a room would be counted as a person by every
+// count(DISTINCT index1) query already written against ysfw_play.
+//
+// This exists because the question "did a second player ever arrive" was
+// unanswerable.  The client-side counter records role='host' the moment a page
+// loads with ?host=1 -- which is intent, not a room.  On 2026-08-24 three
+// visitors opened a host URL within four minutes and the hub saw zero sockets:
+// from ysfw_play alone there is no way to tell whether they failed to connect or
+// whether the instrument simply stops short of the server.  These rows are what
+// the hub actually saw.  log() below still writes the same events to Workers
+// Logs for postmortems; that store is 7 days and cannot be queried, this one is
+// three months of SQL.
+//
+//   index1  room     8-hex hash of the room key -- NOT the key.  A room key is a
+//                    join capability ({t:'join',room} is the whole handshake), so
+//                    a three-month analytics store must not hold live invite
+//                    codes.  The hash is stable, so "same room" still groups.
+//   blob1   event    'room-open' | 'room-join' | 'room-join-fail' | 'room-taken'
+//                    | 'room-close'
+//   blob2   channel  'game' | 'pack'   (pack rooms are the derived '~p' twin --
+//                    web/pack-net.js derivePackRoom; every session makes both, so
+//                    counting rooms without this column double-counts)
+//   blob3   reason   'no-room' | 'hostless' | 'grace-expired' | ''
+//   blob4   host     request hostname, stamped at connect (prod vs staging)
+//   blob5   country  request.cf.country of the socket that caused the event
+//   double1 peers    peers in the room at that moment
+//   double2 peak     most peers the room ever held (0 = nobody ever joined)
+//   double3 secs     room lifetime, at close
+//   double4 packs    add-on packs the host advertised
+//
+// A room key is at most 16 chars, so FNV-1a is plenty: this is a grouping id,
+// not a security boundary (the only reader is the account owner).
+// Read the pack count off the room rather than caching it: a host takeover
+// replaces the manifest, and a cached count would keep reporting the dead host's.
+function packsOf(r) {
+  return r && Array.isArray(r.manifest) ? r.manifest.length : 0;
+}
+
+function roomKey(room) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < room.length; i++) {
+    h ^= room.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
 export class SignalHub {
   constructor(state, env) {
     this.state = state;
+    this.env = env;              // for the ROOM dataset; absent in local dev/tests
     // room -> { host: WebSocket|null, peers: Map<peerId, WebSocket>, nextPeer: number,
     //           manifest: object|null, manifestDropped: boolean, token: string|null,
     //           pending: Set<peerId>, graceTimer: number|null }
@@ -333,7 +388,13 @@ export class SignalHub {
     server.accept();
     this.trackConn(server);
     // Per-connection state (mirrors signal.mjs's per-socket role/room/peerId).
-    const conn = { role: null, room: null, peerId: 0, closed: false };
+    // Stamped once per socket: the DO has no request at close/expiry time, and a
+    // client cannot be trusted to say which deployment it is on.
+    const conn = {
+      role: null, room: null, peerId: 0, closed: false,
+      site: new URL(request.url).hostname,
+      cc: (request.cf && request.cf.country) || ''
+    };
     server.addEventListener('message', (ev) => this.onMessage(server, conn, ev.data));
     server.addEventListener('close', () => this.onClose(server, conn));
     server.addEventListener('error', () => this.onClose(server, conn));
@@ -375,6 +436,28 @@ export class SignalHub {
       console.log(JSON.stringify(Object.assign(
         { ev, room, pack: typeof room === 'string' && room.endsWith('~p') }, extra || {})));
     } catch (e) {}
+  }
+
+  // Same events as log(), but into Analytics Engine (see the layout above).
+  // Guarded on the binding so `wrangler dev`, the CI stub and older deploy
+  // configs simply do not count -- they must not throw.  A write that fails is
+  // loud for the same reason the /metric one is: a dataset that quietly stopped
+  // receiving reads exactly like nobody playing together.
+  room(ev, room, extra) {
+    if (!this.env || !this.env.ROOM || typeof room !== 'string') return;
+    const e = extra || {};
+    try {
+      this.env.ROOM.writeDataPoint({
+        indexes: [roomKey(room)],
+        blobs: [
+          str(ev, 24), room.endsWith('~p') ? 'pack' : 'game', str(e.reason, 32),
+          str(e.site, 64), str(e.cc, 8)
+        ],
+        doubles: [num(e.peers), num(e.peak), num(e.secs), num(e.packs)]
+      });
+    } catch (err) {
+      console.error('[room] writeDataPoint failed:', String((err && err.message) || err));
+    }
   }
 
   onMessage(ws, conn, raw) {
@@ -451,20 +534,35 @@ export class SignalHub {
         }
         this.send(ws, { t: 'host-taken' });
         this.log('host-taken', m.room);
+        this.room('room-taken', m.room, { peers: existing.peers.size, peak: existing.peak, site: conn.site, cc: conn.cc });
         return;
       }
       conn.role = 'host';
       conn.room = m.room;
-      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, manifestDropped: dropped, token, pending: new Set(), graceTimer: null });
+      const packs = Array.isArray(manifest) ? manifest.length : 0;
+      this.rooms.set(m.room, { host: ws, peers: new Map(), nextPeer: 1, manifest, manifestDropped: dropped, token, pending: new Set(), graceTimer: null,
+        // For the room dataset: peak answers "did anyone ever arrive" even for
+        // a room whose peers all left before it closed, and openedMs survives
+        // the host socket so expireRoom can report a lifetime.
+        openedMs: Date.now(), peak: 0, site: conn.site, cc: conn.cc });
       this.send(ws, hostOk(m.room));
       // packs: how many add-on packs the host advertised; dropped: the manifest
       // exceeded the hub cap and was discarded (a prime suspect when a joiner
       // never pulls anything despite the host having packs enabled).
-      this.log('host', m.room, { packs: Array.isArray(manifest) ? manifest.length : 0, bytes, dropped });
+      this.log('host', m.room, { packs, bytes, dropped });
+      this.room('room-open', m.room, { packs, site: conn.site, cc: conn.cc });
 
     } else if (m.t === 'join' && typeof m.room === 'string') {
       const r = this.rooms.get(m.room);
-      if (!r) { this.send(ws, { t: 'no-room' }); this.log('join', m.room, { result: 'no-room' }); return; }
+      if (!r) {
+        this.send(ws, { t: 'no-room' });
+        this.log('join', m.room, { result: 'no-room' });
+        // The most informative row in the set: somebody followed an invite and
+        // the room was not there.  Zero joins and zero join-fails means nobody
+        // tried; zero joins with join-fails means the links are going stale.
+        this.room('room-join-fail', m.room, { reason: 'no-room', site: conn.site, cc: conn.cc });
+        return;
+      }
       conn.role = 'peer';
       conn.room = m.room;
       conn.peerId = r.nextPeer++;
@@ -480,7 +578,10 @@ export class SignalHub {
       // without having to retry.
       if (r.host) this.send(r.host, { t: 'peer', peer: conn.peerId });
       else r.pending.add(conn.peerId);
+      if (r.peers.size > (r.peak || 0)) r.peak = r.peers.size;
       this.log('join', m.room, { result: 'join-ok', peer: conn.peerId, hostless: r.host ? undefined : true, packs: Array.isArray(r.manifest) ? r.manifest.length : 0 });
+      this.room('room-join', m.room, { peers: r.peers.size, peak: r.peak,
+        reason: r.host ? '' : 'hostless', packs: packsOf(r), site: conn.site, cc: conn.cc });
 
     } else if ((m.t === 'sdp' || m.t === 'ice') && conn.room) {
       const r = this.rooms.get(conn.room);
@@ -552,5 +653,11 @@ export class SignalHub {
     for (const [, pws] of r.peers) this.send(pws, { t: 'host-left' });
     this.rooms.delete(room);
     this.log('host-left', room, { peers: r.peers.size, graceExpired: true });
+    // One row per room, at the end: peak 0 is a room that nobody ever joined.
+    this.room('room-close', room, {
+      peers: r.peers.size, peak: r.peak || 0, packs: packsOf(r),
+      secs: Math.max(0, Math.round((Date.now() - (r.openedMs || Date.now())) / 1000)),
+      reason: 'grace-expired', site: r.site, cc: r.cc
+    });
   }
 }
