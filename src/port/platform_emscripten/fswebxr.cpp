@@ -4336,6 +4336,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// left untouched here, matching its own existing hold-last-value
 		// behaviour on release.)
 		HEAPF32[(_YsfwVrHandPoseDataPointer()>>2)+7]=0;
+		// Same per-frame reset for the tracked flags (control block [9]/[10],
+		// fsvr.h): they gate the engine's ungrabbed controller-model draw, and
+		// a hand whose source (or grip pose) is gone this frame must read as
+		// absent, not as its stale last-written pose.  Re-set below for every
+		// hand that actually delivers a grip pose this frame.
+		var ctlFlagsPtr=_YsfwVrControlDataPointer()>>2;
+		HEAPF32[ctlFlagsPtr+9]=0;
+		HEAPF32[ctlFlagsPtr+10]=0;
 		var sources=frame.session.inputSources;
 		for(var i=0; i<sources.length; ++i)
 		{
@@ -4399,6 +4407,10 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var grabbedNow=('right'===hand ? vr.ctl.stick.grabbed : vr.ctl.thr.grabbed);
 			var anchor=updateHandPropAnchor(hand,gpos,viewerPos,viewerQuat,grabbedNow);
 			writeHandPoseBlock(hand,(anchor ? anchor.pos : gpos),(anchor ? anchor.quat : gori),viewerPos,viewerQuat,grabbedNow);
+			// This hand delivered a grip pose this frame: raise its tracked
+			// flag (zeroed at the top of updateControllers) so the engine
+			// may draw the controller model at the live pose just written.
+			HEAPF32[ctlFlagsPtr+('right'===hand ? 9 : 10)]=1;
 		}
 	}
 
@@ -6371,7 +6383,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var vp=viewerPos ? {x:viewerPos[0],y:viewerPos[1],z:viewerPos[2]} : {x:0,y:0,z:0};
 		// Match updateControllers: this slot represents this complete frame,
 		// then processControllerPlain ORs in either hand's trigger.
-		HEAPF32[(_YsfwVrControlDataPointer()>>2)+7]=0;
+		var pokeCtlPtr=_YsfwVrControlDataPointer()>>2;
+		HEAPF32[pokeCtlPtr+7]=0;
+		// And the per-frame tracked-flag reset ([9]/[10], fsvr.h) -- the
+		// engine's ungrabbed controller-model draw gates on these, so the
+		// hook must reproduce the real path's absent-hand behaviour too.
+		HEAPF32[pokeCtlPtr+9]=0;
+		HEAPF32[pokeCtlPtr+10]=0;
 		for(var i=0; i<list.length; ++i)
 		{
 			var e=list[i];
@@ -6391,6 +6409,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 			var grabbedNow=('right'===e.hand ? vr.ctl.stick.grabbed : vr.ctl.thr.grabbed);
 			var anchor=updateHandPropAnchor(e.hand,gp,vp,vq,grabbedNow);
 			writeHandPoseBlock(e.hand,(anchor ? anchor.pos : gp),(anchor ? anchor.quat : gq),vp,vq,grabbedNow);
+			HEAPF32[pokeCtlPtr+('right'===e.hand ? 9 : 10)]=1;
 		}
 	};
 	// Headless test hook: read the hand-pose block back as a plain array

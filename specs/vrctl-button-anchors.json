@@ -1,0 +1,104 @@
+{
+  "profile": "meta-quest-touch-plus",
+  "generated": "scripts/gen-vrctl-models.mjs",
+  "left": {
+    "xr-standard-trigger": {
+      "node": "xr_standard_trigger_pressed_value",
+      "pos": [
+        0.012324,
+        -0.023282,
+        -0.03869
+      ]
+    },
+    "xr-standard-squeeze": {
+      "node": "xr_standard_squeeze_pressed_value",
+      "pos": [
+        0.010912,
+        0.013249,
+        -0.024769
+      ]
+    },
+    "xr-standard-thumbstick": {
+      "node": "xr_standard_thumbstick_pressed_value",
+      "pos": [
+        -0.00891,
+        -0.008715,
+        -0.026863
+      ]
+    },
+    "x-button": {
+      "node": "x_button_pressed_value",
+      "pos": [
+        0.001959,
+        0.008492,
+        -0.01832
+      ]
+    },
+    "y-button": {
+      "node": "y_button_pressed_value",
+      "pos": [
+        0.0128,
+        0.001141,
+        -0.028491
+      ]
+    },
+    "thumbrest": {
+      "node": "thumbrest_pressed_value",
+      "pos": [
+        0.023017,
+        0.007624,
+        -0.016107
+      ]
+    }
+  },
+  "right": {
+    "xr-standard-trigger": {
+      "node": "xr_standard_trigger_pressed_value",
+      "pos": [
+        -0.012324,
+        -0.023282,
+        -0.03869
+      ]
+    },
+    "xr-standard-squeeze": {
+      "node": "xr_standard_squeeze_pressed_value",
+      "pos": [
+        -0.010912,
+        0.013249,
+        -0.024769
+      ]
+    },
+    "xr-standard-thumbstick": {
+      "node": "xr_standard_thumbstick_pressed_value",
+      "pos": [
+        0.00891,
+        -0.008715,
+        -0.026863
+      ]
+    },
+    "a-button": {
+      "node": "a_button_pressed_value",
+      "pos": [
+        -0.001959,
+        0.008492,
+        -0.01832
+      ]
+    },
+    "b-button": {
+      "node": "b_button_pressed_value",
+      "pos": [
+        -0.0128,
+        0.001141,
+        -0.028491
+      ]
+    },
+    "thumbrest": {
+      "node": "thumbrest_pressed_value",
+      "pos": [
+        -0.023017,
+        0.007624,
+        -0.016107
+      ]
+    }
+  }
+}

@@ -155,6 +155,19 @@ jobs:
           sleep 2
           node scripts/smoke-vrmenu.mjs "http://localhost:8923/index.html" "."
 
+      # Real-shape controller model smoke (PR only): tracked ungrabbed hands
+      # must draw misc/vrctl_*.dnm at the live grip pose.  On this runner the
+      # headless GL exposes no OVR_multiview2 (same reason smoke-mv.mjs is
+      # not in CI), so the script degrades to the tracked-flag ([9]/[10])
+      # white-box; the layer-luminance A/B/A render gate runs in real-GPU
+      # environments -- see scripts/smoke-vrctlmodel.mjs's DEGRADED MODE note.
+      - name: VR controller model smoke (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          node "${{ github.workspace }}/scripts/serve.mjs" 8927 "${{ github.workspace }}/dist" &
+          sleep 2
+          node scripts/smoke-vrctlmodel.mjs "http://localhost:8927/index.html?freeflight=F-15C_EAGLE" "."
+
       # The vrmenu smoke screenshots (menu / VR / timeout-diagnostic) are the
       # fastest way to see what the headless page actually showed when the
       # smoke fails -- upload them only in that case.
@@ -163,5 +176,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vrmenu-smoke-screenshots
-          path: vrmenu-*.png
+          path: |
+            vrmenu-*.png
+            vrctlmodel-*.png
           if-no-files-found: ignore
