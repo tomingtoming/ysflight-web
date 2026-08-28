@@ -77,9 +77,17 @@
   // Engine keeps three months and is read with SQL, which neither Web Analytics
   // (page views only) nor Workers Logs (7 days, no aggregation) can do.  Free
   // plan: 100,000 data points written per day, 10,000 read queries per day.
-  // Reading needs an API token with Account Analytics Read -- see docs/metrics.md.
+  // Reading needs no extra token: once Analytics Engine is enabled on the account,
+  // wrangler's own OAuth token reaches the SQL API -- see docs/metrics.md.
+  //
+  // ROOM is a SECOND dataset on purpose.  ysfw_play counts visitors (index1 = a
+  // browser); ysfw_room counts rooms (index1 = a room).  Merged, every
+  // count(DISTINCT index1) already written against ysfw_play would count rooms as
+  // people.  ysfw_room is what the signaling hub actually saw, which is the only
+  // way to tell "nobody joined" from "the counter stops at the client".
   "analytics_engine_datasets": [
-    { "binding": "PLAY", "dataset": "ysfw_play" }
+    { "binding": "PLAY", "dataset": "ysfw_play" },
+    { "binding": "ROOM", "dataset": "ysfw_room" }
   ],
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["SignalHub"] }
