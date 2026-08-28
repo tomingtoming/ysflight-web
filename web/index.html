@@ -1610,7 +1610,14 @@
         globalThis.ysfwDiag.push('vr-end', {
           reason: (Module.ysfwVr && Module.ysfwVr.endReason) || null,
           seconds: vrStats && vrStats.seconds ? Math.round(vrStats.seconds) : 0,
-          avgFps: vrStats && vrStats.avgFps ? Math.round(vrStats.avgFps) : 0
+          avgFps: vrStats && vrStats.avgFps ? Math.round(vrStats.avgFps) : 0,
+          // The diagnosis trio for sessions that only exist remotely: the
+          // GRANTED compositor rate (44fps@72Hz is missed vsyncs, 60fps@60Hz
+          // is clean pacing), engine CPU ms/frame (CPU-bound or not), and the
+          // 30s fps buckets (warm-up cost vs degradation over time).
+          grantedHz: vrStats && vrStats.grantedHz ? vrStats.grantedHz : 0,
+          cpuMs: vrStats && vrStats.cpuMs ? Math.round(vrStats.cpuMs * 10) / 10 : 0,
+          fpsSeries: (vrStats && vrStats.fpsSeries) || []
         });
       }
       // Menu-in-VR needs the WebXR layers path (XRQuadLayer). When the session
