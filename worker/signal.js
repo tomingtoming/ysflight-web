@@ -163,10 +163,13 @@ const num = (v) => {
 //   blob12  build      client build id
 //   blob13  host       SERVER: request hostname (prod vs staging)
 //   blob14  country    SERVER: request.cf.country
+//   blob15  fpsSeries  VR fps per 30s bucket, comma-joined ('44,46,43'), vr-end only
 //   double1 secs       flight / VR duration
 //   double2 visits     this browser's visit number (1 = first ever, 0 = no storage)
 //   double3 fps        VR average
 //   double4 days       days since this browser's first visit
+//   double5 hz         VR granted compositor rate (avg fps well under it = missed vsyncs)
+//   double6 cpu        VR engine CPU ms/frame (close to the frame period = CPU-bound)
 //
 // Guards mirror /turn and /clientlog: POST-only, same-origin when a browser
 // sends Origin, 8 KB body cap, at most 20 events per batch, every string
@@ -218,9 +221,11 @@ async function metric(request, env) {
         blobs: [
           name, str(ev.launch, 24), str(ev.aircraft, 48), str(ev.field, 48),
           str(ev.role, 8), str(ev.device, 8), str(ev.lang, 16), str(ev.ref, 64),
-          str(ev.reason, 32), audience, sid, build, host, String(country).slice(0, 8)
+          str(ev.reason, 32), audience, sid, build, host, String(country).slice(0, 8),
+          str(ev.fpsSeries, 400)
         ],
-        doubles: [num(ev.secs), num(ev.visits), num(ev.fps), num(ev.days)]
+        doubles: [num(ev.secs), num(ev.visits), num(ev.fps), num(ev.days),
+                  num(ev.hz), num(ev.cpu)]
       });
       written++;
     } catch (e) {

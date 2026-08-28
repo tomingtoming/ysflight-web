@@ -5842,10 +5842,12 @@ EM_JS(void,YsfwInstallWebXR,(),
 			st.t0=t;
 			st.tWindow=t;
 			st.framesWindow=0;
+			st.bucketT0=t;
 			vr.jsPerfWindow=t;
 		}
 		++st.frames;
 		++st.framesWindow;
+		++st.bucketFrames;
 		st.t1=t;
 		if(2000<=t-st.tWindow)
 		{
@@ -5853,6 +5855,21 @@ EM_JS(void,YsfwInstallWebXR,(),
 			console.log('[vr] '+st.fps.toFixed(1)+' fps');
 			st.tWindow=t;
 			st.framesWindow=0;
+		}
+		// 30s fps buckets (vr.stats.fpsSeries), shipped with the vr-end
+		// metric: a single session average cannot say whether a low number
+		// means "the first minute is heavy" or "it degrades over time", and
+		// headset sessions are exactly the ones that only exist remotely.
+		// Capped at 120 buckets (an hour) so a kiosk-length session cannot
+		// grow an unbounded array or an oversized Analytics Engine blob.
+		if(30000<=t-st.bucketT0)
+		{
+			if(st.fpsSeries.length<120)
+			{
+				st.fpsSeries.push(Math.round(1000*st.bucketFrames/(t-st.bucketT0)));
+			}
+			st.bucketT0=t;
+			st.bucketFrames=0;
 		}
 
 		// Phase-breakdown perf line (?vrperf=1): every 5s, independent of the
@@ -6021,7 +6038,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		var foveation=(undefined!==opts.foveation ? opts.foveation : 1.0);
 		var frameRate=(0<opts.frameRate ? opts.frameRate : 72);
 		var antialias=(undefined!==opts.antialias ? !!opts.antialias : false);
-		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0};
+		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0,bucketT0:0,bucketFrames:0,fpsSeries:[]};
 		vr.jsPerf={ctl:0,dial:0,layers:0};
 		vr.endReason=null;
 		vr.unsupportedVrFrames=0;
@@ -6150,6 +6167,13 @@ EM_JS(void,YsfwInstallWebXR,(),
 					{
 						st.seconds=(st.t1-st.t0)/1000;
 						st.avgFps=(st.frames-1)/st.seconds;
+						// Close the open fps bucket if it spans enough to
+						// mean anything (5s): the tail is where slow
+						// degradation would show, so it must not be dropped.
+						if(5000<=st.t1-st.bucketT0 && 0<st.bucketFrames && st.fpsSeries.length<120)
+						{
+							st.fpsSeries.push(Math.round(1000*st.bucketFrames/(st.t1-st.bucketT0)));
+						}
 						// Engine CPU time per tick (EMA).  If this is close to the
 						// frame period (1000/fps), the frame is CPU-bound -- a
 						// resolution-independent read that survives thermal drift,

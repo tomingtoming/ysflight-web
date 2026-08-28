@@ -205,10 +205,23 @@ globalThis.ysfwMetrics = (function () {
         return;
       }
       if (ev.type === 'vr-end') {
+        // 30s-bucket fps series, as a bounded comma-joined string: one avg per
+        // session cannot separate "warm-up is heavy" from "degrades over
+        // time", nor missed vsyncs from a 60Hz grant -- and headset sessions
+        // are exactly the ones that only ever exist remotely.
+        var series = '';
+        if (Array.isArray(ev.fpsSeries)) {
+          series = ev.fpsSeries.map(function (v) {
+            return Math.max(0, Math.round(Number(v) || 0));
+          }).join(',').slice(0, 400);
+        }
         emit('vr-end', fields({
           secs: Math.max(0, Math.round(Number(ev.seconds) || 0)),
           fps: Math.max(0, Math.round(Number(ev.avgFps) || 0)),
-          reason: String(ev.reason || 'exit').slice(0, 32)
+          reason: String(ev.reason || 'exit').slice(0, 32),
+          hz: Math.max(0, Math.round(Number(ev.grantedHz) || 0)),
+          cpu: Math.max(0, Math.round((Number(ev.cpuMs) || 0) * 10)) / 10,
+          fpsSeries: series
         }));
         return;
       }
