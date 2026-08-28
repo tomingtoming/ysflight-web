@@ -84,25 +84,47 @@ q() { curl -s -X POST "https://api.cloudflare.com/client/v4/accounts/$ACC/analyt
 
 AEのSQLは**ClickHouseのサブセット**で、よく使う関数がいくつも無い。
 
-| やりたいこと | ❌ 無い | ✅ 使えるもの |
+| やりたいこと | ❌ 無い / 危ない | ✅ 使えるもの |
 |---|---|---|
-| ユニーク数 | `uniq(x)` | `count(DISTINCT x)` |
+| **件数** | **`count()` / `countIf(cond)`** | **`sum(_sample_interval)` / `sumIf(_sample_interval, cond)`** |
+| ユニーク数 | `uniq(x)` | `count(DISTINCT x)`（ただし下記⚠） |
 | 条件付きユニーク | `uniqIf(x, cond)` | 無い。**WHERE で絞った別クエリにする** |
 | 分位数 | `quantile(0.5)(x)` | `quantileExactWeighted(0.5)(x, _sample_interval)` |
-| 条件付き集計 | — | `countIf` / `sumIf` / `avgIf` は使える |
+| 平均 | `avg(x)` | `sum(x * _sample_interval) / sum(_sample_interval)` |
 | 文字列の代表値 | `max(文字列)` | 型エラー。`argMax(文字列, timestamp)` か GROUP BY に含める |
 
-以下のSQLは**全て実物に通してある**（2026-08-23）。
+### ⚠ 件数は `count()` でなく `sum(_sample_interval)` で数える
+
+**AEはクエリ結果をサンプリングして返す。** 返ってくる各行には「この行は実際には何行分か」を表す
+`_sample_interval` が付いていて、**`count()` は返ってきた行だけを数えるので過小になる**。
+
+実測（2026-08-28・`ysfw_room`）——同じ部屋に7行書いたのに:
+
+```
+count() = 5     sum(_sample_interval) = 7     max(_sample_interval) = 2
+```
+
+**同日の `ysfw_play` は全行 `_sample_interval = 1`（＝サンプリングされておらず `count()` でも正しい）**。
+つまり**いま正しく見えることは、いまの流量の性質でしかない**。人が増えれば同じクエリが
+**黙って過小報告に変わる**——エラーも警告も出ない。∴ **最初から重み付きで書く**。
+
+⚠ **`count(DISTINCT index1)`（訪問者数・「飛んだ人」）はサンプリング下で過小になり、きれいな補正が無い。**
+重みは行に付くのであって、ユニーク集合には配れない。**下限として読む**。
+
+💡 分位数のクエリだけは最初から正しかったが、それは**方言に素の `quantile()` が無くて重み付き版を
+使わざるを得なかった**からで、正しさを理解して選んだからではない。**欠落が偶然1箇所だけ正解を強制していた。**
+
+以下のSQLは**全て実物に通してある**（2026-08-23 / 重み付き化して 2026-08-28 再走）。
 
 ### 日次: 何人が来て、何人が飛んで、何分飛んだか
 
 ```sql
 SELECT toDate(timestamp) AS day,
        count(DISTINCT index1)                             AS people,
-       countIf(blob1 = 'session')                         AS sessions,
-       countIf(blob1 = 'flight-start')                    AS starts,
-       countIf(blob1 = 'flight-end')                      AS ends,
-       round(sumIf(double1, blob1 = 'flight-end') / 60, 1) AS minutes
+       sumIf(_sample_interval, blob1 = 'session')      AS sessions,
+       sumIf(_sample_interval, blob1 = 'flight-start') AS starts,
+       sumIf(_sample_interval, blob1 = 'flight-end')   AS ends,
+       round(sumIf(double1 * _sample_interval, blob1 = 'flight-end') / 60, 1) AS minutes
 FROM ysfw_play
 WHERE blob10 = 'public'                        -- tomingのQAを除く
   AND blob13 = 'ysflight-web.toming.app'       -- stagingを除く
@@ -112,6 +134,7 @@ GROUP BY day ORDER BY day
 ### 到達漏斗（`uniqIf` が無いので2本に割る）
 
 ```sql
+-- ⚠ DISTINCT はサンプリング下で過小になる（下限として読む・方言の節）
 SELECT count(DISTINCT index1) AS visitors FROM ysfw_play
 WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app';
 
@@ -122,11 +145,11 @@ WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app' AND blob1 = 'flig
 ### 飛行時間の分布（平均は外れ値1本で嘘をつく）
 
 ```sql
-SELECT count() AS flights,
+SELECT sum(_sample_interval) AS flights,
        round(quantileExactWeighted(0.5)(double1, _sample_interval)) AS median_secs,
        round(quantileExactWeighted(0.9)(double1, _sample_interval)) AS p90_secs,
        round(max(double1)) AS longest_secs,
-       round(avg(double1)) AS mean_secs
+       round(sum(double1 * _sample_interval) / sum(_sample_interval)) AS mean_secs
 FROM ysfw_play
 WHERE blob1 = 'flight-end' AND blob10 = 'public'
 ```
@@ -135,9 +158,9 @@ WHERE blob1 = 'flight-end' AND blob10 = 'public'
 
 ```sql
 SELECT index1 AS visitor, blob14 AS cc, blob6 AS device,
-       countIf(blob1 = 'session')      AS visits,
-       countIf(blob1 = 'flight-start') AS starts,
-       round(sumIf(double1, blob1 = 'flight-end') / 60, 1) AS minutes
+       sumIf(_sample_interval, blob1 = 'session')      AS visits,
+       sumIf(_sample_interval, blob1 = 'flight-start') AS starts,
+       round(sumIf(double1 * _sample_interval, blob1 = 'flight-end') / 60, 1) AS minutes
 FROM ysfw_play
 WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app'
 GROUP BY visitor, cc, device ORDER BY visits DESC LIMIT 20
@@ -146,10 +169,10 @@ GROUP BY visitor, cc, device ORDER BY visits DESC LIMIT 20
 ### リピート率（`double2` = その端末の通算訪問回数）
 
 ```sql
-SELECT countIf(double2 = 1) AS first_time,
-       countIf(double2 > 1) AS returning,
-       countIf(double2 = 0) AS storage_blocked,
-       round(max(double2))  AS most_visits_by_one_browser
+SELECT sumIf(_sample_interval, double2 = 1) AS first_time,
+       sumIf(_sample_interval, double2 > 1) AS returning,
+       sumIf(_sample_interval, double2 = 0) AS storage_blocked,
+       round(max(double2))                   AS most_visits_by_one_browser
 FROM ysfw_play
 WHERE blob1 = 'session' AND blob10 = 'public'
 ```
@@ -158,9 +181,10 @@ WHERE blob1 = 'session' AND blob10 = 'public'
 
 ```sql
 SELECT blob6 AS device, count(DISTINCT index1) AS people,
-       countIf(blob1 = 'session') AS sessions,
-       countIf(blob1 = 'flight-start') AS starts,
-       round(avgIf(double1, blob1 = 'flight-end')) AS avg_secs
+       sumIf(_sample_interval, blob1 = 'session')      AS sessions,
+       sumIf(_sample_interval, blob1 = 'flight-start') AS starts,
+       round(sumIf(double1 * _sample_interval, blob1 = 'flight-end')
+             / sumIf(_sample_interval, blob1 = 'flight-end')) AS avg_secs
 FROM ysfw_play
 WHERE blob10 = 'public' AND blob13 = 'ysflight-web.toming.app'
 GROUP BY device ORDER BY sessions DESC
@@ -169,14 +193,15 @@ GROUP BY device ORDER BY sessions DESC
 ### 機体・フィールド／飛行の終わり方／流入元
 
 ```sql
-SELECT blob3 AS aircraft, blob4 AS field, count() AS starts FROM ysfw_play
+SELECT blob3 AS aircraft, blob4 AS field, sum(_sample_interval) AS starts FROM ysfw_play
 WHERE blob1 = 'flight-start' AND blob3 != '' AND blob10 = 'public'
 GROUP BY aircraft, field ORDER BY starts DESC LIMIT 20;
 
-SELECT blob9 AS reason, count() AS n, round(avg(double1)) AS avg_secs FROM ysfw_play
+SELECT blob9 AS reason, sum(_sample_interval) AS n,
+       round(sum(double1 * _sample_interval) / sum(_sample_interval)) AS avg_secs FROM ysfw_play
 WHERE blob1 = 'flight-end' AND blob10 = 'public' GROUP BY reason;
 
-SELECT blob8 AS referrer, count() AS sessions FROM ysfw_play
+SELECT blob8 AS referrer, sum(_sample_interval) AS sessions FROM ysfw_play
 WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY sessions DESC
 ```
 
@@ -234,10 +259,10 @@ WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY session
 ```sql
 -- 部屋は立ったか、2人目は来たか（本番のゲーム部屋だけ）
 SELECT toDate(timestamp) AS day,
-       countIf(blob1 = 'room-open')      AS rooms,
-       countIf(blob1 = 'room-join')      AS joins,
-       countIf(blob1 = 'room-join-fail') AS stale_invites,
-       countIf(blob1 = 'room-taken')     AS collisions
+       sumIf(_sample_interval, blob1 = 'room-open')      AS rooms,
+       sumIf(_sample_interval, blob1 = 'room-join')      AS joins,
+       sumIf(_sample_interval, blob1 = 'room-join-fail') AS stale_invites,
+       sumIf(_sample_interval, blob1 = 'room-taken')     AS collisions
 FROM ysfw_room
 WHERE blob2 = 'game' AND blob4 = 'ysflight-web.toming.app' AND blob6 = 'public'
 GROUP BY day ORDER BY day
@@ -246,9 +271,9 @@ GROUP BY day ORDER BY day
 ```sql
 -- 部屋の顛末（peak 0 = 誰も来なかった / secs = ホストが待っていた時間）
 -- room-close ではなく room-hostless を数える（上の⚠）
-SELECT count() AS rooms,
-       countIf(double2 = 0) AS nobody_came,
-       countIf(double2 > 0) AS had_company,
+SELECT sum(_sample_interval) AS rooms,
+       sumIf(_sample_interval, double2 = 0) AS nobody_came,
+       sumIf(_sample_interval, double2 > 0) AS had_company,
        round(quantileExactWeighted(0.5)(double3, _sample_interval)) AS median_secs
 FROM ysfw_room
 WHERE blob1 = 'room-hostless' AND blob2 = 'game' AND blob4 = 'ysflight-web.toming.app'
