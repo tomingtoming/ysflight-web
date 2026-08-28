@@ -336,7 +336,19 @@ const MAX_MANIFEST_BYTES = 256 * 1024;
 //                    a three-month analytics store must not hold live invite
 //                    codes.  The hash is stable, so "same room" still groups.
 //   blob1   event    'room-open' | 'room-join' | 'room-join-fail' | 'room-taken'
-//                    | 'room-close'
+//                    | 'room-hostless' | 'room-reclaim' | 'room-close'
+//
+//   room-hostless is the row to COUNT, not room-close.  room-close comes from the
+//   grace timer, which is a setTimeout inside a Durable Object, and an object with
+//   no sockets left can be evicted with the timer still pending.  Measured against
+//   production on 2026-08-28: with anything at all touching the hub before the
+//   deadline the timer fires exactly on time (rooms left hostless at +30s and +75s
+//   both produced room-close, secs=90), but a host that left a hub with no other
+//   socket produced no room-close at all, not even seven minutes later.  So
+//   room-close means "we watched this room be torn down" -- true when written,
+//   and a subset of the rooms that ended.  room-hostless is written straight from
+//   onClose, which always runs, and carries the same peak and lifetime.  A room
+//   that comes back writes room-reclaim after it, so the pair reads correctly.
 //   blob2   channel  'game' | 'pack'   (pack rooms are the derived '~p' twin --
 //                    web/pack-net.js derivePackRoom; every session makes both, so
 //                    counting rooms without this column double-counts)
@@ -470,6 +482,11 @@ export class SignalHub {
     }
   }
 
+  // Seconds since the room was created, for the lifetime columns.
+  roomAge(r) {
+    return Math.max(0, Math.round((Date.now() - ((r && r.openedMs) || Date.now())) / 1000));
+  }
+
   onMessage(ws, conn, raw) {
     let m;
     try { m = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw)); }
@@ -519,6 +536,9 @@ export class SignalHub {
           this.send(ws, hostOk(m.room));
           const flushed = this.reclaimRoom(existing, ws);
           this.log('host-reclaim', m.room, { peers: existing.peers.size, flushed, packs: Array.isArray(existing.manifest) ? existing.manifest.length : 0 });
+          this.room('room-reclaim', m.room, { peers: existing.peers.size, peak: existing.peak || 0,
+            packs: packsOf(existing), secs: this.roomAge(existing), reason: 'same-token',
+            site: existing.site, cc: existing.cc, aud: existing.aud });
           return;
         }
         // Token mismatch on a HOSTLESS room (grace window): the host reloaded its
@@ -540,6 +560,9 @@ export class SignalHub {
           this.send(ws, hostOk(m.room));
           const flushed = this.reclaimRoom(existing, ws);
           this.log('host-takeover', m.room, { flushed, packs: Array.isArray(manifest) ? manifest.length : 0 });
+          this.room('room-reclaim', m.room, { peers: existing.peers.size, peak: existing.peak || 0,
+            packs: packsOf(existing), secs: this.roomAge(existing), reason: 'takeover',
+            site: existing.site, cc: existing.cc, aud: existing.aud });
           return;
         }
         this.send(ws, { t: 'host-taken' });
@@ -648,6 +671,13 @@ export class SignalHub {
       const room = conn.room;
       r.graceTimer = setTimeout(() => this.expireRoom(room), this.graceMs);
       this.log('host-grace', room, { peers: r.peers.size, graceMs: this.graceMs });
+      // Written here rather than left to the timer: this line always runs, the
+      // timer might not (see the layout note above).  A room that is reclaimed
+      // gets a room-reclaim row after this one.
+      this.room('room-hostless', room, {
+        peers: r.peers.size, peak: r.peak || 0, packs: packsOf(r),
+        secs: this.roomAge(r), site: r.site, cc: r.cc, aud: r.aud
+      });
     } else {
       r.peers.delete(conn.peerId);
       r.pending.delete(conn.peerId);
@@ -666,7 +696,7 @@ export class SignalHub {
     // One row per room, at the end: peak 0 is a room that nobody ever joined.
     this.room('room-close', room, {
       peers: r.peers.size, peak: r.peak || 0, packs: packsOf(r),
-      secs: Math.max(0, Math.round((Date.now() - (r.openedMs || Date.now())) / 1000)),
+      secs: this.roomAge(r),
       reason: 'grace-expired', site: r.site, cc: r.cc, aud: r.aud
     });
   }

@@ -214,7 +214,7 @@ WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY session
 | 列 | 中身 |
 |---|---|
 | `index1` | 部屋キーの**8桁ハッシュ**。⚠ **キーそのものは書かない**——`{t:'join',room}` が入室の全てなので部屋キーは**入室capability**であり、3ヶ月残る場所に生の招待コードを置かない。ハッシュは安定なので「同じ部屋」の grouping は効く |
-| `blob1` | `room-open` / `room-join` / `room-join-fail` / `room-taken` / `room-close` |
+| `blob1` | `room-open` / `room-join` / `room-join-fail` / `room-taken` / **`room-hostless`** / `room-reclaim` / `room-close` |
 | `blob2` | `game` / `pack`（`~p` 付きのパック配布部屋。1セッションが両方作るので、この列で割らないと部屋が倍に見える） |
 | `blob3` | `no-room` / `hostless` / `grace-expired` / 空 |
 | `blob4` | ホスト名（本番とstagingの分離） |
@@ -226,6 +226,8 @@ WHERE blob1 = 'session' AND blob10 = 'public' GROUP BY referrer ORDER BY session
 | `double4` | ホストが提示したアドオンパック数 |
 
 ⚠ **peak が要る理由**: 閉じる時点では peers は必ず空なので、`double1` だけ見ると「2人で遊んだ部屋」と「誰も来なかった部屋」が同じ行になる。
+
+⚠ **部屋の終わりは `room-close` でなく `room-hostless` で数える**（2026-08-28に本番で実測）。`room-close` は猶予タイマー（`setTimeout`）が書くが、**タイマーはDurable Object の中にあり、ソケットが全部消えたオブジェクトは退避されうる**。実測: 猶予の途中（+30秒・+75秒）に誰かがhubに触れていれば**タイマーはきっかり90秒で発火した**（両方とも `room-close` `secs=90`）。しかし**他に1本もソケットが無い状態でホストが去った部屋は、7分待っても `room-close` が出なかった**。∴ `room-close` は「取り壊しを見届けた」という意味で、**書かれていれば真だが、終わった部屋の部分集合**。`room-hostless` は `onClose` から直接書かれる＝**必ず走る経路**で、同じ `peak` と寿命を運ぶ。戻ってきた部屋には `room-reclaim` が続くので、対で読める（`same-token`＝ソケット瞬断からの復帰／`takeover`＝ページ再読み込み）。
 
 ### 引き方
 
@@ -242,13 +244,14 @@ GROUP BY day ORDER BY day
 ```
 
 ```sql
--- 閉じた部屋の顛末（peak 0 = 誰も来なかった / secs = 待っていた時間）
+-- 部屋の顛末（peak 0 = 誰も来なかった / secs = ホストが待っていた時間）
+-- room-close ではなく room-hostless を数える（上の⚠）
 SELECT count() AS rooms,
        countIf(double2 = 0) AS nobody_came,
        countIf(double2 > 0) AS had_company,
        round(quantileExactWeighted(0.5)(double3, _sample_interval)) AS median_secs
 FROM ysfw_room
-WHERE blob1 = 'room-close' AND blob2 = 'game' AND blob4 = 'ysflight-web.toming.app'
+WHERE blob1 = 'room-hostless' AND blob2 = 'game' AND blob4 = 'ysflight-web.toming.app'
   AND blob6 = 'public'
 ```
 

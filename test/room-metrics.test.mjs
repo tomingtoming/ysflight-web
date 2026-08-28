@@ -25,6 +25,13 @@ const conn = (extra) => Object.assign(
   extra || {});
 
 const send = (hub, ws, c, msg) => hub.onMessage(ws, c, JSON.stringify(msg));
+// A host close arms the real 90s grace timer, which would hold node's event loop
+// open for the whole 90 seconds.  Tests that leave a room hostless drop it.
+const dropTimers = (hub) => {
+  for (const [, r] of hub.rooms) {
+    if (r.graceTimer !== null) { clearTimeout(r.graceTimer); r.graceTimer = null; }
+  }
+};
 const by = (points, ev) => points.filter((p) => p.blobs[0] === ev);
 
 test('opening a room writes one row with the documented column order', () => {
@@ -86,6 +93,58 @@ test('a joiner queued during the host-loss grace window is marked hostless', () 
   hub.rooms.get('ROOM0004').host = null;                 // the grace window
   send(hub, sock(), conn(), { t: 'join', room: 'ROOM0004' });
   assert.equal(by(points, 'room-join')[0].blobs[2], 'hostless');
+});
+
+test('the host leaving is recorded on the spot, because the timer may never fire', () => {
+  // room-close comes from a setTimeout inside a Durable Object; when the last
+  // socket goes the object can be evicted and the timer with it (measured on
+  // production: a host that left an empty hub produced no room-close at all).
+  // onClose always runs, so the same peak and lifetime are recorded there.
+  const { hub, points } = makeHub();
+  const host = sock(), hc = conn();
+  send(hub, host, hc, { t: 'host', room: 'ROOM0020', token: 't' });
+  const peer = sock(), pc = conn();
+  send(hub, peer, pc, { t: 'join', room: 'ROOM0020' });
+  hub.onClose(peer, pc);
+  hub.onClose(host, hc);
+  const h = by(points, 'room-hostless');
+  assert.equal(h.length, 1);
+  assert.equal(h[0].doubles[0], 0, 'peers at that moment');
+  assert.equal(h[0].doubles[1], 1, 'peak survives here too');
+  assert.equal(h[0].blobs[3], 'ysflight-web.toming.app');
+  dropTimers(hub);
+});
+
+test('a room that comes back says so, so hostless is not read as the end', () => {
+  const { hub, points } = makeHub();
+  const host = sock(), hc = conn();
+  send(hub, host, hc, { t: 'host', room: 'ROOM0021', token: 'same' });
+  hub.onClose(host, hc);
+  const back = sock();
+  send(hub, back, conn(), { t: 'host', room: 'ROOM0021', token: 'same' });
+  assert.deepEqual(points.map((p) => p.blobs[0]),
+    ['room-open', 'room-hostless', 'room-reclaim']);
+  assert.equal(by(points, 'room-reclaim')[0].blobs[2], 'same-token');
+});
+
+test('a page reload takes the room over with a fresh token, and that reads differently', () => {
+  const { hub, points } = makeHub();
+  const host = sock(), hc = conn();
+  send(hub, host, hc, { t: 'host', room: 'ROOM0022', token: 'old' });
+  hub.onClose(host, hc);
+  send(hub, sock(), conn(), { t: 'host', room: 'ROOM0022', token: 'brand-new' });
+  assert.equal(by(points, 'room-reclaim')[0].blobs[2], 'takeover');
+});
+
+test('a stale socket closing late writes nothing', () => {
+  // The reclaimed room must not get a second hostless row when the old socket's
+  // delayed close finally lands.
+  const { hub, points } = makeHub();
+  const host = sock(), hc = conn();
+  send(hub, host, hc, { t: 'host', room: 'ROOM0023', token: 'same' });
+  send(hub, sock(), conn(), { t: 'host', room: 'ROOM0023', token: 'same' });  // reclaim
+  hub.onClose(host, hc);                                                      // the stale close
+  assert.equal(by(points, 'room-hostless').length, 0);
 });
 
 test('a room whose peers all left still reports that somebody came', () => {
