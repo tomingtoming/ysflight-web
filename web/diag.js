@@ -38,8 +38,10 @@
     if (buf.length > 40) buf.splice(0, buf.length - 40);
     // vr-start/vr-end ship promptly too: headset sessions are exactly the ones
     // that can hang, so don't leave the usage event sitting in the ring buffer.
+    // vr-fail likewise: a visitor the VR door just bounced is likely to leave
+    // within seconds.
     if (type === 'error' || type === 'cerror' || type === 'unclean-end' ||
-        type === 'vr-start' || type === 'vr-end') flushSoon(2000);
+        type === 'vr-start' || type === 'vr-end' || type === 'vr-fail') flushSoon(2000);
   }
 
   function snapshot() {

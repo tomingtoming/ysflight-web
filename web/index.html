@@ -1591,6 +1591,16 @@
         vrFailToast();
       });
     };
+    Module.onVrFail = function (reason) {
+      // Failed VR ENTRY, counted as its own metric event: vr-end needs a
+      // session, so a requestSession rejection (the phone-Chrome class that
+      // shows the VR button and then refuses the session) left no trace at
+      // all -- and "how many bounce at the VR door, on what device" is
+      // exactly what a VR announcement needs to read.  The glue calls this
+      // only when no vr-end will fire for the attempt, so the two never
+      // count the same failure twice.
+      if (globalThis.ysfwDiag) globalThis.ysfwDiag.push('vr-fail', { reason: reason || null });
+    };
     Module.onVrStart = function () {
       inVr = true; vrBtn.disabled = false; vrBtn.textContent = TXT.help.vrExit;
       // VR usage signal (count in Workers Logs, filter '"type":"vr-start"'):

@@ -31,6 +31,7 @@ Freeプランで**書き込み10万点/日・読み1万クエリ/日**（実績�
 | `flight-start` | 飛行に入った瞬間 | 機体・フィールド・launch種別・role |
 | `flight-end` | 飛行から出た瞬間／離脱時 | `secs`（飛行秒数）・`reason`（`ended` = メニューへ戻った／`left` = タブを閉じた・遷移した） |
 | `vr-end` | VRセッション終了 | `secs`・`fps`（平均）・`reason`・`hz`（許可レート）・`cpu`（ms/frame）・`fpsSeries`（30秒毎） |
+| `vr-fail` | **VRに入ろうとして入れなかった**（セッション不成立） | `reason`（`enter-failed: ...`）。`vr-end` はセッションが要るので、`requestSession` 拒否（immersive-vr を名乗って断るスマホChrome系）はこれが無いと**完全に不可視**。glue側が「この試行は vr-end が報告する」と判る場合は発火しないので二重計上しない |
 
 **両端を記録するのが肝**。飛行中にタブを閉じた人は `flight-start` だけを残し、
 その差分そのものが「最後まで飛ぶか」の答えになる（`pagehide` では `reason='left'` で
@@ -42,7 +43,7 @@ Freeプランで**書き込み10万点/日・読み1万クエリ/日**（実績�
 
 | 列 | 内容 |
 |---|---|
-| `blob1` | イベント名 `session` / `flight-start` / `flight-end` / `vr-end` |
+| `blob1` | イベント名 `session` / `flight-start` / `flight-end` / `vr-end` / `vr-fail` |
 | `blob2` | launch種別（ディープリンクの種類、エンジンメニューから選ぶ場合は `menu`） |
 | `blob3` | 機体（URLが持っているときだけ。[`deeplink.js` `launchTargets`](../web/deeplink.js)） |
 | `blob4` | フィールド |
@@ -223,6 +224,19 @@ FROM ysfw_play
 WHERE blob1 = 'vr-end' AND blob10 = 'public'
   AND blob13 = 'ysflight-web.toming.app'
 ORDER BY timestamp
+```
+
+### VR到達漏斗（入口で弾かれた人・2026-08-29追加）
+
+`vr-fail` はセッション不成立の試行（この列も2026-08-29のビルドから）。
+VR告知を出した後、「何人が入口で弾かれたか・どの端末で・なぜ」を読む列。
+
+```sql
+SELECT blob6 AS device, blob9 AS reason, sum(_sample_interval) AS n
+FROM ysfw_play
+WHERE blob1 = 'vr-fail' AND blob10 = 'public'
+  AND blob13 = 'ysflight-web.toming.app'
+GROUP BY device, reason ORDER BY n DESC
 ```
 
 ### 初回の実測（2026-08-21 09:20 UTC 導入 〜 08-23、約2.2日・tomingのdev分を除く）

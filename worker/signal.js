@@ -149,7 +149,7 @@ const num = (v) => {
 // "who" that this project will ever store.
 //
 //   index1  visitor id (random, localStorage; the sampling key)
-//   blob1   event      'session' | 'flight-start' | 'flight-end' | 'vr-end'
+//   blob1   event      'session' | 'flight-start' | 'flight-end' | 'vr-end' | 'vr-fail'
 //   blob2   launch     deep-link kind, or 'menu' (picked inside the engine)
 //   blob3   aircraft   when the URL carried it (deeplink.js launchTargets)
 //   blob4   field
