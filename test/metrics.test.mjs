@@ -236,6 +236,24 @@ test('an hour-long fps series is truncated to the blob budget, not shipped unbou
   assert.ok(vr.fpsSeries.startsWith('120,120'));
 });
 
+test('a bounced VR entry becomes a vr-fail with the reason, on the real device column', () => {
+  // The phone-Chrome class: immersive-vr advertised, requestSession refused.
+  // No session ever existed, so the visitor must NOT become device=vr -- the
+  // device column is exactly what says WHAT bounced at the VR door.
+  const { rec, events } = drive('', { ctx: { touch: true } });
+  rec.onDiag({ type: 'vr-fail', reason: 'enter-failed: The specified session configuration is not supported' });
+  const f = events.find((e) => e.e === 'vr-fail');
+  assert.equal(f.reason, 'enter-failed: The specified session configuration is not supported'.slice(0, 32));
+  assert.equal(f.reason.length, 32);
+  assert.equal(f.device, 'touch');
+});
+
+test('a vr-fail without a reason still produces a valid row', () => {
+  const { rec, events } = drive('');
+  rec.onDiag({ type: 'vr-fail' });
+  assert.equal(events.find((e) => e.e === 'vr-fail').reason, 'unknown');
+});
+
 test('replay playback is not a flight', () => {
   const { rec, events } = drive('?replay=demo.yfs');
   rec.onDiag({ type: 'mode', inFlight: false, replaying: true });

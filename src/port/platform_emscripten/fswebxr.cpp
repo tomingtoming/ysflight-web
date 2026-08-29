@@ -6053,6 +6053,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.stats={frames:0,framesWindow:0,t0:0,t1:0,tWindow:0,fps:0,bucketT0:0,bucketFrames:0,fpsSeries:[]};
 		vr.jsPerf={ctl:0,dial:0,layers:0};
 		vr.endReason=null;
+		vr.endListenerArmed=false;
 		vr.unsupportedVrFrames=0;
 		vr.jsPerfWindow=0;
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
@@ -6172,6 +6173,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 			{
 				installFbRedirect();
 
+				// From here on, a torn-down session emits its own vr-end
+				// (the 'end' listener below) -- the enter catch's vr-fail
+				// report stands down so a setup failure past this point is
+				// counted once, not twice (see the catch's doc comment).
+				vr.endListenerArmed=true;
 				session.addEventListener('end',function()
 				{
 					var st=vr.stats;
@@ -6328,6 +6334,17 @@ EM_JS(void,YsfwInstallWebXR,(),
 				vr.endReason='enter-failed: '+((err&&err.message) ? err.message : err);
 			}
 			console.error('[vr] enter failed:',err);
+			// Report the failed ATTEMPT to the shell (Module.onVrFail -> the
+			// vr-fail metric): a vr-end needs a session, so a requestSession
+			// rejection -- the whole phone-Chrome class that advertises
+			// immersive-vr and then refuses it -- was invisible to metrics.
+			// Once the 'end' listener is armed, the teardown below emits a
+			// vr-end carrying this same endReason, and reporting here too
+			// would count one failure twice -- so stand down in that case.
+			if(!vr.endListenerArmed && Module.onVrFail)
+			{
+				Module.onVrFail(vr.endReason);
+			}
 			var session=vr.session;
 			vr.session=null;
 			if(session)

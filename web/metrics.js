@@ -204,6 +204,15 @@ globalThis.ysfwMetrics = (function () {
         if (flight) flight.vr = true;
         return;
       }
+      if (ev.type === 'vr-fail') {
+        // A VR entry that never became a session (index.html's Module.onVrFail
+        // -- the glue only fires it when no vr-end will report the attempt).
+        // Deliberately does NOT set sawVr: no session was ever presented, so
+        // this visitor's flights stay desktop/touch, which is also the column
+        // that says WHAT bounced at the VR door.
+        emit('vr-fail', fields({ reason: String(ev.reason || 'unknown').slice(0, 32) }));
+        return;
+      }
       if (ev.type === 'vr-end') {
         // 30s-bucket fps series, as a bounded comma-joined string: one avg per
         // session cannot separate "warm-up is heavy" from "degrades over
