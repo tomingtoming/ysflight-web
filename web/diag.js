@@ -125,6 +125,17 @@
     flush(true);
   });
 
+  // Visibility transitions, for web/metrics.js: a hidden tab is not simulating
+  // (the rAF main loop stops; on mobile the tab is frozen outright), so the
+  // wall-clock time it spends hidden is not flight time.  Pushed from here
+  // rather than watched in metrics.js for the same reason the flight poller
+  // lives here -- a second listener would be a second definition of "the page
+  // went away", and the two would drift.  It fires before a freeze, so the
+  // 'bye' that arrives on the far side of one still knows when hiding began.
+  document.addEventListener('visibilitychange', function () {
+    push('vis', { hidden: document.visibilityState === 'hidden' });
+  });
+
   // ---- heartbeat + mode breadcrumbs ---------------------------------------
   let prevMode = { inFlight: null, replaying: null, vrSession: null, endReason: null };
   setInterval(function () {

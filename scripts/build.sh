@@ -105,7 +105,13 @@ H_DATA=$(hash8 "$BUILD_DIR/main/ysflight32_gl2.data")
 # Include the shell JS/HTML in the build id so changes to packs-ui.js / opfs-store.js
 # / sw.js etc. bust the service-worker precache -- these are NOT part of the wasm
 # hash, so without this a JS-only change keeps the same id and the SW serves stale.
+# diag.js and metrics.js are in the list for a second reason: blob12 (build) is
+# the column that says WHICH CLIENT produced a metrics row, and while they were
+# missing, a release that changed only the counter kept the old id -- so the data
+# could not be split at the fix.  That cost a week of lang rows once already
+# (docs/metrics.md, limitation 8).
 H_SHELL=$(cat "$ROOT/web/index.html" "$ROOT/web/deeplink.js" "$ROOT/web/yfs.js" "$ROOT/web/settings.js" "$ROOT/web/controls.js" "$ROOT/web/studio-flight.js" "$ROOT/web/studio-settings.js" "$ROOT/web/studio-controls.js" "$ROOT/web/studio-missions.js" "$ROOT/web/packs.js" "$ROOT/web/packs-ui.js" \
+  "$ROOT/web/diag.js" "$ROOT/web/metrics.js" \
   "$ROOT/web/pack-net.js" "$ROOT/web/pack-update.js" "$ROOT/web/opfs-store.js" "$ROOT/web/memfs-lru.js" "$ROOT/web/replays-ui.js" \
   "$ROOT/web/workbench.js" "$ROOT/web/workbench.html" "$ROOT/web/workbench-page.js" \
   "$ROOT/web/staging.js" \

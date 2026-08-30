@@ -80,6 +80,35 @@ const end = await waitFor('flight-end', (e) => e.e === 'flight-end');
 if (!(end.secs >= 2)) die('flight-end reported ' + end.secs + 's for a ~3s flight');
 if (end.reason !== 'ended') die('flight-end reason should be "ended", got ' + end.reason);
 
+// ---- 2b. time spent hidden does not count as flight time --------------------
+// The chain: diag.js's visibilitychange listener -> its 'vis' breadcrumb ->
+// metrics.js's accumulator -> the `hidden` field on the wire.  Unit tests drive
+// onDiag() directly, so this is the only place the LISTENER is proven wired.
+//
+// visibilityState is a readonly accessor, so a plain assignment is silently a
+// no-op (same trap as navigator.xr in the VR probes) -- it has to be replaced
+// with defineProperty.  What this does NOT prove is that a real browser fires
+// the event when a tab is backgrounded; that is spec behaviour, and headless
+// Chromium will not actually hide a page (bringToFront leaves it 'visible').
+const setHidden = (hidden) => page.evaluate((h) => {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (h ? 'hidden' : 'visible') });
+  document.dispatchEvent(new Event('visibilitychange'));
+}, hidden);
+
+const beforeHiddenFlight = posted.length;
+await page.evaluate(() => { globalThis.ysfwInFlight = true; });
+await waitFor('second flight-start', (e, i) => i >= beforeHiddenFlight && e.e === 'flight-start');
+await page.waitForTimeout(2000);
+await setHidden(true);
+await page.waitForTimeout(4000);
+await setHidden(false);
+await page.waitForTimeout(2000);
+await page.evaluate(() => { globalThis.ysfwInFlight = false; });
+const hiddenEnd = await waitFor('second flight-end', (e, i) => i >= beforeHiddenFlight && e.e === 'flight-end');
+if (typeof hiddenEnd.hidden !== 'number') die('flight-end carried no `hidden` field (double7 would be silently 0)');
+if (!(hiddenEnd.hidden >= 3 && hiddenEnd.hidden <= 6)) die('~4s hidden was reported as ' + hiddenEnd.hidden + 's');
+if (!(hiddenEnd.secs >= 3 && hiddenEnd.secs <= 6)) die('~4s of visible flight was reported as ' + hiddenEnd.secs + 's (hidden time not subtracted?)');
+
 // ---- 3. the same browser coming back is the SAME visitor ---------------------
 // This is the whole point of the localStorage id: it separates "ten visits by
 // one person" from "ten people".
@@ -102,4 +131,5 @@ await browser.close();
 if (fatal.length) die('page errors during the run');
 console.log(`batches=${batches.length} events=${posted.length}`);
 console.log(`visitor=${session._vid} build=${session._build} flight=${end.secs}s`);
+console.log(`backgrounded flight: flown=${hiddenEnd.secs}s hidden=${hiddenEnd.hidden}s (hidden must not be billed as flight time)`);
 console.log('SMOKE-METRICS PASSED');

@@ -155,9 +155,10 @@ globalThis.ysfwMetrics = (function () {
     var now = cfg.now;
     var emit = cfg.emit;
     var base = cfg.context;                 // classify() output
-    var flight = null;                      // {startMs, vr:boolean}
+    var flight = null;                      // {startMs, vr:boolean, hiddenMs:number}
     var sawVr = false;
     var closed = false;
+    var hiddenSince = null;                 // ms at which the document went hidden
 
     function fields(extra) {
       var f = {
@@ -175,12 +176,42 @@ globalThis.ysfwMetrics = (function () {
       return f;
     }
 
+    // Hidden time that overlaps the open flight.  Clipped at the flight's start
+    // because a tab can already be in the background when a flight opens.
+    function hiddenSoFar() {
+      if (hiddenSince === null || !flight) return 0;
+      return Math.max(0, now() - Math.max(hiddenSince, flight.startMs));
+    }
+
+    // A flight's duration is the time the tab was VISIBLE, not the wall clock.
+    // This is not a smoothing choice: a hidden tab is not simulating, because
+    // the engine's main loop is a requestAnimationFrame driver and the browser
+    // stops calling it (on mobile the whole tab is frozen).  Wall clock counts
+    // that dead time as flying.
+    //
+    // Left uncorrected it does not add noise, it swamps the number: on
+    // 2026-08-30 one phone reported a single 19,317-second flight -- 5h22m,
+    // fifteen times the previous longest ever -- and that one row WAS the day's
+    // 322 minutes.  The visitor's other flights that week were 71-133 seconds.
+    // The failure is silent and one-sided (durations only ever grow), so the
+    // headline "minutes played" drifts up as the phone share grows.
+    //
+    // `hidden` ships alongside so the subtraction is auditable: a row where it
+    // dwarfs `secs` is a parked tab, and one where it is always 0 means these
+    // events stopped arriving -- neither is visible if we only ship the
+    // corrected number.
     function endFlight(reason) {
       if (!flight) return;
-      var secs = Math.max(0, Math.round((now() - flight.startMs) / 1000));
+      var hiddenMs = flight.hiddenMs + hiddenSoFar();
+      var secs = Math.max(0, Math.round((now() - flight.startMs - hiddenMs) / 1000));
       var wasVr = flight.vr || sawVr;
       flight = null;
-      emit('flight-end', fields({ secs: secs, reason: reason, device: wasVr ? 'vr' : base.device }));
+      emit('flight-end', fields({
+        secs: secs,
+        hidden: Math.max(0, Math.round(hiddenMs / 1000)),
+        reason: reason,
+        device: wasVr ? 'vr' : base.device
+      }));
     }
 
     function onDiag(ev) {
@@ -192,10 +223,24 @@ globalThis.ysfwMetrics = (function () {
         // recording is not flying one.
         var flying = !!ev.inFlight;
         if (flying && !flight) {
-          flight = { startMs: now(), vr: sawVr };
+          flight = { startMs: now(), vr: sawVr, hiddenMs: 0 };
           emit('flight-start', fields({}));
         } else if (!flying && flight) {
           endFlight('ended');
+        }
+        return;
+      }
+      if (ev.type === 'vis') {
+        // diag.js owns the visibilitychange listener (see its 'vis' push); this
+        // side only accumulates. Idempotent on repeats: a second 'hidden'
+        // without an intervening 'visible' must not move the start of the
+        // hidden span forward, or the parked time it is there to subtract
+        // shrinks back to nothing.
+        if (ev.hidden) {
+          if (hiddenSince === null) hiddenSince = now();
+        } else {
+          if (flight) flight.hiddenMs += hiddenSoFar();
+          hiddenSince = null;
         }
         return;
       }

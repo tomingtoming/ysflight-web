@@ -64,6 +64,7 @@ Freeプランで**書き込み10万点/日・読み1万クエリ/日**（実績�
 | `double4` | 初訪問からの日数 |
 | `double5` | VRセッションにcompositorが**許可した**レート（Hz・`vr-end` のみ）。平均fpsがこれを大きく割っていればコマ落ち、60fps@60Hzなら完走 |
 | `double6` | VR中のエンジンCPU ms/frame（EMA・`vr-end` のみ）。フレーム周期（1000/hz）に近ければCPU律速、遠ければGPU/熱側 |
+| `double7` | その飛行のうちタブが**非表示だった秒数**（`flight-end` のみ・2026-08-31追加）。**`double1` からは既に差し引いてある**。差し引きを監査できるように送っている——`double7` が `double1` を大きく上回る行は「置きっぱなしのタブ」、この列が全行0なら「誰もバックグラウンドにしない世界」ではなく**クライアントが可視性を報告しなくなった**ほう（→ 限界10） |
 
 最後の2列（host・country）はクライアントに名乗らせず**サーバで刻む**。
 `blob13` があるので本番とstagingが同じデータセットに同居しても混ざらない。
@@ -132,6 +133,43 @@ SELECT toDate(timestamp) AS day,
 FROM ysfw_play
 WHERE blob10 = 'public'                        -- tomingのQAを除く
   AND blob13 = 'ysflight-web.toming.app'       -- stagingを除く
+GROUP BY day ORDER BY day
+```
+
+⚠ **`minutes` だけを単独で読まない。必ず下の「最長飛行」と並べる。**
+2026-08-30 は `minutes = 322` のうち **321.9分が1行**で、平均も合計も
+「その日よく遊ばれた」に見えていた。**この規模では、外れ値は平均を汚すのでなく
+合計そのものになる。**
+
+### 最長飛行を合計の隣に置く（`maxIf` は方言に無いので別クエリ）
+
+```sql
+SELECT toDate(timestamp) AS day,
+       sum(_sample_interval)                          AS ends,
+       round(sum(double1 * _sample_interval) / 60, 1) AS minutes,
+       round(max(double1) / 60, 1)                    AS longest_min
+FROM ysfw_play
+WHERE blob1 = 'flight-end' AND blob10 = 'public'
+  AND blob13 = 'ysflight-web.toming.app'
+GROUP BY day ORDER BY day
+```
+
+`longest_min` が `minutes` に迫る日は、その日の合計が1本の飛行でできている。
+実測（2026-08-30）: `ends=2 / minutes=322 / longest_min=322`。
+
+### 補正が効いているかを見る（`double7`・2026-08-31以降）
+
+```sql
+-- 非表示時間が実際に差し引かれているか。ends が立っているのに hidden_rows が
+-- ずっと0なら、補正が効いているのではなく breadcrumb が来ていない（限界10）。
+SELECT toDate(timestamp) AS day,
+       sum(_sample_interval)                          AS ends,
+       sumIf(_sample_interval, double7 > 0)           AS hidden_rows,
+       round(sum(double7 * _sample_interval) / 60, 1) AS hidden_min,
+       round(sum(double1 * _sample_interval) / 60, 1) AS flown_min
+FROM ysfw_play
+WHERE blob1 = 'flight-end' AND blob10 = 'public'
+  AND blob13 = 'ysflight-web.toming.app'
 GROUP BY day ORDER BY day
 ```
 
@@ -334,5 +372,7 @@ WHERE blob1 = 'room-hostless' AND blob2 = 'game' AND blob4 = 'ysflight-web.tomin
 5. **XRiftのワールドは対象外**（`app.xrift.net` にホストされるので、こちらのアカウントからは原理的に見えない）。
 6. **botを弾いていない**。Cloudflare Web Analytics には bot 列があるがこのデータセットには無く、**JSを実行するクローラは人として数えられる**。訪問回数だけ多くて `flight-start` がゼロの `index1` はそれを疑う（訪問者ごとのSQLがそのための窓）。
 7. **計測しているのは `index.html`（ゲーム本体のページ）だけ**。ワークベンチ・各スタジオページの利用は入っていない（必要になったらそこにも `metrics.js` を載せる。1行）。
-8. **`blob7`（lang）は 2026-08-28 より前の行では常に空**。`classify()` は拾っていたのに `fields()` が載せていなかった（＝クライアントからサーバへ一度も出ていない）。導入初週の342行は全部空なので、**言語で切るクエリは `blob7 != ''` で母数を絞る**か日付で切ること。同じ値しか返さない列は「世界が一様」と見分けがつかない、の実例。⚠ **`blob12`（build）では前後を分けられない**——`BUILD_ID` は `scripts/build.sh` がエンジンの js/wasm/data とシェルのハッシュから作るので、`metrics.js` だけが変わったビルドは**同じIDのまま**（この修正の前後とも `5d48fda4044b`）。分けられるのは時刻だけ。
-9. **アドブロッカーで落ちる分がある**。`/metric` は自ドメイン・同一オリジンなので Web Analytics のビーコンよりは通りやすいが、ゼロではない。∴ **絶対数の下限**として読む。
+8. **`blob7`（lang）は 2026-08-28 より前の行では常に空**。`classify()` は拾っていたのに `fields()` が載せていなかった（＝クライアントからサーバへ一度も出ていない）。導入初週の342行は全部空なので、**言語で切るクエリは `blob7 != ''` で母数を絞る**か日付で切ること。同じ値しか返さない列は「世界が一様」と見分けがつかない、の実例。⚠ **`blob12`（build）では前後を分けられない**——`BUILD_ID` は `scripts/build.sh` がエンジンの js/wasm/data とシェルのハッシュから作るので、`metrics.js` だけが変わったビルドは**同じIDのまま**（この修正の前後とも `5d48fda4044b`）。分けられるのは時刻だけ。**✅ 2026-08-31に塞いだ**: `web/diag.js` と `web/metrics.js` を `H_SHELL` に加えたので、**以後は計器だけの変更でも `blob12` が変わる**＝データを修正の前後で割れる。この行より前の窓では依然として時刻で切ること。
+9. 🔴 **`double1`（飛行秒数）は 2026-08-31 より前の行では「壁時計」＝バックグラウンド時間込み**。エンジンのメインループは rAF なので**非表示のタブは1フレームも回っていない**のに、旧実装は `pagehide` までの実時間をそのまま飛行時間として送っていた。モバイルはタブごと凍結されて数時間後に `pagehide` が飛ぶので、**汚染は片側だけに効く（秒数は伸びる一方）**。実害の実測＝**2026-08-30 の1行が 19,317秒（5時間22分）**で、それまでの最長22分の15倍。**その日の「322分」はこの1行がほぼ全部**だった（同じ訪問者の同週の他の飛行は71〜133秒）。∴ **過去に遡る合計・平均・分位数は汚染されている**。古い行を含む窓で数えるときは、`double7 = 0 AND double1 > 1800`（=30分超の無補正行）を外れ値として別に数えるか、`timestamp` で 08-31 以降に切る。**症状が「たまに大きい値」なので、平均や合計だけ見ていると気づけない**——最大値を必ず一緒に出すこと。
+10. **`double7` が全行0になったら、それは「誰もバックグラウンドにしない」ではなく計器の沈黙**。`diag.js` の `visibilitychange` breadcrumb が出なくなった可能性を先に疑う（限界8と同じ型＝**同じ値しか返さない列は、世界の定数か、飽和した計器か、見分けがつかない**）。
+11. **アドブロッカーで落ちる分がある**。`/metric` は自ドメイン・同一オリジンなので Web Analytics のビーコンよりは通りやすいが、ゼロではない。∴ **絶対数の下限**として読む。
