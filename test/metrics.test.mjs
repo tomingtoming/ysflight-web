@@ -176,6 +176,95 @@ test('closing the tab mid-flight still reports the duration', () => {
   assert.equal(end.reason, 'left');
 });
 
+test('a backgrounded tab does not accrue flight time — the 5-hour phone row', () => {
+  // Regression, 2026-08-30 production: one phone reported a single 19,317s
+  // flight (5h22m) with reason 'left', fifteen times the longest ever recorded,
+  // and that one row was the whole day's 322 minutes.  The tab was parked, not
+  // flown: a hidden tab's rAF loop does not run, so pagehide fired hours later
+  // and wall clock billed all of it as flying.
+  const { rec, events, tick } = drive('');
+  rec.onDiag({ type: 'mode', inFlight: true });
+  tick(90000);                                    // 90s actually flying
+  rec.onDiag({ type: 'vis', hidden: true });
+  tick(19227000);                                 // 5h20m in the background
+  rec.onDiag({ type: 'bye', inFlight: true });    // ...then the tab is closed
+  const end = events.find((e) => e.e === 'flight-end');
+  assert.equal(end.secs, 90);
+  assert.equal(end.hidden, 19227, 'the subtraction has to be visible in the row');
+  assert.equal(end.reason, 'left');
+});
+
+test('coming back to the tab resumes the clock rather than ending the flight', () => {
+  const { rec, events, tick } = drive('');
+  rec.onDiag({ type: 'mode', inFlight: true });
+  tick(30000);
+  rec.onDiag({ type: 'vis', hidden: true });
+  tick(600000);                                   // ten minutes away
+  rec.onDiag({ type: 'vis', hidden: false });
+  assert.equal(rec.flying(), true, 'backgrounding is not landing');
+  tick(45000);
+  rec.onDiag({ type: 'mode', inFlight: false });
+  const end = events.find((e) => e.e === 'flight-end');
+  assert.equal(end.secs, 75);
+  assert.equal(end.hidden, 600);
+});
+
+test('several background trips all come off the duration', () => {
+  const { rec, events, tick } = drive('');
+  rec.onDiag({ type: 'mode', inFlight: true });
+  tick(10000);
+  for (const away of [20000, 5000, 120000]) {
+    rec.onDiag({ type: 'vis', hidden: true });
+    tick(away);
+    rec.onDiag({ type: 'vis', hidden: false });
+    tick(10000);
+  }
+  rec.onDiag({ type: 'mode', inFlight: false });
+  const end = events.find((e) => e.e === 'flight-end');
+  assert.equal(end.secs, 40);
+  assert.equal(end.hidden, 145);
+});
+
+test('a repeated hidden event does not restart the hidden span', () => {
+  // Otherwise a browser that fires visibilitychange twice on the way down
+  // silently shrinks the parked time back to nothing — the exact bug being fixed.
+  const { rec, events, tick } = drive('');
+  rec.onDiag({ type: 'mode', inFlight: true });
+  tick(5000);
+  rec.onDiag({ type: 'vis', hidden: true });
+  tick(300000);
+  rec.onDiag({ type: 'vis', hidden: true });
+  tick(300000);
+  rec.onDiag({ type: 'bye', inFlight: true });
+  const end = events.find((e) => e.e === 'flight-end');
+  assert.equal(end.secs, 5);
+  assert.equal(end.hidden, 600);
+});
+
+test('time hidden BEFORE the flight opened is not subtracted from it', () => {
+  // A visitor can background the launcher, come back and then fly.  Only the
+  // overlap with the flight is dead time; the rest belongs to no flight at all.
+  const { rec, events, tick } = drive('');
+  rec.onDiag({ type: 'vis', hidden: true });
+  tick(3600000);                                  // an hour parked on the top page
+  rec.onDiag({ type: 'mode', inFlight: true });   // ...flight opens while hidden
+  tick(60000);
+  rec.onDiag({ type: 'bye', inFlight: true });
+  const end = events.find((e) => e.e === 'flight-end');
+  assert.equal(end.secs, 0);
+  assert.equal(end.hidden, 60, 'only the overlap, not the whole hour');
+});
+
+test('a flight nobody backgrounded reports hidden 0, not a missing column', () => {
+  const { rec, events, tick } = drive('');
+  rec.onDiag({ type: 'mode', inFlight: true });
+  tick(120000);
+  rec.onDiag({ type: 'mode', inFlight: false });
+  const end = events.find((e) => e.e === 'flight-end');
+  assert.equal(end.secs, 120);
+  assert.equal(end.hidden, 0);
+});
+
 test('events after the page said goodbye are dropped', () => {
   const { rec, events } = drive('');
   rec.onDiag({ type: 'bye', inFlight: false });
@@ -288,7 +377,7 @@ const BATCH = {
   events: [{
     e: 'flight-end', launch: 'freeflight', aircraft: 'F-18C_HORNET', field: 'ATSUGI_AIRBASE',
     role: 'solo', device: 'desktop', lang: 'ja', ref: '', reason: 'ended',
-    secs: 412, visits: 2, fps: 0, days: 5
+    secs: 412, visits: 2, fps: 0, days: 5, hidden: 38
   }]
 };
 
@@ -304,7 +393,7 @@ test('a good batch becomes one data point with the documented column order', asy
     'solo', 'desktop', 'ja', '', 'ended',
     'public', 'sid12345', 'dfb26b9d81f2', 'ysflight-web.toming.app', 'JP', ''
   ]);
-  assert.deepEqual(p.doubles, [412, 2, 0, 5, 0, 0]);
+  assert.deepEqual(p.doubles, [412, 2, 0, 5, 0, 0, 38]);
 });
 
 test('a vr-end carries the diagnosis trio in the documented columns', async () => {
@@ -318,7 +407,7 @@ test('a vr-end carries the diagnosis trio in the documented columns', async () =
     }]
   }), env);
   assert.equal(written[0].blobs[14], '40,45,46,44,45');
-  assert.deepEqual(written[0].doubles, [161, 1, 44, 0, 72, 7.4]);
+  assert.deepEqual(written[0].doubles, [161, 1, 44, 0, 72, 7.4, 0]);
 });
 
 test('host and country come from the request, not the client', async () => {
@@ -345,8 +434,8 @@ test('missing visitor id still counts as a data point', async () => {
 
 test('junk values cannot poison the numeric columns', async () => {
   const { env, written } = fakeEnv();
-  await worker.fetch(post({ ...BATCH, events: [{ e: 'session', secs: 'NaN', visits: null, fps: {}, days: Infinity, hz: 'x', cpu: [] }] }), env);
-  assert.deepEqual(written[0].doubles, [0, 0, 0, 0, 0, 0]);
+  await worker.fetch(post({ ...BATCH, events: [{ e: 'session', secs: 'NaN', visits: null, fps: {}, days: Infinity, hz: 'x', cpu: [], hidden: '5h' }] }), env);
+  assert.deepEqual(written[0].doubles, [0, 0, 0, 0, 0, 0, 0]);
 });
 
 test('oversized strings are truncated rather than rejected', async () => {

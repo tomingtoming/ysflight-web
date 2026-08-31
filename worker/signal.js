@@ -170,6 +170,12 @@ const num = (v) => {
 //   double4 days       days since this browser's first visit
 //   double5 hz         VR granted compositor rate (avg fps well under it = missed vsyncs)
 //   double6 cpu        VR engine CPU ms/frame (close to the frame period = CPU-bound)
+//   double7 hidden     seconds of the flight the tab spent hidden, already
+//                      SUBTRACTED from secs.  Shipped so the correction is
+//                      auditable: hidden >> secs is a tab parked in the
+//                      background, and an all-zero column means the client
+//                      stopped reporting visibility rather than that nobody
+//                      backgrounds the game.
 //
 // Guards mirror /turn and /clientlog: POST-only, same-origin when a browser
 // sends Origin, 8 KB body cap, at most 20 events per batch, every string
@@ -225,7 +231,7 @@ async function metric(request, env) {
           str(ev.fpsSeries, 400)
         ],
         doubles: [num(ev.secs), num(ev.visits), num(ev.fps), num(ev.days),
-                  num(ev.hz), num(ev.cpu)]
+                  num(ev.hz), num(ev.cpu), num(ev.hidden)]
       });
       written++;
     } catch (e) {
