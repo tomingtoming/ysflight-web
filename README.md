@@ -1,15 +1,32 @@
 # ysflight-web
 
-YSFLIGHT web is a WebAssembly port of Soji Yamakawa (CaptainYS)'s
-[YS FLIGHT SIMULATOR](https://ysflight.org), runnable in any modern browser
-with WebGL — no installation required.
+YSFLIGHT web is an unofficial, fan-made WebAssembly port of Soji Yamakawa
+(CaptainYS)'s [YS FLIGHT SIMULATOR](https://ysflight.org), runnable in any
+modern browser with WebGL — no installation required.
 
 **▶ Play: https://ysflight-web.toming.app**
 
+![An F-15C banking over Atsugi, rendered in a browser by this build](docs/hero.png)
+
 > 日本語: [YS FLIGHT SIMULATOR](https://ysflight.org)（CaptainYS 氏作）を
-> Web ブラウザで遊べるようにした WebAssembly (Emscripten) 移植です。
-> インストール不要、上のリンクからそのまま遊べます。設計ドキュメント
+> Web ブラウザで遊べるようにした有志による非公式の WebAssembly (Emscripten)
+> 移植です。インストール不要、上のリンクからそのまま遊べます。設計ドキュメント
 > （`docs/`）は日本語で書かれています。
+
+## What makes it different
+
+- **It is the original engine, not a rewrite and not an emulator.** CaptainYS's
+  C++ source is compiled to WebAssembly, so the flight model, the scenery and
+  the `.dnm`/`.srf` data are the desktop simulator's own. Engine changes are
+  ordinary commits on forks of the upstream repositories, so the delta against
+  upstream is a `git diff` (see [Architecture](#architecture)).
+- **Nothing to install, and the second visit needs no network.** Open the link
+  and fly. The first load fetches about 25 MB; after that a service worker
+  starts it offline, and add-ons, settings and replays persist in the browser.
+- **Old add-ons and old opponents still work.** Existing YSFLIGHT community
+  aircraft and map packs import as they are (normalised on the way in), and
+  multiplayer is browser-to-browser WebRTC — share a link, no account, no
+  server of your own to run.
 
 ## Architecture
 
@@ -191,7 +208,7 @@ treated as a POV hat.
 ## Multiplayer
 
 Browser-to-browser **WebRTC P2P**. One player clicks "Start server" to host
-(an 8-digit `Room: 12345678` code appears at the top right of the screen);
+(an 8-digit `Room: 12345678` code appears at the bottom right of the screen);
 others either open the invite link (`?join=12345678`) and enter a name to
 join automatically, or type the 8 digits into the "Room ID" field under
 Network → Client. Game data flows directly over a P2P WebRTC DataChannel;
