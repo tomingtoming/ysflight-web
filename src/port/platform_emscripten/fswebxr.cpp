@@ -5836,6 +5836,32 @@ EM_JS(void,YsfwInstallWebXR,(),
 		}
 	}
 
+	// ?vrtrace=1 only.  A wedged frame cannot report anything after the fact --
+	// the 2026-08-31 Quest hangs stopped the 10s heartbeat dead, so the
+	// postmortem could say THAT the main thread stopped but never WHERE.  A
+	// synchronous localStorage write survives the wedge, so the last value
+	// written names the phase the frame died in.  diag.js picks the key up on
+	// the next page load and ships it with unclean-end.
+	//
+	// Cost is one localStorage write per phase per frame, which is why this is
+	// opt-in: it is a diagnostic build switch, not a default.
+	function vrTrace(phase)
+	{
+		// Reads the option itself rather than a flag latched at entry: vr.enter()
+		// is not the only way the VR path starts (the forced-presenting test hook
+		// bypasses it), and a breadcrumb that silently does not write is worse
+		// than none -- it would make the next hang look like the trace cleared
+		// every phase.
+		if(!(Module.ysfwVrOptions||{}).trace)
+		{
+			return;
+		}
+		try
+		{
+			localStorage.setItem('ysfw-vrtrace',((vr.stats&&vr.stats.frames)||0)+':'+phase);
+		}catch(e){}
+	}
+
 	function onXRFrame(t,frame)
 	{
 		var session=vr.session;
@@ -5908,6 +5934,7 @@ EM_JS(void,YsfwInstallWebXR,(),
 		// Clear before asking for a pose so a transient tracking loss cannot
 		// leave the pre-flight confirmation trigger stuck down.
 		HEAPF32[(_YsfwVrControlDataPointer()>>2)+7]=0;
+		vrTrace('pose');
 		var pose=frame.getViewerPose(vr.refSpace);
 		if(pose)
 		{
@@ -5954,7 +5981,11 @@ EM_JS(void,YsfwInstallWebXR,(),
 			vr.xrFb=layer.framebuffer;
 		}
 		GLctx.bindFramebuffer(GLctx.FRAMEBUFFER,vr.xrFb);
+		// The engine's whole frame (simulation + both eye renders) is inside
+		// this one call: the widest suspect for a frame that never returns.
+		vrTrace('engine-tick');
 		_YsfwExternalTick();
+		vrTrace('post-tick');
 
 		// Update the menu quad layer: blit the engine's menu FBO into the
 		// XRQuadLayer swapchain if the engine drew this frame (menuDrawn flag),
@@ -6056,6 +6087,14 @@ EM_JS(void,YsfwInstallWebXR,(),
 		vr.endListenerArmed=false;
 		vr.unsupportedVrFrames=0;
 		vr.jsPerfWindow=0;
+		// GLctx is Emscripten's current GL context.  If it is missing (VR entry
+		// racing the engine's context creation, or a lost context), every call
+		// below is a TypeError on undefined -- which reads as a mystery in the
+		// logs instead of a named failure that onVrFail can count.
+		if('undefined'===typeof GLctx || !GLctx)
+		{
+			return Promise.reject(new Error('no GL context'));
+		}
 		var wantMultiview=(undefined!==opts.multiview ? !!opts.multiview : true);
 		var sessionInit={requiredFeatures:['local'],optionalFeatures:['layers']};
 		return navigator.xr.requestSession('immersive-vr',sessionInit).then(function(session)
@@ -6361,6 +6400,16 @@ EM_JS(void,YsfwInstallWebXR,(),
 		{
 			vr.session.end().catch(function(){});
 		}
+	};
+
+	// Debug/test hook: fire one real vrTrace() write, so a probe can confirm the
+	// breadcrumb path works in the actual page (localStorage reachable, key name
+	// and format as diag.js expects) without a headset.  Honours ?vrtrace=1 like
+	// every other call, so it also proves the option is wired.
+	vr.traceProbe=function(phase)
+	{
+		vrTrace(phase||'probe');
+		try{ return localStorage.getItem('ysfw-vrtrace'); }catch(e){ return null; }
 	};
 
 	// Debug/test hook: write raw eye data (up to 24 floats, see fsvr.h for

@@ -1563,6 +1563,12 @@
       // at 0.5, the compositor displays quads at twice the declared metric
       // size and the declaration is the bug's home.
       if (q.get('vrlayerscale') !== null && q.get('vrlayerscale') !== '') o.layerScale = parseFloat(q.get('vrlayerscale'));
+      // ?vrtrace=1 DIAGNOSTIC (the 2026-08-31 Quest hang): writes the current
+      // XR-frame phase to localStorage synchronously, so a frame that never
+      // returns leaves behind the name of the phase it died in.  diag.js
+      // reports it with the next load's unclean-end event.  Costs a
+      // localStorage write per phase per frame -- opt-in, never on by default.
+      if (q.get('vrtrace') === '1') o.trace = true;
       Module.ysfwVrOptions = o;
     })();
     var vrBtn = document.createElement('button');

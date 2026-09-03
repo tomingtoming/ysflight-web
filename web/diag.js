@@ -90,7 +90,14 @@
   window.addEventListener('unhandledrejection', function (e) {
     let msg = '';
     try { msg = String((e.reason && e.reason.message) || e.reason); } catch (err) {}
-    push('error', { msg: ('unhandledrejection: ' + msg).slice(0, 300) });
+    // The stack is the difference between a locatable bug and a mystery: the
+    // 2026-08-31 "Cannot read properties of undefined (reading 'getParameter')"
+    // was captured with the message alone, which named the symptom and no
+    // line, and it has not recurred to be caught again.  A rejection escaping
+    // a promise chain has no file/line of its own the way window.onerror does.
+    let stack = '';
+    try { stack = String((e.reason && e.reason.stack) || '').split('\n').slice(0, 6).join(' | '); } catch (err) {}
+    push('error', { msg: ('unhandledrejection: ' + msg).slice(0, 300), stack: stack.slice(0, 500) });
   });
   const origConsoleError = console.error.bind(console);
   console.error = function () {
@@ -110,12 +117,21 @@
     const alive = JSON.parse(localStorage.getItem('ysfw-diag-alive') || 'null');
     const bye = localStorage.getItem('ysfw-diag-bye');
     if (alive && alive.sid && bye !== alive.sid) {
+      // ?vrtrace=1 leaves the XR-frame phase behind in localStorage (see
+      // fswebxr.cpp's vrTrace).  The heartbeat can only say the main thread
+      // stopped; this says which phase it stopped in -- the whole point is
+      // that a wedged frame cannot report anything after the fact, so the
+      // evidence has to be written before the wedge and read on the way back.
+      let vrtrace = null;
+      try { vrtrace = localStorage.getItem('ysfw-vrtrace'); } catch (e) {}
       push('unclean-end', {
         prevSid: alive.sid,
         lastBeatAgoMs: Date.now() - (alive.t || 0),
-        last: alive.s || null
+        last: alive.s || null,
+        vrtrace: vrtrace
       });
     }
+    try { localStorage.removeItem('ysfw-vrtrace'); } catch (e) {}
     localStorage.removeItem('ysfw-diag-alive');
     localStorage.removeItem('ysfw-diag-bye');
   } catch (e) {}
