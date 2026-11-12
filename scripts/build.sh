@@ -82,7 +82,11 @@ git -C "$ROOT" submodule update --init --depth 1 2>/dev/null || true
 # openat through the dynCall_v indirect dispatcher inside MainLoopTick, so stripping
 # indirect instrumentation aborts on rewind -- see docs/asyncify-lazy-pack.md.)
 # Injected here in the superproject so the engine submodule's CMakeLists is untouched.
+# CMAKE_POLICY_VERSION_MINIMUM: the engine's CMakeLists ask for a CMake older
+# than 3.5, which CMake 4 refuses (CI runners and Workers Builds moved to it).
+# Older CMake ignores the variable.
 emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_BUILD_TYPE=Release \
     -DYSFLIGHT_WEB_PORT_DIR="$ROOT/src/port" \
     -DCMAKE_EXE_LINKER_FLAGS="-Oz${EXTRA_LINKER_FLAGS}"
