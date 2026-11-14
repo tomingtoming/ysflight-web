@@ -120,6 +120,19 @@ extern "C" double EMSCRIPTEN_KEEPALIVE YsfwGetTickMs(void)
 	return tickMsAvg;
 }
 
+// wasm heap gauge (MB) for the diagnostics heartbeat: slot 0 = linear memory
+// size, 1 = malloc'd, 2 = free inside the heap (fsvr.h FsVrMemDataPointer).
+// Reading slot 0 takes a fresh sample -- mallinfo() walks the whole heap, so
+// the caller (web/diag.js, every 10s) must not do this per frame.
+extern "C" double EMSCRIPTEN_KEEPALIVE YsfwMemMB(int slot)
+{
+	if(0==slot)
+	{
+		FsVrMemSample();
+	}
+	return (0<=slot && slot<3 ? (double)FsVrMemDataPointer()[slot] : 0.0);
+}
+
 // Tell the web shell the moment the engine decides to terminate.  With
 // -autoexit (which the shell adds to every flight deep link) this fires on
 // "flight over, back to menu": the shell navigates away IMMEDIATELY instead of
