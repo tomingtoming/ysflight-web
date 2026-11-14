@@ -57,6 +57,19 @@
     };
   }
 
+  // wasm heap in MB [linear memory, malloc'd, free inside the heap], or null
+  // before the engine is up.  performance.memory does not count wasm memory,
+  // so this is the only way a hang report can say whether the heap was
+  // climbing.  Heartbeat only: the engine walks its whole heap to answer.
+  function memMB() {
+    try {
+      const f = globalThis.Module && globalThis.Module._YsfwMemMB;
+      if (typeof f !== 'function') return null;
+      const r = function (x) { return Math.round(x * 10) / 10; };
+      return [r(f(0)), r(f(1)), r(f(2))];
+    } catch (e) { return null; }
+  }
+
   function flush(useBeacon) {
     if (!buf.length) return;
     const payload = JSON.stringify({ sid: SID, events: buf.splice(0, buf.length) });
@@ -167,6 +180,7 @@
   }, 1000);
   setInterval(function () {
     const s = snapshot();
+    s.mem = memMB();
     try {
       localStorage.setItem('ysfw-diag-alive', JSON.stringify({ sid: SID, t: Date.now(), s: s }));
     } catch (e) {}
