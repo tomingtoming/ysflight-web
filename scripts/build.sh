@@ -85,9 +85,19 @@ git -C "$ROOT" submodule update --init --depth 1 2>/dev/null || true
 # CMAKE_POLICY_VERSION_MINIMUM: the engine's CMakeLists ask for a CMake older
 # than 3.5, which CMake 4 refuses (CI runners and Workers Builds moved to it).
 # Older CMake ignores the variable.
+# -fno-delete-null-pointer-checks: the engine's legacy list code (ysclass YsList and
+# others) is called on null pointers and tests `this==NULL` itself.  A compiler is free
+# to drop that test, and at -O2 clang does: an "append to an empty list" then writes a
+# heap address into the first bytes of the engine's memory, and the next one follows that
+# stale address into freed memory.  Measured 2026-11-21 (scripts/lowmem-watch.mjs): byte
+# 60 fills in about two minutes into an intercept mission in four tabs of four; with the
+# flag the first kilobyte stays empty.  YSFW_KEEP_UB=1 builds without it, to compare.
+NULL_CHECKS="-fno-delete-null-pointer-checks"
+if [[ -n "${YSFW_KEEP_UB:-}" ]]; then NULL_CHECKS=""; fi
 emcmake cmake -S "$ROOT/upstream/YSFLIGHT/src" -B "$BUILD_DIR" \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_BUILD_TYPE=Release \
+    "-DCMAKE_C_FLAGS=$NULL_CHECKS" "-DCMAKE_CXX_FLAGS=$NULL_CHECKS" \
     -DYSFLIGHT_WEB_PORT_DIR="$ROOT/src/port" \
     -DCMAKE_EXE_LINKER_FLAGS="-Oz${EXTRA_LINKER_FLAGS}"
 
